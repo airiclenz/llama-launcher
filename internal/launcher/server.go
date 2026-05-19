@@ -277,6 +277,7 @@ func TailLog(logPath string, follow bool) error {
 	args = append(args, logPath)
 
 	cmd := exec.Command("tail", args...)
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

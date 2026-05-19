@@ -32,6 +32,8 @@ type Config struct {
 	DisplayCentered *bool              `yaml:"display_centered"`
 	Defaults        ProfileParams      `yaml:"defaults"`
 	Profiles        map[string]Profile `yaml:"profiles"`
+
+	ConfigPath string `yaml:"-"`
 }
 
 func (c *Config) ShouldAutoClose() bool {
@@ -108,6 +110,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
+	cfg.ConfigPath = path
 	cfg.ModelsDir = ExpandTilde(cfg.ModelsDir)
 	cfg.LogDir = ExpandTilde(cfg.LogDir)
 

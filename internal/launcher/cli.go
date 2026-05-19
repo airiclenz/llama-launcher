@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-const Version = "1.0.0"
+var Version = "dev"
 
 // Run is the CLI entry point. It parses args and dispatches subcommands.
 func Run(args []string) int {

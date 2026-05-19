@@ -97,11 +97,9 @@ func (f Frame) Render(body []string) string {
 
 	// title decoration
 	if f.Title != "" {
-		buf.WriteString(bc + "│" + cReset)
-		buf.WriteString(leftSpace)
-		//bar := strings.Repeat("▬", innerWidth-pad-rightPad)
-		bar := strings.Repeat("╍", innerWidth-pad-rightPad+1)
-		buf.WriteString(bc + bar + cReset)
+		buf.WriteString(bc + "│ " + cReset)
+		bar := strings.Repeat("╍", innerWidth-2)
+		buf.WriteString(cDarkGray + bar + cReset)
 		buf.WriteString(bc + " │" + cReset)
 		buf.WriteString(nl)
 	}

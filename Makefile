@@ -1,11 +1,13 @@
 BINARY    := llama-launcher
 INSTALL   := $(HOME)/.local/bin
 SHELL_RC  := $(HOME)/.zshrc
+VERSION   := $(shell cat VERSION)
+LDFLAGS   := -ldflags "-X github.com/airiclenz/llama-launcher/internal/launcher.Version=$(VERSION)"
 
 .PHONY: build install clean
 
 build:
-	go build -o $(BINARY) .
+	go build $(LDFLAGS) -o $(BINARY) .
 
 install: build
 	@mkdir -p $(INSTALL)

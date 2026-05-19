@@ -22,6 +22,7 @@ const (
 	cGreen    = "\033[32m"
 	cRed      = "\033[31m"
 	cYellow   = "\033[33m"
+	cBoldLightGray = "\033[1;37m"
 	cBoldCyan = "\033[1;36m"
 )
 
@@ -264,4 +265,55 @@ func showActivity(message string) {
 		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
 	}
 	os.Stdout.WriteString(buf.String())
+}
+
+func showPopup(title string, lines []string) {
+	if !isTerminal() {
+		fmt.Printf("  %s\n", title)
+		for _, line := range lines {
+			fmt.Printf("  %s\n", line)
+		}
+		return
+	}
+
+	body := append([]string{}, lines...)
+	body = append(body, "", fmt.Sprintf("%spress any key to close%s", cDim, cReset))
+
+	f := Frame{Title: title, Padding: 2, BorderColor: cLightGray}
+	rendered := f.Render(body)
+	popupLines := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+
+	popupWidth := visibleWidth(popupLines[0])
+
+	var startCol, startRow int
+	if lastMenuRect.width > 0 && lastMenuRect.height > 0 {
+		startCol = lastMenuRect.col + (lastMenuRect.width-popupWidth)/2
+		startRow = lastMenuRect.row + (lastMenuRect.height-len(popupLines))/2
+	} else {
+		tw := terminalWidth()
+		th := terminalHeight()
+		startCol = (tw-popupWidth)/2 + 1
+		startRow = (th-len(popupLines))/2 + 1
+	}
+	if startCol < 1 {
+		startCol = 1
+	}
+	if startRow < 1 {
+		startRow = 1
+	}
+
+	var buf strings.Builder
+	buf.WriteString(escCursorHide)
+	for i, line := range popupLines {
+		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
+	}
+	os.Stdout.WriteString(buf.String())
+
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return
+	}
+	readKey()
+	term.Restore(fd, oldState)
 }

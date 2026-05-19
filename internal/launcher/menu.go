@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -53,7 +56,7 @@ func runStoppedMenu(cfg *Config) error {
 		return runStoppedMenuSimple(cfg, names)
 	}
 
-	title := fmt.Sprintf("llama-launcher %s", Version)
+	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
 		return []string{
 			fmt.Sprintf("Status  %s● stopped%s", cRed, cReset),
@@ -63,6 +66,7 @@ func runStoppedMenu(cfg *Config) error {
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
 	items = append(items, menuItem{Label: "Start server only"})
+	items = append(items, menuItem{Label: "Edit config"})
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered())
 
@@ -75,7 +79,14 @@ func runStoppedMenu(cfg *Config) error {
 		return doLoadProfile(cfg, names[idx])
 	}
 
-	return doStartOnly(cfg)
+	item := items[idx]
+	switch item.Label {
+	case "Start server only":
+		return doStartOnly(cfg)
+	case "Edit config":
+		return doEditConfig(cfg)
+	}
+	return nil
 }
 
 func runLoadedMenu(cfg *Config, state *ServerState) error {
@@ -83,7 +94,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		return runLoadedMenuSimple(cfg, state)
 	}
 
-	title := fmt.Sprintf("llama-launcher %s", Version)
+	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
 		if !IsProcessAlive(state.PID) {
 			return []string{
@@ -100,8 +111,10 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 
 	items := []menuItem{
 		{Label: "Switch model"},
+		{Label: "Show model config"},
 		{Label: "Stop server"},
 		{Label: "Show log"},
+		{Label: "Edit config"},
 	}
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered())
@@ -115,10 +128,14 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 	case 0:
 		return doSwitchModel(cfg, state)
 	case 1:
-		return doStop()
+		return doShowConfig(cfg, state)
 	case 2:
+		return doStop()
+	case 3:
 		fmt.Print(escClear + escCursorShow)
-		return TailLog(state.LogFile, false)
+		return TailLog(state.LogFile, true)
+	case 4:
+		return doEditConfig(cfg)
 	}
 	return errUserQuit
 }
@@ -130,7 +147,7 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 		return runIdleMenuSimple(cfg, state, names)
 	}
 
-	title := fmt.Sprintf("llama-launcher %s", Version)
+	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
 		if !IsProcessAlive(state.PID) {
 			return []string{
@@ -148,6 +165,7 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 	items = append(items, menuItem{Separator: true})
 	items = append(items, menuItem{Label: "Stop server"})
 	items = append(items, menuItem{Label: "Show log"})
+	items = append(items, menuItem{Label: "Edit config"})
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered())
 
@@ -166,7 +184,9 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 		return doStop()
 	case "Show log":
 		fmt.Print(escClear + escCursorShow)
-		return TailLog(state.LogFile, false)
+		return TailLog(state.LogFile, true)
+	case "Edit config":
+		return doEditConfig(cfg)
 	}
 	return nil
 }
@@ -251,6 +271,74 @@ func doStop() error {
 	return nil
 }
 
+func doShowConfig(cfg *Config, state *ServerState) error {
+	profile, err := cfg.ResolveProfile(state.ActiveProfile)
+	if err != nil {
+		return err
+	}
+	showPopup(profile.Description, formatProfileParams(profile))
+	return nil
+}
+
+func doEditConfig(cfg *Config) error {
+	fmt.Print(escClear + escCursorShow)
+	return exec.Command("open", cfg.ConfigPath).Run()
+}
+
+func formatProfileParams(profile *ResolvedProfile) []string {
+	p := &profile.ProfileParams
+	var lines []string
+
+	add := func(label, value string) {
+		lines = append(lines, fmt.Sprintf("%s%-18s%s %s", cDim, label, cReset, value))
+	}
+
+	add("Model", filepath.Base(profile.ModelPath))
+
+	if p.ContextSize != nil {
+		add("Context size", strconv.Itoa(*p.ContextSize))
+	}
+	if p.GPULayers != nil {
+		add("GPU layers", strconv.Itoa(*p.GPULayers))
+	}
+	if p.Threads != nil {
+		add("Threads", strconv.Itoa(*p.Threads))
+	}
+	if p.ThreadsBatch != nil {
+		add("Threads (batch)", strconv.Itoa(*p.ThreadsBatch))
+	}
+	if p.BatchSize != nil {
+		add("Batch size", strconv.Itoa(*p.BatchSize))
+	}
+	if p.FlashAttn != nil {
+		add("Flash attention", strconv.FormatBool(*p.FlashAttn))
+	}
+	if p.ContBatching != nil {
+		add("Cont. batching", strconv.FormatBool(*p.ContBatching))
+	}
+	if p.Parallel != nil {
+		add("Parallel", strconv.Itoa(*p.Parallel))
+	}
+	if p.Mlock != nil {
+		add("Mlock", strconv.FormatBool(*p.Mlock))
+	}
+	if p.NoMmap != nil {
+		add("No mmap", strconv.FormatBool(*p.NoMmap))
+	}
+	if p.Embedding != nil {
+		add("Embedding", strconv.FormatBool(*p.Embedding))
+	}
+	if p.Jinja != nil {
+		add("Jinja", strconv.FormatBool(*p.Jinja))
+	}
+
+	if len(profile.ExtraArgs) > 0 {
+		add("Extra args", strings.Join(profile.ExtraArgs, " "))
+	}
+
+	return lines
+}
+
 func buildProfileItems(cfg *Config, names []string) []menuItem {
 	items := make([]menuItem, 0, len(names))
 	for _, name := range names {
@@ -267,7 +355,7 @@ func runStoppedMenuSimple(cfg *Config, names []string) error {
 	for i, name := range names {
 		fmt.Printf("    %d  %-20s %s\n", i+1, name, cfg.Profiles[name].Description)
 	}
-	fmt.Printf("    s  Start server only\n    q  Quit\n\n  Select [1-%d, s, q]: ", len(names))
+	fmt.Printf("    s  Start server only\n    e  Edit config\n    q  Quit\n\n  Select [1-%d, s, e, q]: ", len(names))
 
 	choice := readLine()
 	if choice == "q" || choice == "" {
@@ -275,6 +363,9 @@ func runStoppedMenuSimple(cfg *Config, names []string) error {
 	}
 	if choice == "s" {
 		return doStartOnly(cfg)
+	}
+	if choice == "e" {
+		return doEditConfig(cfg)
 	}
 	idx := parseChoice(choice, len(names))
 	if idx < 0 {
@@ -288,16 +379,20 @@ func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 	fmt.Printf("  Status:  running\n  Model:   %s\n  Server:  %s:%d  PID %d  Uptime %s\n\n",
 		state.ActiveProfile,
 		state.Host, state.Port, state.PID, formatUptime(state.Uptime()))
-	fmt.Println("    1  Switch model\n    2  Stop server\n    3  Show log\n    q  Quit")
-	fmt.Print("\n  Select [1-3, q]: ")
+	fmt.Println("    1  Switch model\n    2  Show config\n    3  Stop server\n    4  Show log\n    5  Edit config\n    q  Quit")
+	fmt.Print("\n  Select [1-5, q]: ")
 
 	switch readLine() {
 	case "1":
 		return doSwitchModel(cfg, state)
 	case "2":
-		return doStop()
+		return doShowConfig(cfg, state)
 	case "3":
+		return doStop()
+	case "4":
 		return TailLog(state.LogFile, false)
+	case "5":
+		return doEditConfig(cfg)
 	}
 	return nil
 }
@@ -309,7 +404,7 @@ func runIdleMenuSimple(cfg *Config, state *ServerState, names []string) error {
 	for i, name := range names {
 		fmt.Printf("    %d  %-20s %s\n", i+1, name, cfg.Profiles[name].Description)
 	}
-	fmt.Printf("    s  Stop server\n    q  Quit\n\n  Select [1-%d, s, q]: ", len(names))
+	fmt.Printf("    s  Stop server\n    e  Edit config\n    q  Quit\n\n  Select [1-%d, s, e, q]: ", len(names))
 
 	choice := readLine()
 	if choice == "q" || choice == "" {
@@ -317,6 +412,9 @@ func runIdleMenuSimple(cfg *Config, state *ServerState, names []string) error {
 	}
 	if choice == "s" {
 		return doStop()
+	}
+	if choice == "e" {
+		return doEditConfig(cfg)
 	}
 	idx := parseChoice(choice, len(names))
 	if idx < 0 {
@@ -364,8 +462,12 @@ func parseChoice(s string, max int) int {
 func formatUptime(d time.Duration) string {
 	h := int(d.Hours())
 	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
 	if h > 0 {
-		return fmt.Sprintf("%dh %dm", h, m)
+		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
 	}
-	return fmt.Sprintf("%dm %ds", m, int(d.Seconds())%60)
+	if m > 0 {
+		return fmt.Sprintf("%dm %02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
 }
