@@ -64,7 +64,7 @@ func runStoppedMenu(cfg *Config) error {
 	items = append(items, menuItem{Separator: true})
 	items = append(items, menuItem{Label: "Start server only"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit")
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered())
 
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
@@ -104,7 +104,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		{Label: "Show log"},
 	}
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit")
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered())
 
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
@@ -149,7 +149,7 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 	items = append(items, menuItem{Label: "Stop server"})
 	items = append(items, menuItem{Label: "Show log"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit")
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered())
 
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
@@ -191,7 +191,7 @@ func doSwitchModel(cfg *Config, currentState *ServerState) error {
 
 	items := buildProfileItems(cfg, available)
 
-	idx := selectMenu("Switch model", nil, items, "↑↓ select · enter confirm · q cancel")
+	idx := selectMenu("Switch model", nil, items, "↑↓ select · enter confirm · q cancel", cfg.ShouldDisplayCentered())
 
 	if idx < 0 || idx >= len(available) {
 		fmt.Print(escClear + escCursorShow)

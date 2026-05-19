@@ -28,13 +28,18 @@ type Config struct {
 	DefaultBackend string             `yaml:"default_backend"`
 	ModelsDir      string             `yaml:"models_dir"`
 	LogDir         string             `yaml:"log_dir"`
-	AutoClose      *bool              `yaml:"auto_close"`
-	Defaults       ProfileParams      `yaml:"defaults"`
-	Profiles       map[string]Profile `yaml:"profiles"`
+	AutoClose       *bool              `yaml:"auto_close"`
+	DisplayCentered *bool              `yaml:"display_centered"`
+	Defaults        ProfileParams      `yaml:"defaults"`
+	Profiles        map[string]Profile `yaml:"profiles"`
 }
 
 func (c *Config) ShouldAutoClose() bool {
 	return c.AutoClose == nil || *c.AutoClose
+}
+
+func (c *Config) ShouldDisplayCentered() bool {
+	return c.DisplayCentered != nil && *c.DisplayCentered
 }
 
 // Profile represents a named model configuration within the YAML config.
@@ -291,6 +296,9 @@ log_dir: ~/.config/llama-launcher/logs
 # Close the launcher after selecting a menu action (default: true).
 # Set to false to keep the interactive menu open after each action.
 auto_close: false
+
+# Display the llama-launcher UI centered in the terminal (default: false).
+display_centered: true
 
 # Default parameters applied at server start (shared by all models).
 # Per-model overrides for hardware params (context_size, gpu_layers)

@@ -96,7 +96,7 @@ func readKeyTimeout(timeout time.Duration) keyCode {
 	return readKey()
 }
 
-func selectMenu(title string, headerFn func() []string, items []menuItem, hints string) int {
+func selectMenu(title string, headerFn func() []string, items []menuItem, hints string, centered bool) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return -1
@@ -143,18 +143,38 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 		}
 
 		rendered := frame.Render(body)
-
 		renderedLines := strings.Split(strings.TrimSuffix(rendered, "\r\n"), "\r\n")
-		lastMenuRect.row = 2
-		lastMenuRect.col = 1
-		lastMenuRect.width = visibleWidth(renderedLines[0])
-		lastMenuRect.height = len(renderedLines)
+
+		frameWidth := visibleWidth(renderedLines[0])
+		frameHeight := len(renderedLines)
+
+		startRow := 2
+		startCol := 1
+		if centered {
+			tw := terminalWidth()
+			th := terminalHeight()
+			startCol = (tw-frameWidth)/2 + 1
+			startRow = (th-frameHeight)/2 + 1
+			if startCol < 1 {
+				startCol = 1
+			}
+			if startRow < 1 {
+				startRow = 1
+			}
+		}
+
+		lastMenuRect.row = startRow
+		lastMenuRect.col = startCol
+		lastMenuRect.width = frameWidth
+		lastMenuRect.height = frameHeight
 
 		buf.Reset()
 		buf.WriteString(escClear)
 		buf.WriteString(escCursorHide)
-		buf.WriteString("\r\n")
-		buf.WriteString(rendered)
+
+		for i, line := range renderedLines {
+			fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
+		}
 
 		os.Stdout.WriteString(buf.String())
 
