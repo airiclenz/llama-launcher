@@ -36,14 +36,18 @@ func runStoppedMenu(cfg *Config) error {
 		return runStoppedMenuSimple(cfg, names)
 	}
 
-	header := fmt.Sprintf("    %sllama-launcher %s%s\r\n\r\n", cBold, Version, cReset)
-	header += fmt.Sprintf("    Status  %s● stopped%s\r\n\r\n", cRed, cReset)
+	title := fmt.Sprintf("llama-launcher %s", Version)
+	headerLines := []string{
+		"",
+		fmt.Sprintf("Status  %s● stopped%s", cRed, cReset),
+		"",
+	}
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
 	items = append(items, menuItem{Label: "Start server only"})
 
-	idx := selectMenu(header, items, "↑↓ select · enter start & load · q quit")
+	idx := selectMenu(title, headerLines, items, "↑↓ select · enter start & load · q quit")
 	fmt.Print(escClear + escCursorShow)
 
 	if idx < 0 {
@@ -62,11 +66,15 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		return runLoadedMenuSimple(cfg, state)
 	}
 
-	header := fmt.Sprintf("    %sllama-launcher %s%s\r\n\r\n", cBold, Version, cReset)
-	header += fmt.Sprintf("    Status   %s● running%s\r\n", cGreen, cReset)
-	header += fmt.Sprintf("    Model    %s\r\n", state.ActiveProfile)
-	header += fmt.Sprintf("    Server   %s:%d  PID %d  Uptime %s\r\n\r\n",
-		state.Host, state.Port, state.PID, formatUptime(state.Uptime()))
+	title := fmt.Sprintf("llama-launcher %s", Version)
+	headerLines := []string{
+		"",
+		fmt.Sprintf("Status   %s● running%s", cGreen, cReset),
+		fmt.Sprintf("Model    %s", state.ActiveProfile),
+		fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
+			state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
+		"",
+	}
 
 	items := []menuItem{
 		{Label: "Switch model"},
@@ -74,7 +82,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		{Label: "Show log"},
 	}
 
-	idx := selectMenu(header, items, "↑↓ select · enter confirm · q quit")
+	idx := selectMenu(title, headerLines, items, "↑↓ select · enter confirm · q quit")
 	fmt.Print(escClear + escCursorShow)
 
 	switch idx {
@@ -95,17 +103,21 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 		return runIdleMenuSimple(cfg, state, names)
 	}
 
-	header := fmt.Sprintf("    %sllama-launcher %s%s\r\n\r\n", cBold, Version, cReset)
-	header += fmt.Sprintf("    Status   %s● running%s %s(no model)%s\r\n", cGreen, cReset, cDim, cReset)
-	header += fmt.Sprintf("    Server   %s:%d  PID %d  Uptime %s\r\n\r\n",
-		state.Host, state.Port, state.PID, formatUptime(state.Uptime()))
+	title := fmt.Sprintf("llama-launcher %s", Version)
+	headerLines := []string{
+		"",
+		fmt.Sprintf("Status   %s● running%s %s(no model)%s", cGreen, cReset, cDim, cReset),
+		fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
+			state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
+		"",
+	}
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
 	items = append(items, menuItem{Label: "Stop server"})
 	items = append(items, menuItem{Label: "Show log"})
 
-	idx := selectMenu(header, items, "↑↓ select · enter load · q quit")
+	idx := selectMenu(title, headerLines, items, "↑↓ select · enter load · q quit")
 	fmt.Print(escClear + escCursorShow)
 
 	if idx < 0 {
@@ -144,10 +156,11 @@ func doSwitchModel(cfg *Config, currentState *ServerState) error {
 		return doSwitchSimple(cfg, available)
 	}
 
-	header := fmt.Sprintf("    %sSwitch model%s\r\n\r\n", cBold, cReset)
+	title := "Switch model"
+	headerLines := []string{""}
 	items := buildProfileItems(cfg, available)
 
-	idx := selectMenu(header, items, "↑↓ select · enter confirm · q cancel")
+	idx := selectMenu(title, headerLines, items, "↑↓ select · enter confirm · q cancel")
 	fmt.Print(escClear + escCursorShow)
 
 	if idx < 0 || idx >= len(available) {

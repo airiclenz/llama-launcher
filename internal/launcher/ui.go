@@ -77,7 +77,7 @@ func readKey() keyCode {
 	return keyNone
 }
 
-func selectMenu(header string, items []menuItem, hints string) int {
+func selectMenu(title string, headerLines []string, items []menuItem, hints string) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return -1
@@ -97,28 +97,33 @@ func selectMenu(header string, items []menuItem, hints string) int {
 		return -1
 	}
 
+	frame := Frame{Title: title, RawMode: true}
+
 	var buf strings.Builder
 	for {
+		var lines []string
+		lines = append(lines, headerLines...)
+
+		for i, item := range items {
+			if item.Separator {
+				lines = append(lines, "")
+				continue
+			}
+			if i == selected {
+				lines = append(lines, fmt.Sprintf("%s▸ %-22s%s %s", cBoldCyan, item.Label, cReset, item.Description))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %-22s %s%s%s", item.Label, cDim, item.Description, cReset))
+			}
+		}
+
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("%s%s%s", cDim, hints, cReset))
+
 		buf.Reset()
 		buf.WriteString(escClear)
 		buf.WriteString(escCursorHide)
 		buf.WriteString("\r\n")
-		buf.WriteString(header)
-
-		for i, item := range items {
-			if item.Separator {
-				buf.WriteString("\r\n")
-				continue
-			}
-			if i == selected {
-				fmt.Fprintf(&buf, "    %s▸ %-22s%s %s\r\n", cBoldCyan, item.Label, cReset, item.Description)
-			} else {
-				fmt.Fprintf(&buf, "      %-22s %s%s%s\r\n", item.Label, cDim, item.Description, cReset)
-			}
-		}
-
-		buf.WriteString("\r\n")
-		fmt.Fprintf(&buf, "    %s%s%s\r\n", cDim, hints, cReset)
+		buf.WriteString(frame.Render(lines))
 
 		os.Stdout.WriteString(buf.String())
 
