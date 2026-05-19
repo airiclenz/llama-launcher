@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
+	"time"
 
 	"golang.org/x/term"
 )
 
 const (
-	escClear      = "\033[2J\033[H"
+	escClear      = "\033[H\033[J"
 	escCursorHide = "\033[?25l"
 	escCursorShow = "\033[?25h"
 
@@ -39,6 +41,10 @@ type menuItem struct {
 	Label       string
 	Description string
 	Separator   bool
+}
+
+var lastMenuRect struct {
+	row, col, width, height int
 }
 
 func readKey() keyCode {
@@ -77,7 +83,20 @@ func readKey() keyCode {
 	return keyNone
 }
 
-func selectMenu(title string, headerLines []string, items []menuItem, hints string) int {
+func readKeyTimeout(timeout time.Duration) keyCode {
+	tv := syscall.NsecToTimeval(int64(timeout))
+	var fds syscall.FdSet
+	fds.Bits[0] = 1
+	if err := syscall.Select(1, &fds, nil, nil, &tv); err != nil {
+		return keyNone
+	}
+	if fds.Bits[0]&1 == 0 {
+		return keyNone
+	}
+	return readKey()
+}
+
+func selectMenu(title string, headerFn func() []string, items []menuItem, hints string) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return -1
@@ -97,37 +116,49 @@ func selectMenu(title string, headerLines []string, items []menuItem, hints stri
 		return -1
 	}
 
-	frame := Frame{Title: title, RawMode: true}
+	frame := Frame{
+		Title:   title,
+		Footer:  []string{fmt.Sprintf("%s%s%s", cDim, hints, cReset)},
+		RawMode: true,
+	}
 
 	var buf strings.Builder
 	for {
-		var lines []string
-		lines = append(lines, headerLines...)
+		if headerFn != nil {
+			frame.Header = headerFn()
+		}
+
+		var body []string
 
 		for i, item := range items {
 			if item.Separator {
-				lines = append(lines, "")
+				body = append(body, "")
 				continue
 			}
 			if i == selected {
-				lines = append(lines, fmt.Sprintf("%s▸ %-22s%s %s", cBoldCyan, item.Label, cReset, item.Description))
+				body = append(body, fmt.Sprintf("%s▶ %-22s%s %s", cBoldCyan, item.Label, cReset, item.Description))
 			} else {
-				lines = append(lines, fmt.Sprintf("  %-22s %s%s%s", item.Label, cDim, item.Description, cReset))
+				body = append(body, fmt.Sprintf("· %-22s %s%s%s", item.Label, cDim, item.Description, cReset))
 			}
 		}
 
-		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("%s%s%s", cDim, hints, cReset))
+		rendered := frame.Render(body)
+
+		renderedLines := strings.Split(strings.TrimSuffix(rendered, "\r\n"), "\r\n")
+		lastMenuRect.row = 2
+		lastMenuRect.col = 1
+		lastMenuRect.width = visibleWidth(renderedLines[0])
+		lastMenuRect.height = len(renderedLines)
 
 		buf.Reset()
 		buf.WriteString(escClear)
 		buf.WriteString(escCursorHide)
 		buf.WriteString("\r\n")
-		buf.WriteString(frame.Render(lines))
+		buf.WriteString(rendered)
 
 		os.Stdout.WriteString(buf.String())
 
-		key := readKey()
+		key := readKeyTimeout(time.Second)
 		switch key {
 		case keyUp:
 			for next := selected - 1; next >= 0; next-- {
@@ -176,4 +207,41 @@ func firstSelectable(items []menuItem) int {
 
 func isTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+func showActivity(message string) {
+	if !isTerminal() {
+		fmt.Printf("  %s\n", message)
+		return
+	}
+
+	f := Frame{Padding: 3, BorderColor: cLightGray}
+	rendered := f.Render([]string{"", message, ""})
+	popupLines := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+
+	popupWidth := visibleWidth(popupLines[0])
+
+	var startCol, startRow int
+	if lastMenuRect.width > 0 && lastMenuRect.height > 0 {
+		startCol = lastMenuRect.col + (lastMenuRect.width-popupWidth)/2
+		startRow = lastMenuRect.row + (lastMenuRect.height-len(popupLines))/2
+	} else {
+		tw := terminalWidth()
+		th := terminalHeight()
+		startCol = (tw-popupWidth)/2 + 1
+		startRow = (th-len(popupLines))/2 + 1
+	}
+	if startCol < 1 {
+		startCol = 1
+	}
+	if startRow < 1 {
+		startRow = 1
+	}
+
+	var buf strings.Builder
+	buf.WriteString(escCursorHide)
+	for i, line := range popupLines {
+		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
+	}
+	os.Stdout.WriteString(buf.String())
 }

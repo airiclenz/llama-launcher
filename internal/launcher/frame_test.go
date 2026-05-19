@@ -9,16 +9,20 @@ func TestFrameBasic(t *testing.T) {
 	f := Frame{Title: "llama-launcher"}
 	out := f.Render([]string{"hello", "world"})
 
-	if !strings.Contains(out, "╭━ llama-launcher") {
+	if !strings.Contains(out, "llama-launcher") {
 		t.Errorf("missing title in top border:\n%s", out)
 	}
 	if !strings.Contains(out, "╰") || !strings.Contains(out, "╯") {
 		t.Errorf("missing bottom border:\n%s", out)
 	}
 
+	if !strings.Contains(out, "╍") {
+		t.Errorf("missing title decoration line:\n%s", out)
+	}
+
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	if len(lines) != 4 {
-		t.Errorf("expected 4 lines (top + 2 content + bottom), got %d:\n%s", len(lines), out)
+	if len(lines) != 5 {
+		t.Errorf("expected 5 lines (top + decoration + 2 body + bottom), got %d:\n%s", len(lines), out)
 	}
 
 	topVis := visibleWidth(lines[0])
@@ -32,11 +36,8 @@ func TestFrameNoTitle(t *testing.T) {
 	f := Frame{}
 	out := f.Render([]string{"content"})
 
-	if !strings.HasPrefix(out, "╭━") {
-		t.Errorf("expected top border to start with ╭━:\n%s", out)
-	}
-	if strings.Contains(out, "╭━ ") {
-		t.Errorf("no-title frame should not have title spacing:\n%s", out)
+	if !strings.HasPrefix(out, cDarkGray+"╭━") {
+		t.Errorf("expected dark gray top border:\n%s", out)
 	}
 }
 
@@ -49,16 +50,62 @@ func TestFrameRawMode(t *testing.T) {
 	}
 }
 
-func TestFrameANSIContent(t *testing.T) {
-	colored := cGreen + "● running" + cReset
-	f := Frame{Title: "status"}
-	out := f.Render([]string{colored, "plain text"})
+func TestFrameHeaderFooter(t *testing.T) {
+	f := Frame{
+		Title:  "test",
+		Header: []string{"Status: ok"},
+		Footer: []string{"press q to quit"},
+	}
+	out := f.Render([]string{"body line"})
+
+	if !strings.Contains(out, "├") || !strings.Contains(out, "┤") {
+		t.Errorf("missing divider:\n%s", out)
+	}
+
+	dividerCount := strings.Count(out, "├")
+	if dividerCount != 2 {
+		t.Errorf("expected 2 dividers (header + footer), got %d:\n%s", dividerCount, out)
+	}
 
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	topVis := visibleWidth(lines[0])
 	for i, line := range lines {
-		vis := visibleWidth(line)
-		if vis != topVis {
+		if vis := visibleWidth(line); vis != topVis {
+			t.Errorf("line %d visible width %d != top width %d:\n%s", i, vis, topVis, out)
+		}
+	}
+}
+
+func TestFrameHeaderOnly(t *testing.T) {
+	f := Frame{Header: []string{"header"}}
+	out := f.Render([]string{"body"})
+
+	if strings.Count(out, "├") != 1 {
+		t.Errorf("expected 1 divider (header only):\n%s", out)
+	}
+}
+
+func TestFrameFooterOnly(t *testing.T) {
+	f := Frame{Footer: []string{"footer"}}
+	out := f.Render([]string{"body"})
+
+	if strings.Count(out, "├") != 1 {
+		t.Errorf("expected 1 divider (footer only):\n%s", out)
+	}
+}
+
+func TestFrameANSIContent(t *testing.T) {
+	f := Frame{
+		Title:  "status",
+		Header: []string{cGreen + "● running" + cReset},
+		Footer: []string{cDim + "hints" + cReset},
+	}
+	out := f.Render([]string{"plain text"})
+
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	topVis := visibleWidth(lines[0])
+	for i, line := range lines {
+		if vis := visibleWidth(line); vis != topVis {
 			t.Errorf("line %d visible width %d != top width %d:\n%s", i, vis, topVis, out)
 		}
 	}
@@ -70,8 +117,17 @@ func TestFrameCustomPadding(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	content := lines[1]
-	if !strings.HasPrefix(content, "│   ") {
-		t.Errorf("expected 3-space padding, got: %q", content)
+	if !strings.Contains(content, "│"+cReset+"   x") {
+		t.Errorf("expected 3-space left padding, got: %q", content)
+	}
+}
+
+func TestFrameDarkGrayBorders(t *testing.T) {
+	f := Frame{Title: "test"}
+	out := f.Render([]string{"content"})
+
+	if !strings.HasPrefix(out, cDarkGray) {
+		t.Errorf("border should start with dark gray color code")
 	}
 }
 

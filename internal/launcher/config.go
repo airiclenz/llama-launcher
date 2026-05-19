@@ -28,8 +28,13 @@ type Config struct {
 	DefaultBackend string             `yaml:"default_backend"`
 	ModelsDir      string             `yaml:"models_dir"`
 	LogDir         string             `yaml:"log_dir"`
+	AutoClose      *bool              `yaml:"auto_close"`
 	Defaults       ProfileParams      `yaml:"defaults"`
 	Profiles       map[string]Profile `yaml:"profiles"`
+}
+
+func (c *Config) ShouldAutoClose() bool {
+	return c.AutoClose == nil || *c.AutoClose
 }
 
 // Profile represents a named model configuration within the YAML config.
@@ -282,6 +287,10 @@ models_dir: ~/Models
 
 # Directory for server log files.
 log_dir: ~/.config/llama-launcher/logs
+
+# Close the launcher after selecting a menu action (default: true).
+# Set to false to keep the interactive menu open after each action.
+auto_close: false
 
 # Default parameters applied at server start (shared by all models).
 # Per-model overrides for hardware params (context_size, gpu_layers)

@@ -2,31 +2,48 @@ package launcher
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 )
 
-// RunInteractiveMenu presents a one-shot menu based on current server state.
+var errUserQuit = errors.New("quit")
+
+// RunInteractiveMenu presents a menu based on current server state.
+// When auto_close is false, the menu re-displays after each action.
 func RunInteractiveMenu(cfg *Config) error {
-	state, _ := ReadState()
+	for {
+		state, _ := ReadState()
 
-	if state != nil && !IsProcessAlive(state.PID) {
-		if !isTerminal() {
-			fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", state.PID)
+		if state != nil && !IsProcessAlive(state.PID) {
+			if !isTerminal() {
+				fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", state.PID)
+			}
+			RemoveState()
+			state = nil
 		}
-		RemoveState()
-		state = nil
-	}
 
-	if state == nil {
-		return runStoppedMenu(cfg)
+		var err error
+		if state == nil {
+			err = runStoppedMenu(cfg)
+		} else if state.ActiveModel != "" {
+			err = runLoadedMenu(cfg, state)
+		} else {
+			err = runIdleMenu(cfg, state)
+		}
+
+		if err == errUserQuit || cfg.ShouldAutoClose() || !isTerminal() {
+			if err == errUserQuit {
+				err = nil
+			}
+			return err
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
 	}
-	if state.ActiveModel != "" {
-		return runLoadedMenu(cfg, state)
-	}
-	return runIdleMenu(cfg, state)
 }
 
 func runStoppedMenu(cfg *Config) error {
@@ -37,21 +54,21 @@ func runStoppedMenu(cfg *Config) error {
 	}
 
 	title := fmt.Sprintf("llama-launcher %s", Version)
-	headerLines := []string{
-		"",
-		fmt.Sprintf("Status  %s● stopped%s", cRed, cReset),
-		"",
+	headerFn := func() []string {
+		return []string{
+			fmt.Sprintf("Status  %s● stopped%s", cRed, cReset),
+		}
 	}
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
 	items = append(items, menuItem{Label: "Start server only"})
 
-	idx := selectMenu(title, headerLines, items, "↑↓ select · enter start & load · q quit")
-	fmt.Print(escClear + escCursorShow)
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit")
 
 	if idx < 0 {
-		return nil
+		fmt.Print(escClear + escCursorShow)
+		return errUserQuit
 	}
 
 	if idx < len(names) {
@@ -67,13 +84,18 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 	}
 
 	title := fmt.Sprintf("llama-launcher %s", Version)
-	headerLines := []string{
-		"",
-		fmt.Sprintf("Status   %s● running%s", cGreen, cReset),
-		fmt.Sprintf("Model    %s", state.ActiveProfile),
-		fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
-			state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
-		"",
+	headerFn := func() []string {
+		if !IsProcessAlive(state.PID) {
+			return []string{
+				fmt.Sprintf("Status   %s● stopped%s", cRed, cReset),
+			}
+		}
+		return []string{
+			fmt.Sprintf("Status   %s● running%s", cGreen, cReset),
+			fmt.Sprintf("Model    %s", state.ActiveProfile),
+			fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
+				state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
+		}
 	}
 
 	items := []menuItem{
@@ -82,8 +104,12 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		{Label: "Show log"},
 	}
 
-	idx := selectMenu(title, headerLines, items, "↑↓ select · enter confirm · q quit")
-	fmt.Print(escClear + escCursorShow)
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit")
+
+	if idx < 0 {
+		fmt.Print(escClear + escCursorShow)
+		return errUserQuit
+	}
 
 	switch idx {
 	case 0:
@@ -91,9 +117,10 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 	case 1:
 		return doStop()
 	case 2:
+		fmt.Print(escClear + escCursorShow)
 		return TailLog(state.LogFile, false)
 	}
-	return nil
+	return errUserQuit
 }
 
 func runIdleMenu(cfg *Config, state *ServerState) error {
@@ -104,12 +131,17 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 	}
 
 	title := fmt.Sprintf("llama-launcher %s", Version)
-	headerLines := []string{
-		"",
-		fmt.Sprintf("Status   %s● running%s %s(no model)%s", cGreen, cReset, cDim, cReset),
-		fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
-			state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
-		"",
+	headerFn := func() []string {
+		if !IsProcessAlive(state.PID) {
+			return []string{
+				fmt.Sprintf("Status   %s● stopped%s", cRed, cReset),
+			}
+		}
+		return []string{
+			fmt.Sprintf("Status   %s● running%s %s(no model)%s", cGreen, cReset, cDim, cReset),
+			fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
+				state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
+		}
 	}
 
 	items := buildProfileItems(cfg, names)
@@ -117,11 +149,11 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 	items = append(items, menuItem{Label: "Stop server"})
 	items = append(items, menuItem{Label: "Show log"})
 
-	idx := selectMenu(title, headerLines, items, "↑↓ select · enter load · q quit")
-	fmt.Print(escClear + escCursorShow)
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit")
 
 	if idx < 0 {
-		return nil
+		fmt.Print(escClear + escCursorShow)
+		return errUserQuit
 	}
 
 	if idx < len(names) {
@@ -133,6 +165,7 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 	case "Stop server":
 		return doStop()
 	case "Show log":
+		fmt.Print(escClear + escCursorShow)
 		return TailLog(state.LogFile, false)
 	}
 	return nil
@@ -156,14 +189,12 @@ func doSwitchModel(cfg *Config, currentState *ServerState) error {
 		return doSwitchSimple(cfg, available)
 	}
 
-	title := "Switch model"
-	headerLines := []string{""}
 	items := buildProfileItems(cfg, available)
 
-	idx := selectMenu(title, headerLines, items, "↑↓ select · enter confirm · q cancel")
-	fmt.Print(escClear + escCursorShow)
+	idx := selectMenu("Switch model", nil, items, "↑↓ select · enter confirm · q cancel")
 
 	if idx < 0 || idx >= len(available) {
+		fmt.Print(escClear + escCursorShow)
 		return nil
 	}
 
@@ -176,8 +207,9 @@ func doLoadProfile(cfg *Config, name string) error {
 		return err
 	}
 
-	fmt.Printf("  Loading %s...\n", name)
+	showActivity(fmt.Sprintf("Loading %s...", name))
 	state, started, err := LoadProfile(cfg, profile)
+	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return err
 	}
@@ -191,7 +223,7 @@ func doLoadProfile(cfg *Config, name string) error {
 }
 
 func doStartOnly(cfg *Config) error {
-	fmt.Println("  Starting server...")
+	showActivity("Starting server...")
 	defaults := cfg.Defaults
 	applyFallbacks(&defaults)
 	profile := &ResolvedProfile{
@@ -199,6 +231,7 @@ func doStartOnly(cfg *Config) error {
 		ProfileParams: defaults,
 	}
 	state, _, err := EnsureServer(cfg, profile)
+	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return err
 	}
@@ -208,7 +241,9 @@ func doStartOnly(cfg *Config) error {
 }
 
 func doStop() error {
+	showActivity("Stopping server...")
 	state, err := StopServer()
+	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return err
 	}
