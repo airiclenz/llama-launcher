@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test
 
 ```bash
-make build          # builds ./llama-launcher binary
+make build          # builds ./llama-launcher binary (version injected from VERSION file)
 make install        # builds + copies to ~/.local/bin, adds to PATH if needed
 make clean          # removes binary
 
@@ -13,6 +13,8 @@ go test ./...       # run all tests
 go test ./internal/launcher/ -run TestMergeParams  # run a single test
 go vet ./...        # static analysis
 ```
+
+The version number lives in the root `VERSION` file and is injected at build time via `ldflags` into `launcher.Version`.
 
 ## Architecture
 
@@ -23,18 +25,28 @@ All application code lives in `internal/launcher/`. The `main.go` entry point de
 ### Key components
 
 - **cli.go** — `Run()` entry point, subcommand dispatch (`load`, `unload`, `start`, `stop`, `status`, `list`, `logs`), and first-run config generation. No arguments → interactive menu.
-- **config.go** — YAML config loading, three-tier parameter merge (profile → defaults → fallback). All numeric/bool params are pointer types to distinguish "not set" from zero.
+- **config.go** — YAML config loading, three-tier parameter merge (profile → defaults → fallback). All numeric/bool params are pointer types to distinguish "not set" from zero. Includes `auto_close`, `display_centered` UI options.
 - **backend.go** — `Backend` interface + global registry. New backends: implement the interface in `backend_<name>.go`, register via `init()`.
 - **backend_llamacpp.go** — llama.cpp backend: builds CLI flags, resolves model file paths, registered as `"llamacpp"`.
 - **server.go** — Backend-agnostic process lifecycle: fork/detach via `Setsid`, PID tracking, state file (JSON) with atomic writes, health polling, SIGTERM→SIGKILL escalation.
-- **menu.go** — Interactive menus for three states (stopped / running with model / running idle), plus non-terminal simple fallbacks.
-- **ui.go** — Raw terminal mode via `golang.org/x/term`, ANSI escape rendering, arrow-key `selectMenu()` component.
+- **menu.go** — Interactive menus for three states (stopped / running with model / running idle), plus non-terminal simple fallbacks. Actions: load/switch models, show model config popup, stop server, tail logs, edit config.
+- **ui.go** — Raw terminal mode via `golang.org/x/term`, ANSI escape rendering, arrow-key `selectMenu()` component, `showActivity()` overlay popup, `showPopup()` dismissable popup with keypress wait.
+- **frame.go** — Reusable `Frame` component for box-drawing UI: title bar, header/footer sections with dividers, configurable border color, ANSI-aware width calculation. Used by menus (dark gray borders) and popups (light gray borders).
 
 ### State & config paths
 
 - Config: `~/.config/llama-launcher/config.yaml` (override with `--config` or `LLAMA_LAUNCHER_CONFIG`)
 - State: `~/.config/llama-launcher/state.json` (tracks PID, backend, active model)
 - Logs: `~/.config/llama-launcher/logs/<backend>-<timestamp>.log`
+
+### UI architecture
+
+The TUI uses no framework — raw ANSI escape codes throughout:
+- `selectMenu()` enters raw terminal mode, renders a `Frame` with header/footer/body, reads keys via `syscall.Select` with 1-second timeout for live status refresh.
+- `showActivity()` overlays a small popup centered over the menu frame using `\033[row;colH` cursor positioning.
+- `showPopup()` renders a titled, dismissable popup (used for model config display).
+- `display_centered: true` centers the entire menu in the terminal.
+- `auto_close: false` keeps the menu open after actions (loop with `errUserQuit` sentinel).
 
 ### Exit codes
 
