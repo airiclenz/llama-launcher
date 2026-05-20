@@ -17,7 +17,7 @@ func init() {
 }
 
 func (b *LlamaCpp) Name() string        { return "llamacpp" }
-func (b *LlamaCpp) DisplayName() string { return "llama.cpp" }
+func (b *LlamaCpp) DisplayName() string { return "LLaMA.cpp" }
 func (b *LlamaCpp) DefaultAddr() string { return "127.0.0.1:8080" }
 
 func (b *LlamaCpp) HealthCheck(addr string) error {

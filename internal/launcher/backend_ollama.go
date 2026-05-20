@@ -8,11 +8,16 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
 
-type Ollama struct{}
+type Ollama struct {
+	lastPID     int
+	lastLogFile string
+}
 
 func init() {
 	RegisterBackend(&Ollama{})
@@ -83,27 +88,94 @@ func (b *Ollama) UnloadModel(addr string, modelID string) error {
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Ollama unload returned status %d", resp.StatusCode)
+	}
 	return nil
 }
 
-func (b *Ollama) TryStart(_ *Config, addr string) error {
+func (b *Ollama) TryStart(cfg *Config, addr string) error {
 	binary, err := exec.LookPath("ollama")
 	if err != nil {
 		return fmt.Errorf("ollama binary not found in PATH")
 	}
 
+	logPath, err := createLogPath(cfg.LogDir, "ollama")
+	if err != nil {
+		return fmt.Errorf("creating log path: %w", err)
+	}
+
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("creating log file: %w", err)
+	}
+
 	cmd := exec.Command(binary, "serve")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = append(os.Environ(), "OLLAMA_HOST="+addr, "OLLAMA_KEEP_ALIVE=24h")
 
 	if err := cmd.Start(); err != nil {
+		logFile.Close()
 		return fmt.Errorf("starting ollama serve: %w", err)
 	}
+	logFile.Close()
+
+	b.lastPID = cmd.Process.Pid
+	b.lastLogFile = logPath
 	return nil
 }
 
 func (b *Ollama) TryStop(_ string) error {
+	binary, err := exec.LookPath("ollama")
+	if err != nil {
+		return nil
+	}
+	cmd := exec.Command(binary, "stop")
+	cmd.Run()
+
+	out, err := exec.Command("pgrep", "-f", "ollama serve").Output()
+	if err != nil || len(out) == 0 {
+		return nil
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		proc.Signal(syscall.SIGTERM)
+	}
 	return nil
+}
+
+func (b *Ollama) LastStartedPID() int        { return b.lastPID }
+func (b *Ollama) LastStartedLogFile() string  { return b.lastLogFile }
+
+func (b *Ollama) ListRunningModels(addr string) ([]RunningModelInfo, error) {
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/api/ps")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing /api/ps response: %w", err)
+	}
+
+	models := make([]RunningModelInfo, len(result.Models))
+	for i, m := range result.Models {
+		models[i] = RunningModelInfo{Name: m.Name, Size: m.Size}
+	}
+	return models, nil
 }

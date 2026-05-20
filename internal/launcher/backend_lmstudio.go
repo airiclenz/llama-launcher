@@ -19,7 +19,7 @@ func init() {
 }
 
 func (b *LMStudio) Name() string        { return "lmstudio" }
-func (b *LMStudio) DisplayName() string { return "LM Studio" }
+func (b *LMStudio) DisplayName() string { return "LM-Studio" }
 func (b *LMStudio) DefaultAddr() string { return "localhost:1234" }
 
 func (b *LMStudio) HealthCheck(addr string) error {

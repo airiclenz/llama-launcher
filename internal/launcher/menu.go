@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,27 +18,42 @@ var errUserQuit = errors.New("quit")
 // When auto_close is false, the menu re-displays after each action.
 func RunInteractiveMenu(cfg *Config) error {
 	for {
-		state, _ := ReadState()
+		states, _ := ReadAllStates()
 
-		if state != nil && !IsServerAlive(state) {
-			if !isTerminal() {
-				if state.Managed {
-					fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", state.PID)
-				} else {
-					fmt.Fprintf(os.Stderr, "Notice: %s server no longer reachable at %s\n", backendDisplayName(state.Backend), state.Addr())
+		var primaryState *ServerState
+		anyModel := false
+		anyServer := false
+		for _, s := range states {
+			if IsServerAlive(s) {
+				anyServer = true
+				if s.ActiveModel != "" {
+					anyModel = true
+					if primaryState == nil {
+						primaryState = s
+					}
 				}
+				if primaryState == nil {
+					primaryState = s
+				}
+			} else {
+				if !isTerminal() {
+					if s.Managed {
+						fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", s.PID)
+					} else {
+						fmt.Fprintf(os.Stderr, "Notice: %s server no longer reachable at %s\n", backendDisplayName(s.Backend), s.Addr())
+					}
+				}
+				removeBackendState(s.Backend)
 			}
-			RemoveState()
-			state = nil
 		}
 
 		var err error
-		if state == nil {
+		if !anyServer {
 			err = runStoppedMenu(cfg)
-		} else if state.ActiveModel != "" {
-			err = runLoadedMenu(cfg, state)
+		} else if anyModel {
+			err = runLoadedMenu(cfg, primaryState)
 		} else {
-			err = runIdleMenu(cfg, state)
+			err = runIdleMenu(cfg, primaryState)
 		}
 
 		if err == errUserQuit || cfg.ShouldAutoClose() || !isTerminal() {
@@ -61,14 +77,14 @@ func runStoppedMenu(cfg *Config) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
-		return []string{
-			fmt.Sprintf("Status  %s● stopped%s", cRed, cReset),
-		}
+		return serverStatusLines(cfg, nil)
 	}
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
-	items = append(items, menuItem{Label: "Start server only"})
+	if runningServers := detectRunningServers(cfg, nil); len(runningServers) > 0 {
+		items = append(items, menuItem{Label: "Stop server"})
+	}
 	items = append(items, menuItem{Label: "Edit config"})
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered())
@@ -84,8 +100,8 @@ func runStoppedMenu(cfg *Config) error {
 
 	item := items[idx]
 	switch item.Label {
-	case "Start server only":
-		return doStartOnly(cfg)
+	case "Stop server":
+		return doStopServer(cfg, nil)
 	case "Edit config":
 		return doEditConfig(cfg)
 	}
@@ -98,37 +114,18 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 	}
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-	modelLabel := profileDisplayName(cfg, state.ActiveProfile)
-	displayName := backendDisplayName(state.Backend)
 	headerFn := func() []string {
-		if !IsServerAlive(state) {
-			return []string{
-				fmt.Sprintf("Status   %s● stopped%s", cRed, cReset),
-			}
-		}
-		lines := []string{
-			fmt.Sprintf("Status   %s● running%s", cGreen, cReset),
-			fmt.Sprintf("Model    %s", modelLabel),
-		}
-		if state.Managed {
-			lines = append(lines, fmt.Sprintf("Server   %s · %s:%d · PID %d · Uptime %s",
-				displayName, state.Host, state.Port, state.PID, formatUptime(state.Uptime())))
-		} else {
-			lines = append(lines, fmt.Sprintf("Server   %s · %s:%d",
-				displayName, state.Host, state.Port))
-		}
-		return lines
+		return serverStatusLines(cfg, state)
 	}
 
 	items := []menuItem{
 		{Label: "Switch model"},
 		{Label: "Show model config"},
 	}
-	if state.Managed {
-		items = append(items, menuItem{Label: "Stop server"})
+	items = append(items, menuItem{Label: "Unload model"})
+	items = append(items, menuItem{Label: "Stop server"})
+	if state.LogFile != "" {
 		items = append(items, menuItem{Label: "Show log"})
-	} else {
-		items = append(items, menuItem{Label: "Disconnect"})
 	}
 	items = append(items, menuItem{Label: "Edit config"})
 
@@ -145,8 +142,10 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		return doSwitchModel(cfg, state)
 	case "Show model config":
 		return doShowConfig(cfg, state)
-	case "Stop server", "Disconnect":
-		return doStop()
+	case "Unload model":
+		return doUnloadModel(cfg)
+	case "Stop server":
+		return doStopServer(cfg, state)
 	case "Show log":
 		fmt.Print(escClear + escCursorShow)
 		return TailLog(state.LogFile, true)
@@ -164,33 +163,15 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 	}
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-	displayName := backendDisplayName(state.Backend)
 	headerFn := func() []string {
-		if !IsServerAlive(state) {
-			return []string{
-				fmt.Sprintf("Status   %s● stopped%s", cRed, cReset),
-			}
-		}
-		lines := []string{
-			fmt.Sprintf("Status   %s● running%s %s(no model)%s", cGreen, cReset, cDim, cReset),
-		}
-		if state.Managed {
-			lines = append(lines, fmt.Sprintf("Server   %s · %s:%d · PID %d · Uptime %s",
-				displayName, state.Host, state.Port, state.PID, formatUptime(state.Uptime())))
-		} else {
-			lines = append(lines, fmt.Sprintf("Server   %s · %s:%d",
-				displayName, state.Host, state.Port))
-		}
-		return lines
+		return serverStatusLines(cfg, state)
 	}
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
-	if state.Managed {
-		items = append(items, menuItem{Label: "Stop server"})
+	items = append(items, menuItem{Label: "Stop server"})
+	if state.LogFile != "" {
 		items = append(items, menuItem{Label: "Show log"})
-	} else {
-		items = append(items, menuItem{Label: "Disconnect"})
 	}
 	items = append(items, menuItem{Label: "Edit config"})
 
@@ -207,8 +188,8 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 
 	item := items[idx]
 	switch item.Label {
-	case "Stop server", "Disconnect":
-		return doStop()
+	case "Stop server":
+		return doStopServer(cfg, state)
 	case "Show log":
 		fmt.Print(escClear + escCursorShow)
 		return TailLog(state.LogFile, true)
@@ -277,48 +258,176 @@ func doLoadProfile(cfg *Config, name string) error {
 	return nil
 }
 
-func doStartOnly(cfg *Config) error {
-	if cfg.Defaults.Server == nil {
-		return fmt.Errorf("no default server configured in defaults section")
+type runningServer struct {
+	name string
+	addr string
+}
+
+func detectRunningServers(cfg *Config, state *ServerState) []runningServer {
+	states, _ := ReadAllStates()
+	stateMap := make(map[string]*ServerState)
+	for _, s := range states {
+		stateMap[s.Backend] = s
 	}
-	serverName := *cfg.Defaults.Server
-	showActivity("Starting server...")
-	defaults := cfg.Defaults
-	b, err := GetBackend(serverName)
-	if err != nil {
-		return err
+
+	names := make([]string, 0, len(cfg.Servers))
+	for name := range cfg.Servers {
+		if cfg.IsServerEnabled(name) {
+			names = append(names, name)
+		}
 	}
-	applyBackendFallbacks(&defaults, cfg, serverName, b)
-	profile := &ResolvedProfile{
-		Backend:       serverName,
-		ProfileParams: defaults,
+	sort.Strings(names)
+
+	type result struct {
+		name string
+		addr string
+		ok   bool
 	}
-	state, _, err := EnsureServer(cfg, profile)
+	ch := make(chan result, len(names))
+	for _, name := range names {
+		go func(name string) {
+			b, err := GetBackend(name)
+			if err != nil {
+				ch <- result{name: name}
+				return
+			}
+			addr := cfg.ConfiguredBackendAddr(name)
+			if s, ok := stateMap[name]; ok {
+				addr = s.Addr()
+			}
+			ch <- result{name: name, addr: addr, ok: b.HealthCheck(addr) == nil}
+		}(name)
+	}
+
+	resultMap := make(map[string]result)
+	for range names {
+		r := <-ch
+		resultMap[r.name] = r
+	}
+
+	var running []runningServer
+	for _, name := range names {
+		r := resultMap[name]
+		if r.ok {
+			running = append(running, runningServer{name: name, addr: r.addr})
+		}
+	}
+	return running
+}
+
+func doStopServer(cfg *Config, state *ServerState) error {
+	running := detectRunningServers(cfg, state)
+	if len(running) == 0 {
+		fmt.Print(escClear + escCursorShow)
+		fmt.Println("  No servers running.")
+		return nil
+	}
+
+	var target runningServer
+	if len(running) == 1 {
+		target = running[0]
+	} else {
+		items := make([]menuItem, len(running))
+		for i, s := range running {
+			items[i] = menuItem{
+				Label:       backendDisplayName(s.name),
+				Description: s.addr,
+			}
+		}
+		title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
+		headerFn := func() []string {
+			return []string{"Select a server to stop"}
+		}
+		idx := selectMenu(title, headerFn, items, "↑↓ select · enter stop · q cancel", cfg.ShouldDisplayCentered())
+		if idx < 0 {
+			return nil
+		}
+		target = running[idx]
+	}
+
+	showActivity(fmt.Sprintf("Stopping %s...", backendDisplayName(target.name)))
+
+	st, err := StopBackendServer(target.name)
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
+		if errors.Is(err, ErrNotRunning) {
+			b, berr := GetBackend(target.name)
+			if berr != nil {
+				return berr
+			}
+			b.TryStop(target.addr)
+			fmt.Printf("  Stopped %s at %s\n", backendDisplayName(target.name), target.addr)
+			return nil
+		}
 		return err
 	}
-	if state.Managed {
-		fmt.Printf("  %s●%s Server started on %s:%d (PID %d)\n", cGreen, cReset, state.Host, state.Port, state.PID)
-		fmt.Printf("    Log: %s\n", state.LogFile)
+	if st.Managed {
+		fmt.Printf("  Stopped %s (PID %d)\n", backendDisplayName(target.name), st.PID)
 	} else {
-		fmt.Printf("  %s●%s Connected to %s at %s:%d\n", cGreen, cReset, b.DisplayName(), state.Host, state.Port)
+		fmt.Printf("  Disconnected from %s\n", backendDisplayName(target.name))
 	}
 	return nil
 }
 
-func doStop() error {
-	showActivity("Stopping server...")
-	state, err := StopServer()
-	fmt.Print(escClear + escCursorShow)
+func doUnloadModel(cfg *Config) error {
+	states, _ := ReadAllStates()
+	var loaded []*ServerState
+	for _, s := range states {
+		if IsServerAlive(s) && s.ActiveModel != "" {
+			loaded = append(loaded, s)
+		}
+	}
+
+	if len(loaded) == 0 {
+		fmt.Print(escClear + escCursorShow)
+		fmt.Println("  No model loaded.")
+		return nil
+	}
+
+	var target *ServerState
+	if len(loaded) == 1 {
+		target = loaded[0]
+	} else {
+		items := make([]menuItem, len(loaded))
+		for i, s := range loaded {
+			items[i] = menuItem{
+				Label:       s.ActiveProfile,
+				Description: profileDisplayName(cfg, s.ActiveProfile),
+			}
+		}
+		title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
+		headerFn := func() []string {
+			return []string{"Select a model to unload"}
+		}
+		idx := selectMenu(title, headerFn, items, "↑↓ select · enter unload · q cancel", cfg.ShouldDisplayCentered())
+		if idx < 0 {
+			return nil
+		}
+		target = loaded[idx]
+	}
+
+	b, err := GetBackend(target.Backend)
 	if err != nil {
 		return err
 	}
-	if state.Managed {
-		fmt.Printf("  Stopped server (PID %d)\n", state.PID)
+
+	displayName := profileDisplayName(cfg, target.ActiveProfile)
+	showActivity(fmt.Sprintf("Unloading %s...", displayName))
+
+	if _, ok := b.(ManagedBackend); ok {
+		st, err := StopBackendServer(target.Backend)
+		fmt.Print(escClear + escCursorShow)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  Model unloaded, server stopped (PID %d)\n", st.PID)
 	} else {
-		fmt.Printf("  Disconnected from %s (server still running at %s:%d)\n",
-			backendDisplayName(state.Backend), state.Host, state.Port)
+		st, err := UnloadBackendModel(target.Backend)
+		fmt.Print(escClear + escCursorShow)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  Model unloaded (server still running at %s:%d)\n", st.Host, st.Port)
 	}
 	return nil
 }
@@ -414,22 +523,65 @@ func profileDisplayName(cfg *Config, profileName string) string {
 	return profileName
 }
 
+func buildSimpleProfileLines(cfg *Config, names []string) []string {
+	hasMixed := hasMultipleBackends(cfg)
+
+	maxNameLen := 0
+	maxTagLen := 0
+	for _, name := range names {
+		if len(name) > maxNameLen {
+			maxNameLen = len(name)
+		}
+		if hasMixed {
+			p := cfg.Profiles[name]
+			server := resolveProfileServer(cfg, &p)
+			if tag := backendDisplayName(server); len(tag) > maxTagLen {
+				maxTagLen = len(tag)
+			}
+		}
+	}
+
+	lines := make([]string, len(names))
+	for i, name := range names {
+		p := cfg.Profiles[name]
+		desc := p.Description
+		if hasMixed {
+			server := resolveProfileServer(cfg, &p)
+			tag := backendDisplayName(server)
+			lines[i] = fmt.Sprintf("%-*s  [%-*s] %s", maxNameLen, name, maxTagLen, tag, desc)
+		} else {
+			lines[i] = fmt.Sprintf("%-*s  %s", maxNameLen, name, desc)
+		}
+	}
+	return lines
+}
+
 func buildProfileItems(cfg *Config, names []string) []menuItem {
 	hasMixed := hasMultipleBackends(cfg)
-	defaultServer := resolveDefaultServer(cfg)
+
+	maxTagLen := 0
+	if hasMixed {
+		for _, name := range names {
+			p := cfg.Profiles[name]
+			server := resolveProfileServer(cfg, &p)
+			tag := backendDisplayName(server)
+			if len(tag) > maxTagLen {
+				maxTagLen = len(tag)
+			}
+		}
+	}
+
 	items := make([]menuItem, 0, len(names))
 	for _, name := range names {
 		p := cfg.Profiles[name]
 		desc := p.Description
 		if hasMixed {
 			server := resolveProfileServer(cfg, &p)
-			if server != defaultServer {
-				tag := backendDisplayName(server)
-				if desc != "" {
-					desc = fmt.Sprintf("[%s] %s", tag, desc)
-				} else {
-					desc = fmt.Sprintf("[%s]", tag)
-				}
+			tag := backendDisplayName(server)
+			if desc != "" {
+				desc = fmt.Sprintf("[%-*s] %s", maxTagLen, tag, desc)
+			} else {
+				desc = fmt.Sprintf("[%-*s]", maxTagLen, tag)
 			}
 		}
 		items = append(items, menuItem{Label: name, Description: desc})
@@ -441,6 +593,9 @@ func hasMultipleBackends(cfg *Config) bool {
 	seen := make(map[string]bool)
 	for _, p := range cfg.Profiles {
 		server := resolveProfileServer(cfg, &p)
+		if !cfg.IsServerEnabled(server) {
+			continue
+		}
 		seen[server] = true
 		if len(seen) > 1 {
 			return true
@@ -449,19 +604,6 @@ func hasMultipleBackends(cfg *Config) bool {
 	return false
 }
 
-func resolveDefaultServer(cfg *Config) string {
-	if cfg.Defaults.Server != nil {
-		return *cfg.Defaults.Server
-	}
-	return ""
-}
-
-func resolveProfileServer(cfg *Config, p *Profile) string {
-	if p.Server != nil {
-		return *p.Server
-	}
-	return resolveDefaultServer(cfg)
-}
 
 func backendDisplayName(backendName string) string {
 	b, err := GetBackend(backendName)
@@ -471,21 +613,112 @@ func backendDisplayName(backendName string) string {
 	return b.DisplayName()
 }
 
+func serverStatusLines(cfg *Config, _ *ServerState) []string {
+	states, _ := ReadAllStates()
+	stateMap := make(map[string]*ServerState)
+	for _, s := range states {
+		stateMap[s.Backend] = s
+	}
+
+	names := make([]string, 0, len(cfg.Servers))
+	for name := range cfg.Servers {
+		if cfg.IsServerEnabled(name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	type probeResult struct {
+		name    string
+		healthy bool
+		models  []RunningModelInfo
+	}
+
+	results := make(chan probeResult, len(names))
+	for _, name := range names {
+		go func(name string) {
+			b, err := GetBackend(name)
+			if err != nil {
+				results <- probeResult{name: name}
+				return
+			}
+			addr := cfg.ConfiguredBackendAddr(name)
+			if s, ok := stateMap[name]; ok {
+				addr = s.Addr()
+			}
+			healthy := b.HealthCheck(addr) == nil
+			var models []RunningModelInfo
+			if healthy {
+				if ml, ok := b.(ModelLister); ok {
+					models, _ = ml.ListRunningModels(addr)
+				}
+			}
+			results <- probeResult{name: name, healthy: healthy, models: models}
+		}(name)
+	}
+
+	healthMap := make(map[string]probeResult)
+	for range names {
+		r := <-results
+		healthMap[r.name] = r
+	}
+
+	maxLen := 0
+	for _, name := range names {
+		if n := len(backendDisplayName(name)); n > maxLen {
+			maxLen = n
+		}
+	}
+
+	var lines []string
+	for _, name := range names {
+		b, err := GetBackend(name)
+		if err != nil {
+			continue
+		}
+		r := healthMap[name]
+		addr := cfg.ConfiguredBackendAddr(name)
+		if s, ok := stateMap[name]; ok {
+			addr = s.Addr()
+		}
+
+		if r.healthy {
+			modelStr := ""
+			if len(r.models) > 0 {
+				modelNames := make([]string, len(r.models))
+				for i, m := range r.models {
+					modelNames[i] = m.Name
+				}
+				modelStr = strings.Join(modelNames, ", ")
+			}
+			detail := addr
+			if s, ok := stateMap[name]; ok && s.ActiveProfile != "" {
+				detail = addr + " · " + profileDisplayName(cfg, s.ActiveProfile)
+			}
+			if modelStr != "" {
+				detail += " · " + modelStr
+			}
+			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, b.DisplayName(), detail))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s○%s %-*s  %sstopped%s", cDim, cReset, maxLen, b.DisplayName(), cDim, cReset))
+		}
+	}
+	return lines
+}
+
 // --- Simple (non-terminal) fallbacks ---
 
 func runStoppedMenuSimple(cfg *Config, names []string) error {
-	fmt.Printf("\nllama-launcher %s\n\n  Status: stopped\n\n  Profiles:\n\n", Version)
-	for i, name := range names {
-		fmt.Printf("    %d  %-20s %s\n", i+1, name, cfg.Profiles[name].Description)
+	fmt.Printf("\nllama-launcher %s\n\n  Profiles:\n\n", Version)
+	simpleItems := buildSimpleProfileLines(cfg, names)
+	for i, line := range simpleItems {
+		fmt.Printf("    %d  %s\n", i+1, line)
 	}
-	fmt.Printf("    s  Start server only\n    e  Edit config\n    q  Quit\n\n  Select [1-%d, s, e, q]: ", len(names))
+	fmt.Printf("    e  Edit config\n    q  Quit\n\n  Select [1-%d, e, q]: ", len(names))
 
 	choice := readLine()
 	if choice == "q" || choice == "" {
 		return nil
-	}
-	if choice == "s" {
-		return doStartOnly(cfg)
 	}
 	if choice == "e" {
 		return doEditConfig(cfg)
@@ -510,20 +743,16 @@ func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 			displayName, state.Host, state.Port)
 	}
 
-	n := 1
-	fmt.Printf("    %d  Switch model\n", n)
-	n++
-	fmt.Printf("    %d  Show config\n", n)
-	n++
-	if state.Managed {
-		fmt.Printf("    %d  Stop server\n", n)
+	fmt.Println("    1  Switch model")
+	fmt.Println("    2  Show config")
+	fmt.Println("    3  Unload model")
+	fmt.Println("    4  Stop server")
+	n := 4
+	if state.LogFile != "" {
 		n++
 		fmt.Printf("    %d  Show log\n", n)
-		n++
-	} else {
-		fmt.Printf("    %d  Disconnect\n", n)
-		n++
 	}
+	n++
 	fmt.Printf("    %d  Edit config\n", n)
 	fmt.Println("    q  Quit")
 	fmt.Printf("\n  Select [1-%d, q]: ", n)
@@ -535,17 +764,16 @@ func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 	case "2":
 		return doShowConfig(cfg, state)
 	case "3":
-		if state.Managed {
-			return doStop()
-		}
-		return doStop()
+		return doUnloadModel(cfg)
 	case "4":
-		if state.Managed {
+		return doStopServer(cfg, state)
+	case "5":
+		if state.LogFile != "" {
 			return TailLog(state.LogFile, false)
 		}
 		return doEditConfig(cfg)
-	case "5":
-		if state.Managed {
+	case "6":
+		if state.LogFile != "" {
 			return doEditConfig(cfg)
 		}
 	}
@@ -562,8 +790,9 @@ func runIdleMenuSimple(cfg *Config, state *ServerState, names []string) error {
 		fmt.Printf("  Status:  running (no model)\n  Server:  %s · %s:%d\n\n  Load a profile:\n\n",
 			displayName, state.Host, state.Port)
 	}
-	for i, name := range names {
-		fmt.Printf("    %d  %-20s %s\n", i+1, name, cfg.Profiles[name].Description)
+	simpleItems := buildSimpleProfileLines(cfg, names)
+	for i, line := range simpleItems {
+		fmt.Printf("    %d  %s\n", i+1, line)
 	}
 	fmt.Printf("    s  Stop server\n    e  Edit config\n    q  Quit\n\n  Select [1-%d, s, e, q]: ", len(names))
 
@@ -572,7 +801,7 @@ func runIdleMenuSimple(cfg *Config, state *ServerState, names []string) error {
 		return nil
 	}
 	if choice == "s" {
-		return doStop()
+		return doStopServer(cfg, state)
 	}
 	if choice == "e" {
 		return doEditConfig(cfg)
@@ -588,8 +817,9 @@ func doSwitchSimple(cfg *Config, available []string) error {
 	fmt.Println()
 	fmt.Println("  Switch to:")
 	fmt.Println()
-	for i, name := range available {
-		fmt.Printf("    %d  %-20s %s\n", i+1, name, cfg.Profiles[name].Description)
+	simpleItems := buildSimpleProfileLines(cfg, available)
+	for i, line := range simpleItems {
+		fmt.Printf("    %d  %s\n", i+1, line)
 	}
 	fmt.Printf("    q  Cancel\n\n  Select [1-%d, q]: ", len(available))
 

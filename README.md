@@ -41,19 +41,24 @@ llama-launcher
 The config lives at `~/.config/llama-launcher/config.yaml` (override with `--config` or `LLAMA_LAUNCHER_CONFIG`).
 
 ```yaml
-# Enable the servers available on your system.
-# Leave the value empty or set to true for auto-detection (binary from PATH,
-# default port). Optionally set a custom binary path or host:port.
+# Enable the servers available on your system (true/false).
+# Disabled servers are hidden from status and menus.
 servers:
   llamacpp: true
   ollama:   true
-  lmstudio: true
+  lmstudio: false
 
 models_dir: ~/Models
 log_dir: ~/.config/llama-launcher/logs
 
 # Keep the interactive menu open after each action (default: close)
 auto_close: false
+
+# Allow multiple servers to run simultaneously (default: true = stop old)
+# auto_stop_server: false
+
+# Keep multiple models loaded on the same server (default: true = unload old)
+# auto_unload: false
 
 # Center the UI in the terminal (default: false)
 display_centered: true
@@ -108,19 +113,19 @@ llama-launcher
 The menu adapts to three states:
 
 - **Stopped** -- select a profile to start the server and load a model
-- **Running with model** -- switch models, show config, stop/disconnect, show log, edit config
+- **Running with model** -- switch models, show config, unload model, stop/disconnect, show log, edit config
 - **Running (no model)** -- load a profile, stop/disconnect, show log, edit config
 
 ### CLI commands
 
 ```bash
-llama-launcher load <profile>   # Start server (if needed) and load model
-llama-launcher unload            # Unload the current model
-llama-launcher start             # Start server without loading a model
-llama-launcher stop              # Stop the server
-llama-launcher status            # Show server and model status
-llama-launcher list              # List available profiles
-llama-launcher logs [--follow]   # Tail the server log
+llama-launcher load <profile>        # Start server (if needed) and load model
+llama-launcher unload [profile]      # Unload model (stops server for managed backends)
+llama-launcher start                 # Start server without loading a model
+llama-launcher stop [backend]        # Stop the server
+llama-launcher status                # Show all server and model status
+llama-launcher list                  # List available profiles
+llama-launcher logs [backend] [-f]   # Tail the server log
 ```
 
 ### Options
@@ -150,7 +155,7 @@ Key paths:
 | Path | Purpose |
 |------|---------|
 | `~/.config/llama-launcher/config.yaml` | Configuration |
-| `~/.config/llama-launcher/state.json` | Runtime state (PID, active model) |
+| `~/.config/llama-launcher/state-*.json` | Per-backend runtime state (PID, active model) |
 | `~/.config/llama-launcher/logs/` | Server log files |
 
 ## License

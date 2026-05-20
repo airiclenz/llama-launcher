@@ -123,6 +123,14 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 		RawMode: true,
 	}
 
+	labelWidth := 0
+	for _, item := range items {
+		if !item.Separator && len(item.Label) > labelWidth {
+			labelWidth = len(item.Label)
+		}
+	}
+	labelWidth += 2
+
 	var buf strings.Builder
 	for {
 		if headerFn != nil {
@@ -137,9 +145,9 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 				continue
 			}
 			if i == selected {
-				body = append(body, fmt.Sprintf("%s▶ %-22s%s %s", cBoldCyan, item.Label, cReset, item.Description))
+				body = append(body, fmt.Sprintf("%s▶ %-*s%s %s", cBoldCyan, labelWidth, item.Label, cReset, item.Description))
 			} else {
-				body = append(body, fmt.Sprintf("· %-22s %s%s%s", item.Label, cDim, item.Description, cReset))
+				body = append(body, fmt.Sprintf("· %-*s %s%s%s", labelWidth, item.Label, cDim, item.Description, cReset))
 			}
 		}
 

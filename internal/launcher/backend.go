@@ -27,6 +27,23 @@ type ManagedBackend interface {
 	BuildServerEnv(cfg *Config, profile *ResolvedProfile) []string
 }
 
+// PIDTracker is implemented by external backends that track the PID of a
+// server process they auto-started via TryStart.
+type PIDTracker interface {
+	LastStartedPID() int
+	LastStartedLogFile() string
+}
+
+// ModelLister is implemented by backends that can list currently loaded models.
+type ModelLister interface {
+	ListRunningModels(addr string) ([]RunningModelInfo, error)
+}
+
+type RunningModelInfo struct {
+	Name string
+	Size int64
+}
+
 // ResolvedProfile holds a fully merged profile ready for use by a backend.
 type ResolvedProfile struct {
 	Name        string

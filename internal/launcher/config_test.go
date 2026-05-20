@@ -211,7 +211,10 @@ profiles: {}
 func TestProfileNames(t *testing.T) {
 	t.Parallel()
 
+	server := "llamacpp"
 	cfg := &Config{
+		Servers:  map[string]bool{"llamacpp": true},
+		Defaults: ProfileParams{Server: &server},
 		Profiles: map[string]Profile{
 			"charlie": {Description: "C"},
 			"alpha":   {Description: "A"},
