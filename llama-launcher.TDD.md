@@ -552,5 +552,5 @@ Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read t
 
 ### After Changing Code
 
-1. Update the documents `llama-launcher.TDD.md` as well as `CHANGELOG.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
+1. Update the documents `llama-launcher.TDD.md`. `README.md` as well as `CHANGELOG.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
 2. Run `make install` to build and install the updated binary.

@@ -162,7 +162,7 @@ func TestLoadConfig(t *testing.T) {
 
 		yaml := `
 servers:
-  llamacpp: /usr/local/bin/llama-server
+  llamacpp: true
 models_dir: /tmp/models
 profiles:
   test-profile:
@@ -194,7 +194,7 @@ profiles:
 
 		yaml := `
 servers:
-  llamacpp: /usr/local/bin/llama-server
+  llamacpp: true
 profiles: {}
 `
 		if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
@@ -250,7 +250,7 @@ func TestResolveProfile(t *testing.T) {
 
 		strPtr := func(v string) *string { return &v }
 		cfg := &Config{
-			Servers:  map[string]string{"llamacpp": ""},
+			Servers:  map[string]bool{"llamacpp": true},
 			ModelsDir: dir,
 			Defaults: ProfileParams{Server: strPtr("llamacpp")},
 			Profiles: map[string]Profile{
@@ -275,7 +275,7 @@ func TestResolveProfile(t *testing.T) {
 		t.Parallel()
 
 		cfg := &Config{
-			Servers:  map[string]string{"llamacpp": ""},
+			Servers:  map[string]bool{"llamacpp": true},
 			Defaults: ProfileParams{Server: func() *string { s := "llamacpp"; return &s }()},
 			Profiles: map[string]Profile{},
 		}

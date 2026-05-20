@@ -180,23 +180,11 @@ func TestLlamaCppName(t *testing.T) {
 func TestLlamaCppServerBinary(t *testing.T) {
 	t.Parallel()
 
-	t.Run("uses config path", func(t *testing.T) {
-		t.Parallel()
-		b := &LlamaCpp{}
-		cfg := &Config{Servers: map[string]string{"llamacpp": "/opt/bin/llama-server"}}
-		if got := b.ServerBinary(cfg); got != "/opt/bin/llama-server" {
-			t.Errorf("ServerBinary = %q, want /opt/bin/llama-server", got)
-		}
-	})
-
-	t.Run("falls back to llama-server", func(t *testing.T) {
-		t.Parallel()
-		b := &LlamaCpp{}
-		cfg := &Config{Servers: map[string]string{}}
-		if got := b.ServerBinary(cfg); got != "llama-server" {
-			t.Errorf("ServerBinary = %q, want llama-server", got)
-		}
-	})
+	b := &LlamaCpp{}
+	cfg := &Config{Servers: map[string]bool{"llamacpp": true}}
+	if got := b.ServerBinary(cfg); got != "llama-server" {
+		t.Errorf("ServerBinary = %q, want llama-server", got)
+	}
 }
 
 // --- test helpers ---

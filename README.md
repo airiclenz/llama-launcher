@@ -1,8 +1,8 @@
 # llama-launcher
 
-A terminal tool for managing [llama.cpp](https://github.com/ggerganov/llama.cpp) model servers through named configuration profiles. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
+A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), and [LM Studio](https://lmstudio.ai) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
 
-llama-launcher starts the server as a detached background process, loads/unloads models via the server's HTTP API, then exits immediately -- zero resident memory between invocations.
+Managed backends (llama.cpp) are started as detached background processes. External backends (Ollama, LM Studio) connect to running instances or auto-start them. The launcher is built for ultra low memory usage and even supports immediate exit after selecting a model.
 
 <p align="center">
   <img src="media/screen_1.png" alt="llama-launcher interactive menu" width="600">
@@ -27,20 +27,25 @@ llama-launcher
 The config lives at `~/.config/llama-launcher/config.yaml` (override with `--config` or `LLAMA_LAUNCHER_CONFIG`).
 
 ```yaml
+# Enable the servers available on your system.
+# Leave the value empty or set to true for auto-detection (binary from PATH,
+# default port). Optionally set a custom binary path or host:port.
 servers:
-  llamacpp: /usr/local/bin/llama-server
+  llamacpp: true
+  ollama:   true
+  lmstudio: true
 
-default_backend: llamacpp
 models_dir: ~/Models
 log_dir: ~/.config/llama-launcher/logs
 
-# Keep the interactive menu open after each action (default: true = close)
+# Keep the interactive menu open after each action (default: close)
 auto_close: false
 
 # Center the UI in the terminal (default: false)
 display_centered: true
 
 defaults:
+  server: llamacpp
   gpu_layers: 99
   threads: 8
   context_size: 4096
@@ -55,11 +60,26 @@ profiles:
   gemma-4b:
     description: "Gemma-4 E4B IT-Q4-K-M"
     model: gemma-4b.gguf
+
+  llama-8b-ollama:
+    description: "Llama 3.1 8B via Ollama"
+    server: ollama
+    model: llama3.1:8b
 ```
 
 Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. All numeric and boolean params use pointer types so "not set" is distinct from zero.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
+
+### Backends
+
+| Backend | Type | Default address | Model reference |
+|---------|------|-----------------|-----------------|
+| `llamacpp` | Managed | `127.0.0.1:8080` | File path (relative to `models_dir` or absolute) |
+| `ollama` | External | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`) |
+| `lmstudio` | External | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
+
+**Managed** backends are forked and owned by the launcher. **External** backends connect to a running instance or auto-start one; the server stays running after the launcher exits.
 
 ## Usage
 
@@ -74,14 +94,14 @@ llama-launcher
 The menu adapts to three states:
 
 - **Stopped** -- select a profile to start the server and load a model
-- **Running with model** -- switch models, show config, stop, tail logs, edit config
-- **Running (no model)** -- load a profile, stop, tail logs, edit config
+- **Running with model** -- switch models, show config, stop/disconnect, show log, edit config
+- **Running (no model)** -- load a profile, stop/disconnect, show log, edit config
 
 ### CLI commands
 
 ```bash
 llama-launcher load <profile>   # Start server (if needed) and load model
-llama-launcher unload            # Stop server and unload model
+llama-launcher unload            # Unload the current model
 llama-launcher start             # Start server without loading a model
 llama-launcher stop              # Stop the server
 llama-launcher status            # Show server and model status
@@ -97,7 +117,7 @@ llama-launcher logs [--follow]   # Tail the server log
 
 ## Building
 
-Requires Go 1.22+.
+Requires Go 1.26+.
 
 ```bash
 make build      # Build the binary
@@ -109,7 +129,7 @@ The version is read from the `VERSION` file and injected at build time.
 
 ## Architecture
 
-All code lives in `internal/launcher/`. The design is backend-agnostic -- llama.cpp is the current backend, but the `Backend` interface supports adding others.
+All code lives in `internal/launcher/`. Three backends are implemented behind a common `Backend` interface: llama.cpp (managed), Ollama (external), and LM Studio (external).
 
 Key paths:
 
@@ -121,4 +141,4 @@ Key paths:
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE](LICENSE.md) for details.

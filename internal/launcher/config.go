@@ -25,7 +25,7 @@ var ErrConfigNotFound = errors.New("config file not found")
 
 // Config represents the top-level YAML configuration file.
 type Config struct {
-	Servers         map[string]string  `yaml:"servers"`
+	Servers         map[string]bool    `yaml:"servers"`
 	DefaultBackend  string             `yaml:"default_backend"` // deprecated: use defaults.server
 	Endpoints       map[string]string  `yaml:"endpoints"`       // deprecated: merge into servers
 	ModelsDir       string             `yaml:"models_dir"`
@@ -158,13 +158,8 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// BackendAddr returns the configured address for a backend.
-// If the servers map contains a host:port value, that is used.
-// Otherwise falls back to the backend's built-in default address.
+// BackendAddr returns the default address for a backend.
 func (c *Config) BackendAddr(backendName string) string {
-	if val, ok := c.Servers[backendName]; ok && isAddress(val) {
-		return val
-	}
 	b, err := GetBackend(backendName)
 	if err != nil {
 		return ""
@@ -180,15 +175,6 @@ func (c *Config) IsManaged(backendName string) bool {
 	}
 	_, ok := b.(ManagedBackend)
 	return ok
-}
-
-func isAddress(value string) bool {
-	_, portStr, ok := strings.Cut(value, ":")
-	if !ok {
-		return false
-	}
-	_, err := strconv.Atoi(portStr)
-	return err == nil
 }
 
 // ResolveProfile merges a named profile with defaults and resolves its model path.
@@ -385,14 +371,14 @@ const exampleConfig = `# llama-launcher configuration
 # Servers
 # ──────────────────────────────────────────────────────────────
 #
-# Uncomment the servers available on your system. The value is
-# optional — leave empty to auto-detect (binary from PATH,
-# default port). Set a custom binary path or host:port if needed.
+# Enable the servers available on your system.
+# Binaries are auto-detected from PATH; default ports are
+# per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234).
 
 servers:
-  llamacpp:
-  # ollama:
-  # lmstudio:
+  llamacpp: true
+  # ollama: true
+  # lmstudio: true
 
 # ──────────────────────────────────────────────────────────────
 # Paths

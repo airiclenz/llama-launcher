@@ -39,10 +39,7 @@ func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
 
 func (b *LlamaCpp) BuildServerEnv(_ *Config, _ *ResolvedProfile) []string { return nil }
 
-func (b *LlamaCpp) ServerBinary(cfg *Config) string {
-	if val, ok := cfg.Servers["llamacpp"]; ok && val != "" && !isAddress(val) {
-		return ExpandTilde(val)
-	}
+func (b *LlamaCpp) ServerBinary(_ *Config) string {
 	return "llama-server"
 }
 
