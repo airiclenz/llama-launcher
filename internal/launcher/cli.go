@@ -42,10 +42,17 @@ func Run(args []string) int {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		if errors.Is(err, ErrConfigNotFound) {
-			return handleFirstRun(configPath)
+			if err := GenerateExampleConfig(configPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				return 2
+			}
+			fmt.Printf("Created example config at: %s\n", configPath)
+			cfg, err = LoadConfig(configPath)
 		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 2
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 2
+		}
 	}
 
 	if len(args) == 0 {
@@ -78,15 +85,6 @@ func Run(args []string) int {
 	}
 }
 
-func handleFirstRun(configPath string) int {
-	if err := GenerateExampleConfig(configPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 2
-	}
-	fmt.Printf("Created example config at: %s\n", configPath)
-	fmt.Println("Edit with your model paths and preferences, then run llama-launcher again.")
-	return 2
-}
 
 func cmdLoad(cfg *Config, args []string) int {
 	if len(args) == 0 {
