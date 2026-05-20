@@ -27,6 +27,11 @@ func Run(args []string) int {
 	}
 	args = filtered
 
+	if len(args) == 1 && args[0] == "version" {
+		fmt.Println(Version)
+		return 0
+	}
+
 	if configPath == "" {
 		configPath = os.Getenv("LLAMA_LAUNCHER_CONFIG")
 	}
@@ -314,6 +319,7 @@ Commands:
   status           Show server and model status
   list             List available profiles
   logs [--follow]  Tail the server log
+  version          Print version and exit
 
 Run without arguments for interactive mode.
 `)
