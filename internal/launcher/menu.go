@@ -95,6 +95,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 	}
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
+	modelLabel := profileDisplayName(cfg, state.ActiveProfile)
 	headerFn := func() []string {
 		if !IsProcessAlive(state.PID) {
 			return []string{
@@ -103,7 +104,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		}
 		return []string{
 			fmt.Sprintf("Status   %s● running%s", cGreen, cReset),
-			fmt.Sprintf("Model    %s", state.ActiveProfile),
+			fmt.Sprintf("Model    %s", modelLabel),
 			fmt.Sprintf("Server   %s:%d  PID %d  Uptime %s",
 				state.Host, state.Port, state.PID, formatUptime(state.Uptime())),
 		}
@@ -227,7 +228,11 @@ func doLoadProfile(cfg *Config, name string) error {
 		return err
 	}
 
-	showActivity(fmt.Sprintf("Loading %s...", name))
+	displayName := profile.Description
+	if displayName == "" {
+		displayName = name
+	}
+	showActivity(fmt.Sprintf("Loading %s...", displayName))
 	state, started, err := LoadProfile(cfg, profile)
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
@@ -237,7 +242,7 @@ func doLoadProfile(cfg *Config, name string) error {
 	if started {
 		fmt.Printf("  %s●%s Server started (PID %d)\n", cGreen, cReset, state.PID)
 	}
-	fmt.Printf("  %s●%s Loaded %s on %s:%d\n", cGreen, cReset, name, state.Host, state.Port)
+	fmt.Printf("  %s●%s Loaded %s on %s:%d\n", cGreen, cReset, displayName, state.Host, state.Port)
 	fmt.Printf("    Log: %s\n", state.LogFile)
 	return nil
 }
@@ -339,6 +344,13 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 	return lines
 }
 
+func profileDisplayName(cfg *Config, profileName string) string {
+	if p, ok := cfg.Profiles[profileName]; ok && p.Description != "" {
+		return p.Description
+	}
+	return profileName
+}
+
 func buildProfileItems(cfg *Config, names []string) []menuItem {
 	items := make([]menuItem, 0, len(names))
 	for _, name := range names {
@@ -377,7 +389,7 @@ func runStoppedMenuSimple(cfg *Config, names []string) error {
 func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 	fmt.Printf("\nllama-launcher %s\n\n", Version)
 	fmt.Printf("  Status:  running\n  Model:   %s\n  Server:  %s:%d  PID %d  Uptime %s\n\n",
-		state.ActiveProfile,
+		profileDisplayName(cfg, state.ActiveProfile),
 		state.Host, state.Port, state.PID, formatUptime(state.Uptime()))
 	fmt.Println("    1  Switch model\n    2  Show config\n    3  Stop server\n    4  Show log\n    5  Edit config\n    q  Quit")
 	fmt.Print("\n  Select [1-5, q]: ")

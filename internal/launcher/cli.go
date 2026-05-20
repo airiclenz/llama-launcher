@@ -61,7 +61,7 @@ func Run(args []string) int {
 	case "stop":
 		return cmdStop()
 	case "status":
-		return cmdStatus()
+		return cmdStatus(cfg)
 	case "list":
 		return cmdList(cfg)
 	case "logs":
@@ -95,7 +95,11 @@ func cmdLoad(cfg *Config, args []string) int {
 		return 2
 	}
 
-	fmt.Printf("Loading %s...\n", profile.Name)
+	displayName := profile.Description
+	if displayName == "" {
+		displayName = profile.Name
+	}
+	fmt.Printf("Loading %s...\n", displayName)
 	state, started, err := LoadProfile(cfg, profile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -106,7 +110,7 @@ func cmdLoad(cfg *Config, args []string) int {
 		fmt.Printf("Server started (PID %d)\n", state.PID)
 	}
 	if state.ActiveProfile == profile.Name {
-		fmt.Printf("Loaded %s on %s:%d\n", profile.Name, state.Host, state.Port)
+		fmt.Printf("Loaded %s on %s:%d\n", displayName, state.Host, state.Port)
 	}
 	return 0
 }
@@ -161,7 +165,7 @@ func cmdStop() int {
 	return 0
 }
 
-func cmdStatus() int {
+func cmdStatus(cfg *Config) int {
 	state, err := ReadState()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -179,7 +183,7 @@ func cmdStatus() int {
 
 	fmt.Println("Status:  running")
 	if state.ActiveProfile != "" {
-		fmt.Printf("Model:   %s\n", state.ActiveProfile)
+		fmt.Printf("Model:   %s\n", profileDisplayName(cfg, state.ActiveProfile))
 	} else {
 		fmt.Println("Model:   (none)")
 	}
