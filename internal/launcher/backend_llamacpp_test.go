@@ -195,15 +195,33 @@ func TestLlamaCppHealthCheck(t *testing.T) {
 
 	b := &LlamaCpp{}
 
-	t.Run("healthy with 200", func(t *testing.T) {
+	t.Run("healthy with 200 and status field", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
 		}))
 		defer srv.Close()
 
 		if err := b.HealthCheck(addrFromURL(t, srv.URL)); err != nil {
 			t.Errorf("expected healthy, got: %v", err)
+		}
+	})
+
+	t.Run("rejects non-llamacpp /health body", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"error":"Unexpected endpoint or method."}`))
+		}))
+		defer srv.Close()
+
+		err := b.HealthCheck(addrFromURL(t, srv.URL))
+		if err == nil {
+			t.Fatal("expected error for non-llamacpp /health body")
+		}
+		if !strings.Contains(err.Error(), "not llamacpp") {
+			t.Errorf("error = %q, want it to contain 'not llamacpp'", err)
 		}
 	})
 

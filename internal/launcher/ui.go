@@ -15,13 +15,10 @@ const (
 	escCursorHide = "\033[?25l"
 	escCursorShow = "\033[?25h"
 
-	cReset    = "\033[0m"
-	cBold     = "\033[1m"
-	cDim      = "\033[2m"
-	cCyan     = "\033[36m"
-	cGreen    = "\033[32m"
-	cRed      = "\033[31m"
-	cYellow   = "\033[33m"
+	cReset = "\033[0m"
+	cDim   = "\033[2m"
+	cGreen = "\033[32m"
+	cRed   = "\033[31m"
 	cBoldLightGray = "\033[1;37m"
 	cBoldCyan = "\033[1;36m"
 )
@@ -187,7 +184,7 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 
 		os.Stdout.WriteString(buf.String())
 
-		key := readKeyTimeout(time.Second)
+		key := readKeyTimeout(10 * time.Second)
 		switch key {
 		case keyUp:
 			for next := selected - 1; next >= 0; next-- {

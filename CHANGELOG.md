@@ -4,8 +4,17 @@
 
 ### Fixed
 
-- **Health check cross-detection** — LM Studio no longer falsely shows as "online" when another backend (llamacpp or Ollama) is running on the same port. Each backend's health check now discriminates by probing backend-specific endpoints.
+- **Health check cross-detection** — llamacpp no longer falsely claims LM Studio's server when both share a port. LM Studio returns HTTP 200 for all paths (including `/health`) with `{"error":"..."}` in the body. Health checks now inspect the `/health` response body: llamacpp requires a `"status"` JSON field (e.g. `{"status":"ok"}`), and LM Studio's anti-llamacpp exclusion checks for the same field. Status-code-only checks have been replaced with body-based discrimination.
+- **SIGKILL port release** — after SIGTERM timeout and SIGKILL, `stopManagedServer` now waits for the process to actually die (up to 5s) and adds a 500ms grace period for the OS to release the TCP port, preventing "not reachable after start attempt" errors when switching backends on the same port.
 - **Ollama health check** — an empty-body 200 response no longer passes the health check; the body must contain "Ollama".
+- **State migration data loss** — `migrateOldState` now checks the write result before deleting the old file; a failed write no longer silently destroys the only copy of the state.
+- **UnloadModel error handling** — switching models now aborts if the current model fails to unload, instead of silently loading a second model on top.
+- **LM Studio UnloadModel** — a non-200 response with no parseable error body now returns an error instead of silently succeeding.
+- **GPU offload display** — LM Studio profiles with `gpu_layers` between 1 and 98 now display the actual value instead of "max".
+- **ExpandTilde** — paths like `~username/data` are no longer corrupted; only `~` and `~/...` are expanded.
+- **PID 0 guard** — `IsProcessAlive(0)` now returns false instead of signaling the calling process group.
+- **TryStop error propagation** — LM Studio and Ollama `TryStop` methods now return errors instead of silently discarding them.
+- **Blanket PID→Managed migration removed** — state files with `PID > 0` no longer have `Managed` forced to `true`, preventing the launcher from killing processes it did not start.
 
 ### Added
 
@@ -21,8 +30,17 @@
 - **`ModelLister` interface** — backends can list running models (Ollama's `/api/ps`), shown in status output.
 - **Ollama lifecycle management** — `ollama serve` auto-start with PID tracking, proper process stop via `ollama stop` + SIGTERM, model unload via API with error checking.
 - **Backend health check tests** — httptest-based unit tests for all three backends' `HealthCheck` methods, including cross-detection discrimination (LM Studio excludes llamacpp and Ollama responses on the same port).
+- **Backend HTTP method tests** — httptest-based tests for `LoadModel`, `UnloadModel`, and `ListRunningModels` across LM Studio and Ollama.
+- **Server state tests** — tests for `IsProcessAlive`, `readLastLines`, state path construction, and `ServerState` methods.
+- **Config validation tests** — tests for deprecated field rejection, server enable/disable, auto-assignment, boolean accessors, and `ExpandTilde` edge cases.
+- **Menu helper tests** — tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting.
+- **Backend registry tests** — tests for `GetBackend` with known/unknown backends.
 
 ### Changed
+
+- **Menu refresh interval** — interactive menu now polls backend health every 10 seconds instead of every 1 second, reducing HTTP traffic.
+- **File permissions tightened** — config, state, and log files/directories now use 0600/0700 instead of 0644/0755.
+- **State migration runs once** — `migrateOldState` is wrapped in `sync.Once` to avoid redundant filesystem reads on every state access.
 
 - **Multi-server status display** — `status` command and menu header show a compact one-line-per-backend view with running/stopped indicator, address, and loaded models.
 - **State functions refactored** — `StopServer()` → `StopBackendServer(backend)`, `UnloadCurrentModel()` → `UnloadBackendModel(backend)`, `ReadState()` → `ReadBackendState(backend)` / `ReadAllStates()`.

@@ -8,8 +8,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+)
+
+const (
+	startupGracePeriod = 500 * time.Millisecond
+	sigtermTimeout     = 15 * time.Second
+	stopPollInterval   = 100 * time.Millisecond
+	healthPollInterval = 500 * time.Millisecond
+	crashLogTailLines  = 10
+	defaultTailLines   = "50"
 )
 
 var ErrNotRunning = errors.New("no server running")
@@ -120,10 +130,10 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend
 		return nil, fmt.Errorf("writing state: %w", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(startupGracePeriod)
 	if !IsProcessAlive(state.PID) {
 		removeBackendState(profile.Backend)
-		tail := readLastLines(logPath, 10)
+		tail := readLastLines(logPath, crashLogTailLines)
 		return nil, fmt.Errorf("server exited immediately after start\nLog tail:\n%s", tail)
 	}
 
@@ -137,7 +147,7 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b Backend) (*S
 	if err := b.HealthCheck(addr); err != nil {
 		if tryErr := b.TryStart(cfg, addr); tryErr == nil {
 			launcherStarted = true
-			if err := waitForBackendHealth(b, addr, 15*time.Second); err != nil {
+			if err := WaitForHealth(b, addr, 15*time.Second); err != nil {
 				return nil, fmt.Errorf("%s not reachable at %s after start attempt: %w", b.DisplayName(), addr, err)
 			}
 		} else {
@@ -205,18 +215,30 @@ func stopManagedServer(state *ServerState) (*ServerState, error) {
 		removeBackendState(state.Backend)
 		return state, fmt.Errorf("sending SIGTERM: %w", err)
 	}
+	// Also signal the process group (Setsid gives the child PGID=PID).
+	_ = syscall.Kill(-state.PID, syscall.SIGTERM)
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(sigtermTimeout)
 	for time.Now().Before(deadline) {
 		if !IsProcessAlive(state.PID) {
 			removeBackendState(state.Backend)
 			return state, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(stopPollInterval)
 	}
 
 	_ = proc.Signal(syscall.SIGKILL)
-	fmt.Fprintf(os.Stderr, "Warning: server did not respond to SIGTERM, sent SIGKILL\n")
+	_ = syscall.Kill(-state.PID, syscall.SIGKILL)
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !IsProcessAlive(state.PID) {
+			break
+		}
+		time.Sleep(stopPollInterval)
+	}
+	time.Sleep(startupGracePeriod)
+
 	removeBackendState(state.Backend)
 	return state, nil
 }
@@ -316,7 +338,9 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state
 			return state, false, nil
 		}
 		if state.ActiveModel != "" && cfg.ShouldAutoUnload() {
-			b.UnloadModel(state.Addr(), state.ActiveModel)
+			if err := b.UnloadModel(state.Addr(), state.ActiveModel); err != nil {
+				return nil, false, fmt.Errorf("unloading current model: %w", err)
+			}
 		}
 	} else {
 		if state != nil {
@@ -352,13 +376,9 @@ func WaitForHealth(b Backend, addr string, timeout time.Duration) error {
 		if b.HealthCheck(addr) == nil {
 			return nil
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(healthPollInterval)
 	}
 	return fmt.Errorf("server at %s did not become healthy within %s", addr, timeout)
-}
-
-func waitForBackendHealth(b Backend, addr string, timeout time.Duration) error {
-	return WaitForHealth(b, addr, timeout)
 }
 
 // UnloadBackendModel unloads the active model for the given backend without stopping the server.
@@ -393,14 +413,14 @@ func UnloadBackendModel(backend string) (*ServerState, error) {
 	return state, nil
 }
 
-func BackendStatePath(backend string) string {
+func backendStatePath(backend string) string {
 	return filepath.Join(DefaultConfigDir(), fmt.Sprintf("state-%s.json", backend))
 }
 
 func ReadBackendState(backend string) (*ServerState, error) {
 	migrateOldState()
 
-	data, err := os.ReadFile(BackendStatePath(backend))
+	data, err := os.ReadFile(backendStatePath(backend))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -413,10 +433,6 @@ func ReadBackendState(backend string) (*ServerState, error) {
 		fmt.Fprintf(os.Stderr, "Warning: corrupt state file for %s, removing\n", backend)
 		removeBackendState(backend)
 		return nil, nil
-	}
-
-	if state.PID > 0 && !state.Managed {
-		state.Managed = true
 	}
 
 	return &state, nil
@@ -444,9 +460,6 @@ func ReadAllStates() ([]*ServerState, error) {
 		if err := json.Unmarshal(data, &state); err != nil {
 			continue
 		}
-		if state.PID > 0 && !state.Managed {
-			state.Managed = true
-		}
 		states = append(states, &state)
 	}
 	return states, nil
@@ -454,7 +467,7 @@ func ReadAllStates() ([]*ServerState, error) {
 
 func writeBackendState(backend string, state *ServerState) error {
 	dir := DefaultConfigDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
 
@@ -463,9 +476,9 @@ func writeBackendState(backend string, state *ServerState) error {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	path := BackendStatePath(backend)
+	path := backendStatePath(backend)
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp state: %w", err)
 	}
 
@@ -473,32 +486,42 @@ func writeBackendState(backend string, state *ServerState) error {
 }
 
 func removeBackendState(backend string) {
-	os.Remove(BackendStatePath(backend))
+	os.Remove(backendStatePath(backend))
 }
 
+var migrateOnce sync.Once
+
 func migrateOldState() {
-	oldPath := filepath.Join(DefaultConfigDir(), "state.json")
-	data, err := os.ReadFile(oldPath)
-	if err != nil {
-		return
-	}
-	var state ServerState
-	if err := json.Unmarshal(data, &state); err != nil {
+	migrateOnce.Do(func() {
+		oldPath := filepath.Join(DefaultConfigDir(), "state.json")
+		data, err := os.ReadFile(oldPath)
+		if err != nil {
+			return
+		}
+		var state ServerState
+		if err := json.Unmarshal(data, &state); err != nil {
+			os.Remove(oldPath)
+			return
+		}
+		if state.Backend != "" {
+			if err := writeBackendState(state.Backend, &state); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to migrate old state: %v\n", err)
+				return
+			}
+		}
 		os.Remove(oldPath)
-		return
-	}
-	if state.Backend != "" {
-		writeBackendState(state.Backend, &state)
-	}
-	os.Remove(oldPath)
+	})
 }
 
 func IsProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
 	return syscall.Kill(pid, 0) == nil
 }
 
 func TailLog(logPath string, follow bool) error {
-	args := []string{"-n", "50"}
+	args := []string{"-n", defaultTailLines}
 	if follow {
 		args = append(args, "-f")
 	}
@@ -512,7 +535,7 @@ func TailLog(logPath string, follow bool) error {
 }
 
 func createLogPath(logDir, name string) (string, error) {
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating log directory: %w", err)
 	}
 	ts := time.Now().Format("20060102-150405")

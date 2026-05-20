@@ -23,7 +23,7 @@ func (b *LMStudio) DisplayName() string { return "LM-Studio" }
 func (b *LMStudio) DefaultAddr() string { return "localhost:1234" }
 
 func (b *LMStudio) HealthCheck(addr string) error {
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: healthCheckTimeout}
 	base := "http://" + addr
 
 	resp, err := client.Get(base + "/v1/models")
@@ -35,17 +35,30 @@ func (b *LMStudio) HealthCheck(addr string) error {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
 
-	// Exclude other backends that also serve /v1/models.
-	// llamacpp uniquely serves /health; Ollama uniquely serves /api/tags.
-	for _, chk := range []struct{ path, name string }{
-		{"/health", "llamacpp"},
-		{"/api/tags", "Ollama"},
-	} {
-		r, err := client.Get(base + chk.path)
-		if err == nil {
-			r.Body.Close()
-			if r.StatusCode == http.StatusOK {
-				return fmt.Errorf("not LM Studio: %s endpoint responded (%s detected)", chk.path, chk.name)
+	// Exclude llamacpp: its /health returns {"status":"ok"}.
+	// LM Studio returns {"error":"..."} for the same path.
+	r, err := client.Get(base + "/health")
+	if err == nil {
+		healthBody, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode == http.StatusOK {
+			var h struct{ Status string `json:"status"` }
+			if json.Unmarshal(healthBody, &h) == nil && h.Status != "" {
+				return fmt.Errorf("not LM Studio: /health body matches llamacpp (status=%q)", h.Status)
+			}
+		}
+	}
+
+	// Exclude Ollama: /api/tags returns {"models":[...]}.
+	// LM Studio returns 200 for all paths but with {"error":"..."}.
+	r, err = client.Get(base + "/api/tags")
+	if err == nil {
+		tagsBody, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode == http.StatusOK {
+			var tags struct{ Models json.RawMessage `json:"models"` }
+			if json.Unmarshal(tagsBody, &tags) == nil && tags.Models != nil {
+				return fmt.Errorf("not LM Studio: /api/tags body matches Ollama")
 			}
 		}
 	}
@@ -69,7 +82,7 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 	}
 
 	body, _ := json.Marshal(payload)
-	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Post(
+	resp, err := (&http.Client{Timeout: modelLoadTimeout}).Post(
 		"http://"+addr+"/api/v1/models/load",
 		"application/json",
 		bytes.NewReader(body),
@@ -121,6 +134,7 @@ func (b *LMStudio) UnloadModel(addr string, modelID string) error {
 		if msg != "" {
 			return fmt.Errorf("LM Studio: %s", msg)
 		}
+		return fmt.Errorf("LM Studio unload returned status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -149,6 +163,8 @@ func (b *LMStudio) TryStop(addr string) error {
 	if _, err := exec.LookPath("lms"); err != nil {
 		return nil
 	}
-	exec.Command("lms", "server", "stop").Run()
+	if err := exec.Command("lms", "server", "stop").Run(); err != nil {
+		return fmt.Errorf("stopping LM Studio server: %w", err)
+	}
 	return nil
 }

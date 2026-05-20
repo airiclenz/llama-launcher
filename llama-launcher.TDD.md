@@ -284,10 +284,13 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). Per-backend state file read/write (`state-{backend}.json`), PID tracking, `LoadProfile` orchestration with configurable auto-stop/auto-unload, log management. |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
 | `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. |
-| `config_test.go` | Tests for config loading, validation, and parameter merging. |
+| `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, model resolution, and httptest-based health check. |
-| `backend_ollama_test.go` | httptest-based tests for Ollama health check, including body discrimination. |
-| `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check, including cross-backend exclusion. |
+| `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
+| `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, and `extractLMStudioError`. |
+| `backend_test.go` | Tests for `GetBackend` with known and unknown backends. |
+| `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `backendStatePath`, `ServerState` methods, and state file permissions. |
+| `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting. |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
 
 ### 5.3 Backend Interface
@@ -338,11 +341,33 @@ All backends may share the same address so that a single client configuration wo
 
 | Backend | Primary Endpoint | Discrimination |
 |---|---|---|
-| `llamacpp` | `GET /health` → 200 | Unique — only llama-server serves `/health`. |
-| `lmstudio` | `GET /v1/models` → 200 | Negative checks: excludes llamacpp (rejects if `GET /health` returns 200) and Ollama (rejects if `GET /api/tags` returns 200). |
+| `llamacpp` | `GET /health` → 200 | Body must parse as JSON with a non-empty `"status"` field (e.g. `{"status":"ok"}`). LM Studio returns 200 for all paths but with `{"error":"..."}` — the missing `"status"` field rejects it. |
+| `lmstudio` | `GET /v1/models` → 200 | Excludes llamacpp (rejects if `/health` body has a `"status"` field) and Ollama (rejects if `/api/tags` body parses as JSON with a `"models"` field). LM Studio returns `{"error":"..."}` for both paths. |
 | `ollama` | `GET /` → 200 | Body must contain "Ollama" (positive identification). |
 
 When adding a new backend that shares an endpoint with an existing one (e.g. `/v1/models`), add an exclusion entry to any existing backend whose health check could false-positive, and ensure the new backend either uses a unique endpoint or performs its own exclusion checks.
+
+**Technical reasoning — why body-based discrimination:**
+
+LM Studio's built-in HTTP server returns HTTP 200 for *every* path, including paths it does not implement (`/health`, `/slots`, `/api/tags`, etc.). The response body for unrecognized paths is always `{"error":"Unexpected endpoint or method. (GET /path)"}`. This means status-code-only checks cannot distinguish LM Studio from any other backend — every probe returns 200.
+
+Observed responses from LM Studio on a shared port:
+
+| Path | Status | Body |
+|---|---|---|
+| `GET /v1/models` | 200 | Valid model list JSON (real endpoint) |
+| `GET /health` | 200 | `{"error":"Unexpected endpoint or method. (GET /health)"}` |
+| `GET /slots` | 200 | `{"error":"Unexpected endpoint or method. (GET /slots)"}` |
+| `GET /api/tags` | 200 | `{"error":"Unexpected endpoint or method. (GET /api/tags)"}` |
+| `GET /` | 200 | `{"error":"Unexpected endpoint or method. (GET /)"}` |
+
+Consequences for each backend's health check:
+
+- **llamacpp** originally checked `GET /health` → 200 (status only). LM Studio also returns 200, so llamacpp falsely claimed LM Studio's server. Fix: require the body to contain `{"status":"..."}` — a field only llama-server produces.
+- **lmstudio** originally excluded Ollama by checking if `GET /api/tags` → 200 (status only). LM Studio itself returns 200 for that path, so the exclusion falsely triggered and LM Studio rejected its own server. Fix: parse the body and require a `"models"` JSON field — present only in Ollama's real response.
+- **ollama** was already body-based (requires "Ollama" in `GET /` body), so it was unaffected.
+
+The general rule: when backends share a port, **all discrimination must be body-based**. Status codes alone are insufficient because some servers (LM Studio) return 200 for every path.
 
 ### 5.4 External Dependencies
 
@@ -419,11 +444,20 @@ Call `Backend.UnloadModel()` via HTTP API. Clear active_profile and active_model
 
 1. Read state file; extract PID.
 2. Verify the process is alive (`syscall.Kill(pid, 0)`).
-3. Send `SIGTERM`.
-4. Poll for process exit (100 ms intervals, up to 10 seconds).
-5. If still alive after timeout, send `SIGKILL` and log a warning.
-6. Remove state file.
-7. Print confirmation.
+3. Send `SIGTERM` to the process and its process group (`kill(-pid, SIGTERM)`).
+4. Poll for process exit (100 ms intervals, up to 15 seconds).
+5. If still alive after timeout, send `SIGKILL` to both process and group, and log a warning.
+6. Wait for the process to actually die (up to 5 seconds), then wait 500 ms for the OS to release the TCP port.
+7. Remove state file.
+8. Print confirmation.
+
+**Technical reasoning — process group signals:**
+
+The server is started with `SysProcAttr{Setsid: true}`, which gives the child its own session and process group (PGID = PID). Sending `SIGTERM` to just the PID signals only the main process. If the server has spawned child processes (e.g. worker threads for CUDA/Metal, model loading), those children may keep the main process alive or hold resources. Sending the signal to the entire process group via `syscall.Kill(-pid, sig)` ensures all children also receive it. Errors from the group signal are ignored (the group may not exist if the process already exited).
+
+**Technical reasoning — SIGKILL port release wait:**
+
+After `SIGKILL`, `stopManagedServer` must wait for the process to actually die before returning. Without this wait, the TCP port may still be held by the dying process when the next backend tries to start on the same port, causing a 15-second health check timeout ("server did not become healthy within 15s"). The implementation polls `IsProcessAlive` for up to 5 seconds after SIGKILL, then waits an additional 500 ms (`startupGracePeriod`) for the OS to release the TCP socket in the `TIME_WAIT` / cleanup phase.
 
 #### External backends
 
@@ -587,21 +621,45 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 
 ### 14.1 Unit Tests (httptest)
 
-Backend health check methods are tested using `net/http/httptest` mock servers. These tests run as part of `go test ./...` with no external dependencies.
-
-Each backend's test verifies correct HTTP request/response handling:
+Backend methods are tested using `net/http/httptest` mock servers. These tests run as part of `go test ./...` with no external dependencies.
 
 | Test | What it covers |
 |---|---|
-| `TestLlamaCppHealthCheck` | 200 on `/health` → success; non-200 → error; unreachable → error. |
+| `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; non-200 → error; unreachable → error. |
 | `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error. |
-| `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when exclusion probes fail; detects llamacpp via `/health` returning 200; detects Ollama via `/api/tags` returning 200; non-200 → error; unreachable → error. |
+| `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when `/health` body lacks `status` field; healthy when LM Studio returns `{"error":"..."}` for `/health` and `/api/tags`; detects llamacpp via `/health` body containing `{"status":"ok"}`; detects Ollama via `/api/tags` body containing `{"models":[...]}`; non-200 → error; unreachable → error. |
+| `TestLMStudioLoadModel` | Success, context_length inclusion, error with message, error without message. |
+| `TestLMStudioUnloadModel` | Success, non-200 with error message, non-200 with empty body returns error. |
+| `TestExtractLMStudioError` | Valid JSON, empty body, malformed JSON, missing message field. |
+| `TestOllamaLoadModel` | Success (verifies keep_alive payload), error status. |
+| `TestOllamaUnloadModel` | Success (verifies keep_alive=0), error status. |
+| `TestOllamaListRunningModels` | Success with models, empty list, malformed JSON. |
 
-The LM Studio tests are notable for verifying the cross-detection discrimination: the health check must reject responses from other backends running on the same port.
+### 14.2 Server & Config Tests
 
-Existing unit tests also cover config loading/validation (`TestLoadConfig`), parameter merging (`TestMergeParams`), llama.cpp arg assembly (`TestLlamaCppBuildServerArgs`), and model resolution (`TestLlamaCppResolveModel`).
+| Test | What it covers |
+|---|---|
+| `TestIsProcessAlive` | Current PID → true; PID 0 → false; negative PID → false; invalid PID → false. |
+| `TestReadLastLines` | More lines than requested; fewer lines; nonexistent file. |
+| `TestBackendStatePath` | Absolute path format, correct filename. |
+| `TestServerState_Addr` / `_Uptime` | State helper methods. |
+| `TestGetBackend` | Known backends return correct instance; unknown returns error. |
+| `TestExpandTilde` | `~/path`, bare `~`, `~username` (unchanged), absolute path, empty. |
+| `TestLoadConfig` | Missing file, valid config, no-profiles validation. |
+| `TestValidate_*` | Deprecated fields, no servers enabled, auto-assign default server. |
+| `TestShouldAutoClose` / `TestShouldDisplayCentered` | Nil-defaults-to-true/false asymmetry. |
+| `TestConfiguredBackendAddr` | Returns merged address with colon separator. |
 
-### 14.2 Test Helpers
+### 14.3 Menu Helper Tests
+
+| Test | What it covers |
+|---|---|
+| `TestParseChoice` | Valid, zero, negative, exceeds max, non-numeric, empty. |
+| `TestFormatUptime` | Hours, minutes, seconds-only branches. |
+| `TestProfileDisplayName` | With description, without, unknown profile. |
+| `TestFormatProfileParams_GPULayers_LMStudio` | Intermediate value shows number; 99 shows max; 0 shows off. |
+
+### 14.4 Test Helpers
 
 `helpers_test.go` provides `addrFromURL(t, rawURL) string`, which parses an `httptest.NewServer` URL and returns the `host:port` portion for passing to backend methods that expect an `addr` string.
 

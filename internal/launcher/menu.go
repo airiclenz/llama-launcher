@@ -77,12 +77,12 @@ func runStoppedMenu(cfg *Config) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
-		return serverStatusLines(cfg, nil)
+		return serverStatusLines(cfg)
 	}
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
-	if runningServers := detectRunningServers(cfg, nil); len(runningServers) > 0 {
+	if runningServers := detectRunningServers(cfg); len(runningServers) > 0 {
 		items = append(items, menuItem{Label: "Stop server"})
 	}
 	items = append(items, menuItem{Label: "Edit config"})
@@ -115,7 +115,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
-		return serverStatusLines(cfg, state)
+		return serverStatusLines(cfg)
 	}
 
 	items := []menuItem{
@@ -164,7 +164,7 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
-		return serverStatusLines(cfg, state)
+		return serverStatusLines(cfg)
 	}
 
 	items := buildProfileItems(cfg, names)
@@ -263,7 +263,7 @@ type runningServer struct {
 	addr string
 }
 
-func detectRunningServers(cfg *Config, state *ServerState) []runningServer {
+func detectRunningServers(cfg *Config) []runningServer {
 	states, _ := ReadAllStates()
 	stateMap := make(map[string]*ServerState)
 	for _, s := range states {
@@ -316,7 +316,7 @@ func detectRunningServers(cfg *Config, state *ServerState) []runningServer {
 }
 
 func doStopServer(cfg *Config, state *ServerState) error {
-	running := detectRunningServers(cfg, state)
+	running := detectRunningServers(cfg)
 	if len(running) == 0 {
 		fmt.Print(escClear + escCursorShow)
 		fmt.Println("  No servers running.")
@@ -474,7 +474,7 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 			case *p.GPULayers <= 0:
 				add("GPU offload", "off")
 			default:
-				add("GPU offload", "max")
+				add("GPU offload", strconv.Itoa(*p.GPULayers))
 			}
 		}
 	}
@@ -613,7 +613,7 @@ func backendDisplayName(backendName string) string {
 	return b.DisplayName()
 }
 
-func serverStatusLines(cfg *Config, _ *ServerState) []string {
+func serverStatusLines(cfg *Config) []string {
 	states, _ := ReadAllStates()
 	stateMap := make(map[string]*ServerState)
 	for _, s := range states {

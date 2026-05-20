@@ -3,6 +3,12 @@ package launcher
 import (
 	"fmt"
 	"sort"
+	"time"
+)
+
+const (
+	healthCheckTimeout = 2 * time.Second
+	modelLoadTimeout   = 5 * time.Minute
 )
 
 // Backend abstracts an LLM server implementation.

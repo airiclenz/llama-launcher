@@ -1,6 +1,8 @@
 package launcher
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,6 +67,161 @@ func TestOllamaHealthCheck(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "unhealthy") {
 			t.Errorf("error = %q, want it to contain 'unhealthy'", err)
+		}
+	})
+}
+
+func TestOllamaLoadModel(t *testing.T) {
+	t.Parallel()
+
+	b := &Ollama{}
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/generate" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]interface{}
+			json.Unmarshal(body, &payload)
+			if payload["model"] != "llama3" {
+				t.Errorf("model = %v, want llama3", payload["model"])
+			}
+			if payload["keep_alive"] != "24h" {
+				t.Errorf("keep_alive = %v, want 24h", payload["keep_alive"])
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		profile := &ResolvedProfile{ModelPath: "llama3"}
+		if err := b.LoadModel(addrFromURL(t, srv.URL), profile); err != nil {
+			t.Errorf("expected success, got: %v", err)
+		}
+	})
+
+	t.Run("error status", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		profile := &ResolvedProfile{ModelPath: "bad-model"}
+		err := b.LoadModel(addrFromURL(t, srv.URL), profile)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "status 404") {
+			t.Errorf("error = %q, want it to contain 'status 404'", err)
+		}
+	})
+}
+
+func TestOllamaUnloadModel(t *testing.T) {
+	t.Parallel()
+
+	b := &Ollama{}
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/generate" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]interface{}
+			json.Unmarshal(body, &payload)
+			if payload["keep_alive"] != float64(0) {
+				t.Errorf("keep_alive = %v, want 0", payload["keep_alive"])
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		if err := b.UnloadModel(addrFromURL(t, srv.URL), "llama3"); err != nil {
+			t.Errorf("expected success, got: %v", err)
+		}
+	})
+
+	t.Run("error status", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		err := b.UnloadModel(addrFromURL(t, srv.URL), "llama3")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "status 500") {
+			t.Errorf("error = %q, want it to contain 'status 500'", err)
+		}
+	})
+}
+
+func TestOllamaListRunningModels(t *testing.T) {
+	t.Parallel()
+
+	b := &Ollama{}
+
+	t.Run("success with models", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/ps" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"models": []map[string]interface{}{
+					{"name": "llama3:latest", "size": 4000000000},
+					{"name": "mistral:7b", "size": 3500000000},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		models, err := b.ListRunningModels(addrFromURL(t, srv.URL))
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+		if len(models) != 2 {
+			t.Fatalf("len = %d, want 2", len(models))
+		}
+		if models[0].Name != "llama3:latest" {
+			t.Errorf("models[0].Name = %q, want llama3:latest", models[0].Name)
+		}
+	})
+
+	t.Run("empty model list", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"models": []map[string]interface{}{},
+			})
+		}))
+		defer srv.Close()
+
+		models, err := b.ListRunningModels(addrFromURL(t, srv.URL))
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+		if len(models) != 0 {
+			t.Errorf("len = %d, want 0", len(models))
+		}
+	})
+
+	t.Run("malformed JSON", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("{invalid"))
+		}))
+		defer srv.Close()
+
+		_, err := b.ListRunningModels(addrFromURL(t, srv.URL))
+		if err == nil {
+			t.Fatal("expected error for malformed JSON")
 		}
 	})
 }

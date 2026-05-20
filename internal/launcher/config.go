@@ -175,8 +175,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// BackendAddr returns the default address for a backend.
-func (c *Config) BackendAddr(backendName string) string {
+func (c *Config) backendAddr(backendName string) string {
 	b, err := GetBackend(backendName)
 	if err != nil {
 		return ""
@@ -195,16 +194,6 @@ func (c *Config) ConfiguredBackendAddr(backendName string) string {
 	params := c.Defaults
 	applyBackendFallbacks(&params, c, backendName, b)
 	return fmt.Sprintf("%s:%d", *params.Host, *params.Port)
-}
-
-// IsManaged returns true if the backend implements ManagedBackend.
-func (c *Config) IsManaged(backendName string) bool {
-	b, err := GetBackend(backendName)
-	if err != nil {
-		return false
-	}
-	_, ok := b.(ManagedBackend)
-	return ok
 }
 
 // ResolveProfile merges a named profile with defaults and resolves its model path.
@@ -321,7 +310,7 @@ func applyBackendFallbacks(p *ProfileParams, cfg *Config, backendName string, b 
 	if p.Host != nil && p.Port != nil {
 		return
 	}
-	addr := cfg.BackendAddr(backendName)
+	addr := cfg.backendAddr(backendName)
 	if addr == "" {
 		applyFallbacks(p)
 		return
@@ -409,23 +398,26 @@ func mergeParams(defaults, profile ProfileParams) ProfileParams {
 	return merged
 }
 
-// ExpandTilde replaces a leading ~ with the user's home directory.
+// ExpandTilde replaces a leading ~ or ~/ with the user's home directory.
 func ExpandTilde(path string) string {
-	if !strings.HasPrefix(path, "~") {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
 		return path
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return path
 	}
-	return filepath.Join(home, path[1:])
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // GenerateExampleConfig writes a documented example config to the given path.
 func GenerateExampleConfig(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	return os.WriteFile(path, []byte(defaults.ExampleConfig), 0o644)
+	return os.WriteFile(path, []byte(defaults.ExampleConfig), 0o600)
 }

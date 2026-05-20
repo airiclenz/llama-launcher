@@ -28,7 +28,7 @@ func (b *Ollama) DisplayName() string { return "Ollama" }
 func (b *Ollama) DefaultAddr() string { return "localhost:11434" }
 
 func (b *Ollama) HealthCheck(addr string) error {
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + addr + "/")
+	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/")
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 		"keep_alive": "24h",
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Post(
+	resp, err := (&http.Client{Timeout: modelLoadTimeout}).Post(
 		"http://"+addr+"/api/generate",
 		"application/json",
 		bytes.NewReader(body),
@@ -133,7 +133,9 @@ func (b *Ollama) TryStop(_ string) error {
 		return nil
 	}
 	cmd := exec.Command(binary, "stop")
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("stopping Ollama: %w", err)
+	}
 
 	out, err := exec.Command("pgrep", "-f", "ollama serve").Output()
 	if err != nil || len(out) == 0 {
@@ -148,7 +150,9 @@ func (b *Ollama) TryStop(_ string) error {
 		if err != nil {
 			continue
 		}
-		proc.Signal(syscall.SIGTERM)
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to signal PID %d: %v\n", pid, err)
+		}
 	}
 	return nil
 }

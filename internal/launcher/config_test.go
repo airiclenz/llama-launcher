@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,8 @@ func TestExpandTilde(t *testing.T) {
 		{name: "relative path", path: "relative/path", want: "relative/path"},
 		{name: "empty string", path: "", want: ""},
 		{name: "tilde only", path: "~", want: home},
+		{name: "tilde username unchanged", path: "~bob/data", want: "~bob/data"},
+		{name: "tilde in middle unchanged", path: "/path/~/file", want: "/path/~/file"},
 	}
 
 	for _, tt := range tests {
@@ -308,6 +311,161 @@ func TestGenerateExampleConfig(t *testing.T) {
 	if len(data) == 0 {
 		t.Error("generated config is empty")
 	}
+}
+
+func TestValidate_DeprecatedDefaultBackend(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+default_backend: llamacpp
+servers:
+  llamacpp: true
+profiles:
+  test:
+    model: test.gguf
+`
+	os.WriteFile(cfgPath, []byte(yaml), 0o644)
+
+	_, err := LoadConfig(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error for deprecated default_backend")
+	}
+	if !strings.Contains(err.Error(), "default_backend") {
+		t.Errorf("error = %q, want it to mention default_backend", err)
+	}
+}
+
+func TestValidate_DeprecatedEndpoints(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+servers:
+  llamacpp: true
+endpoints:
+  llamacpp: "localhost:8080"
+profiles:
+  test:
+    model: test.gguf
+`
+	os.WriteFile(cfgPath, []byte(yaml), 0o644)
+
+	_, err := LoadConfig(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error for deprecated endpoints")
+	}
+	if !strings.Contains(err.Error(), "endpoints") {
+		t.Errorf("error = %q, want it to mention endpoints", err)
+	}
+}
+
+func TestValidate_NoServersEnabled(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+servers:
+  llamacpp: false
+profiles:
+  test:
+    model: test.gguf
+`
+	os.WriteFile(cfgPath, []byte(yaml), 0o644)
+
+	_, err := LoadConfig(cfgPath)
+	if err == nil {
+		t.Fatal("expected validation error for no servers enabled")
+	}
+	if !strings.Contains(err.Error(), "no servers enabled") {
+		t.Errorf("error = %q, want it to mention 'no servers enabled'", err)
+	}
+}
+
+func TestValidate_AutoAssignDefaultServer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+servers:
+  llamacpp: true
+profiles:
+  test:
+    model: test.gguf
+`
+	os.WriteFile(cfgPath, []byte(yaml), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Defaults.Server == nil || *cfg.Defaults.Server != "llamacpp" {
+		t.Errorf("Defaults.Server = %v, want llamacpp", cfg.Defaults.Server)
+	}
+}
+
+func TestConfiguredBackendAddr(t *testing.T) {
+	t.Parallel()
+
+	server := "llamacpp"
+	cfg := &Config{
+		Servers:  map[string]bool{"llamacpp": true},
+		Defaults: ProfileParams{Server: &server},
+	}
+
+	addr := cfg.ConfiguredBackendAddr("llamacpp")
+	if addr == "" {
+		t.Fatal("expected non-empty address")
+	}
+	if !strings.Contains(addr, ":") {
+		t.Errorf("address %q should contain a colon", addr)
+	}
+}
+
+func TestShouldAutoClose(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil defaults to true", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{}
+		if !cfg.ShouldAutoClose() {
+			t.Error("ShouldAutoClose() = false, want true when nil")
+		}
+	})
+
+	t.Run("explicit false", func(t *testing.T) {
+		t.Parallel()
+		f := false
+		cfg := &Config{AutoClose: &f}
+		if cfg.ShouldAutoClose() {
+			t.Error("ShouldAutoClose() = true, want false")
+		}
+	})
+}
+
+func TestShouldDisplayCentered(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil defaults to false", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{}
+		if cfg.ShouldDisplayCentered() {
+			t.Error("ShouldDisplayCentered() = true, want false when nil")
+		}
+	})
+
+	t.Run("explicit true", func(t *testing.T) {
+		t.Parallel()
+		tr := true
+		cfg := &Config{DisplayCentered: &tr}
+		if !cfg.ShouldDisplayCentered() {
+			t.Error("ShouldDisplayCentered() = false, want true")
+		}
+	})
 }
 
 func isConfigNotFoundError(err error) bool {

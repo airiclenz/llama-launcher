@@ -1,12 +1,13 @@
 package launcher
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 )
 
 // LlamaCpp implements Backend for llama.cpp's llama-server.
@@ -21,13 +22,20 @@ func (b *LlamaCpp) DisplayName() string { return "LLaMA.cpp" }
 func (b *LlamaCpp) DefaultAddr() string { return "127.0.0.1:8080" }
 
 func (b *LlamaCpp) HealthCheck(addr string) error {
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + addr + "/health")
+	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/health")
 	if err != nil {
 		return err
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
+	}
+	// llama-server returns {"status":"ok"}. LM Studio returns 200 for all
+	// paths but with {"error":"..."} — the missing "status" field rejects it.
+	var health struct{ Status string `json:"status"` }
+	if json.Unmarshal(body, &health) != nil || health.Status == "" {
+		return fmt.Errorf("not llamacpp: /health response missing status field")
 	}
 	return nil
 }
