@@ -8,12 +8,26 @@ Managed backends (llama.cpp) are started as detached background processes. Exter
   <img src="media/screen_1.png" alt="llama-launcher interactive menu" width="600">
 </p>
 
+## Install
+
+### Homebrew (macOS)
+
+```bash
+brew tap airiclenz/tap
+brew install llama-launcher
+```
+
+### From source
+
+Requires Go 1.26+.
+
+```bash
+make install
+```
+
 ## Quick start
 
 ```bash
-# Build and install
-make install
-
 # First run generates an example config
 llama-launcher
 # => Created example config at: ~/.config/llama-launcher/config.yaml
