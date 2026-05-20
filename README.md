@@ -8,6 +8,10 @@ Managed backends (llama.cpp) are started as detached background processes. Exter
   <img src="media/screen_1.png" alt="llama-launcher interactive menu" width="600">
 </p>
 
+<p align="center">
+  <img src="media/screen_2.png" alt="llama-launcher interactive menu" width="825">
+</p>
+
 ## Install
 
 ### Homebrew (macOS)
