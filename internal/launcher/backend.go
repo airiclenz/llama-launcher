@@ -5,17 +5,26 @@ import (
 	"sort"
 )
 
-// Backend abstracts an LLM server implementation. Each backend knows how to
-// start its server process, build CLI arguments, and resolve model paths.
+// Backend abstracts an LLM server implementation.
 type Backend interface {
-	// Name returns the identifier used in config files (e.g. "llamacpp").
 	Name() string
-	// ServerBinary returns the path to the server executable.
-	ServerBinary(cfg *Config) string
-	// BuildServerArgs assembles CLI flags for starting the server process.
-	BuildServerArgs(cfg *Config, profile *ResolvedProfile) []string
-	// ResolveModel validates and resolves a model reference to an absolute path.
+	DisplayName() string
+	DefaultAddr() string
+	HealthCheck(addr string) error
 	ResolveModel(cfg *Config, modelRef string) (string, error)
+	LoadModel(addr string, profile *ResolvedProfile) error
+	UnloadModel(addr string, modelID string) error
+	TryStart(cfg *Config, addr string) error
+	TryStop(addr string) error
+}
+
+// ManagedBackend is implemented by backends where the launcher forks and owns
+// the server process (e.g. llama.cpp, optionally Ollama).
+type ManagedBackend interface {
+	Backend
+	ServerBinary(cfg *Config) string
+	BuildServerArgs(cfg *Config, profile *ResolvedProfile) []string
+	BuildServerEnv(cfg *Config, profile *ResolvedProfile) []string
 }
 
 // ResolvedProfile holds a fully merged profile ready for use by a backend.

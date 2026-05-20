@@ -106,8 +106,10 @@ func cmdLoad(cfg *Config, args []string) int {
 		return 3
 	}
 
-	if started {
+	if started && state.Managed {
 		fmt.Printf("Server started (PID %d)\n", state.PID)
+	} else if started && !state.Managed {
+		fmt.Printf("Connected to %s\n", backendDisplayName(state.Backend))
 	}
 	if state.ActiveProfile == profile.Name {
 		fmt.Printf("Loaded %s on %s:%d\n", displayName, state.Host, state.Port)
@@ -116,25 +118,51 @@ func cmdLoad(cfg *Config, args []string) int {
 }
 
 func cmdUnload() int {
-	state, err := StopServer()
+	state, err := ReadState()
 	if err != nil {
-		if errors.Is(err, ErrNotRunning) {
-			fmt.Println("No server running.")
-			return 1
-		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}
-	fmt.Printf("Model unloaded, server stopped (PID %d)\n", state.PID)
+	if state == nil {
+		fmt.Println("No server running.")
+		return 1
+	}
+
+	if state.Managed {
+		state, err = StopServer()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 3
+		}
+		fmt.Printf("Model unloaded, server stopped (PID %d)\n", state.PID)
+	} else {
+		state, err = UnloadCurrentModel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 3
+		}
+		fmt.Printf("Model unloaded (server still running at %s:%d)\n", state.Host, state.Port)
+	}
 	return 0
 }
 
 func cmdStart(cfg *Config) int {
-	fmt.Println("Starting server...")
+	if cfg.Defaults.Server == nil {
+		fmt.Fprintln(os.Stderr, "Error: no default server configured in defaults section")
+		return 2
+	}
+	serverName := *cfg.Defaults.Server
+	b, err := GetBackend(serverName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+
+	fmt.Printf("Starting %s...\n", b.DisplayName())
 	defaults := cfg.Defaults
-	applyFallbacks(&defaults)
+	applyBackendFallbacks(&defaults, cfg, serverName, b)
 	profile := &ResolvedProfile{
-		Backend:       cfg.DefaultBackend,
+		Backend:       serverName,
 		ProfileParams: defaults,
 	}
 	state, started, err := EnsureServer(cfg, profile)
@@ -143,11 +171,19 @@ func cmdStart(cfg *Config) int {
 		return 3
 	}
 	if !started {
-		fmt.Printf("Server already running on %s:%d (PID %d)\n", state.Host, state.Port, state.PID)
+		if state.Managed {
+			fmt.Printf("Server already running on %s:%d (PID %d)\n", state.Host, state.Port, state.PID)
+		} else {
+			fmt.Printf("Already connected to %s at %s:%d\n", b.DisplayName(), state.Host, state.Port)
+		}
 		return 0
 	}
-	fmt.Printf("Server started on %s:%d (PID %d)\n", state.Host, state.Port, state.PID)
-	fmt.Printf("Log: %s\n", state.LogFile)
+	if state.Managed {
+		fmt.Printf("Server started on %s:%d (PID %d)\n", state.Host, state.Port, state.PID)
+		fmt.Printf("Log: %s\n", state.LogFile)
+	} else {
+		fmt.Printf("Connected to %s at %s:%d\n", b.DisplayName(), state.Host, state.Port)
+	}
 	return 0
 }
 
@@ -161,7 +197,12 @@ func cmdStop() int {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}
-	fmt.Printf("Stopped server (PID %d)\n", state.PID)
+	if state.Managed {
+		fmt.Printf("Stopped server (PID %d)\n", state.PID)
+	} else {
+		fmt.Printf("Disconnected from %s (server still running at %s:%d)\n",
+			backendDisplayName(state.Backend), state.Host, state.Port)
+	}
 	return 0
 }
 
@@ -175,23 +216,36 @@ func cmdStatus(cfg *Config) int {
 		fmt.Println("Status: stopped")
 		return 1
 	}
-	if !IsProcessAlive(state.PID) {
-		fmt.Printf("Status: stopped (server exited unexpectedly, PID %d)\n", state.PID)
+	if !IsServerAlive(state) {
+		if state.Managed {
+			fmt.Printf("Status: stopped (server exited unexpectedly, PID %d)\n", state.PID)
+		} else {
+			fmt.Printf("Status: stopped (%s no longer reachable at %s:%d)\n",
+				backendDisplayName(state.Backend), state.Host, state.Port)
+		}
 		RemoveState()
 		return 1
 	}
 
-	fmt.Println("Status:  running")
+	if state.Managed {
+		fmt.Println("Status:  running")
+	} else {
+		fmt.Println("Status:  connected")
+	}
 	if state.ActiveProfile != "" {
 		fmt.Printf("Model:   %s\n", profileDisplayName(cfg, state.ActiveProfile))
 	} else {
 		fmt.Println("Model:   (none)")
 	}
-	fmt.Printf("Backend: %s\n", state.Backend)
+	fmt.Printf("Backend: %s\n", backendDisplayName(state.Backend))
 	fmt.Printf("Server:  %s:%d\n", state.Host, state.Port)
-	fmt.Printf("PID:     %d\n", state.PID)
-	fmt.Printf("Uptime:  %s\n", formatUptime(state.Uptime()))
-	fmt.Printf("Log:     %s\n", state.LogFile)
+	if state.Managed {
+		fmt.Printf("PID:     %d\n", state.PID)
+		fmt.Printf("Uptime:  %s\n", formatUptime(state.Uptime()))
+	}
+	if state.LogFile != "" {
+		fmt.Printf("Log:     %s\n", state.LogFile)
+	}
 	return 0
 }
 
@@ -205,11 +259,8 @@ func cmdList(cfg *Config) int {
 		if desc == "" {
 			desc = "-"
 		}
-		backend := p.Backend
-		if backend == "" {
-			backend = cfg.DefaultBackend
-		}
-		fmt.Printf("  %-20s [%s] %s\n", name, backend, desc)
+		server := resolveProfileServer(cfg, &p)
+		fmt.Printf("  %-20s [%s] %s\n", name, backendDisplayName(server), desc)
 	}
 	return 0
 }
@@ -232,9 +283,16 @@ func cmdLogs(args []string) int {
 		return 1
 	}
 
-	if !IsProcessAlive(state.PID) {
-		fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", state.PID)
+	if !IsServerAlive(state) {
+		if state.Managed {
+			fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", state.PID)
+		}
 		RemoveState()
+	}
+
+	if state.LogFile == "" {
+		fmt.Println("No log file available for external server.")
+		return 1
 	}
 
 	if err := TailLog(state.LogFile, follow); err != nil {

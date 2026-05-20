@@ -267,6 +267,49 @@ func showActivity(message string) {
 	os.Stdout.WriteString(buf.String())
 }
 
+func showErrorPopup(err error) {
+	if !isTerminal() {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
+	}
+
+	lines := strings.Split(err.Error(), "\n")
+
+	maxWidth := terminalWidth() - 12
+	if maxWidth < 40 {
+		maxWidth = 40
+	}
+
+	var wrapped []string
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapLine(line, maxWidth)...)
+	}
+
+	title := fmt.Sprintf("%sError%s", cRed, cReset)
+	showPopup(title, wrapped)
+}
+
+func wrapLine(line string, maxWidth int) []string {
+	if visibleWidth(line) <= maxWidth {
+		return []string{line}
+	}
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	var result []string
+	current := words[0]
+	for _, word := range words[1:] {
+		if visibleWidth(current)+1+visibleWidth(word) > maxWidth {
+			result = append(result, current)
+			current = word
+		} else {
+			current += " " + word
+		}
+	}
+	return append(result, current)
+}
+
 func showPopup(title string, lines []string) {
 	if !isTerminal() {
 		fmt.Printf("  %s\n", title)

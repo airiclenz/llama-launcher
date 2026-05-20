@@ -2,9 +2,11 @@ package launcher
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // LlamaCpp implements Backend for llama.cpp's llama-server.
@@ -14,11 +16,32 @@ func init() {
 	RegisterBackend(&LlamaCpp{})
 }
 
-func (b *LlamaCpp) Name() string { return "llamacpp" }
+func (b *LlamaCpp) Name() string        { return "llamacpp" }
+func (b *LlamaCpp) DisplayName() string { return "llama.cpp" }
+func (b *LlamaCpp) DefaultAddr() string { return "127.0.0.1:8080" }
+
+func (b *LlamaCpp) HealthCheck(addr string) error {
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + addr + "/health")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (b *LlamaCpp) LoadModel(_ string, _ *ResolvedProfile) error { return nil }
+func (b *LlamaCpp) UnloadModel(_ string, _ string) error         { return nil }
+func (b *LlamaCpp) TryStart(_ *Config, _ string) error           { return nil }
+func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
+
+func (b *LlamaCpp) BuildServerEnv(_ *Config, _ *ResolvedProfile) []string { return nil }
 
 func (b *LlamaCpp) ServerBinary(cfg *Config) string {
-	if path, ok := cfg.Servers["llamacpp"]; ok {
-		return ExpandTilde(path)
+	if val, ok := cfg.Servers["llamacpp"]; ok && val != "" && !isAddress(val) {
+		return ExpandTilde(val)
 	}
 	return "llama-server"
 }

@@ -135,15 +135,12 @@ On first run, if no config file exists, the launcher creates a documented exampl
 ### 4.2 Schema
 
 ```yaml
-# Server binaries, keyed by backend name.
-# Adding a new backend is as simple as adding an entry here
-# and implementing the Backend interface.
+# Servers available on this system. Uncomment to enable.
+# Leave value empty to auto-detect, or set a custom binary path / address.
 servers:
-  llamacpp: /usr/local/bin/llama-server
-
-# Default backend when profiles don't specify one.
-# Auto-detected if only one server is configured.
-default_backend: llamacpp
+  llamacpp:
+  # ollama:
+  # lmstudio:
 
 # Base directory for model files. Profile model paths are resolved
 # relative to this directory unless they are absolute.
@@ -153,9 +150,9 @@ models_dir: ~/Models
 log_dir: ~/.config/llama-launcher/logs
 
 # Default parameters applied at server start (shared by all models).
-# Per-model overrides for hardware params (context_size, gpu_layers)
-# are not supported in router mode — see llama.cpp issue #20851.
+# The "server" field selects which server to use by default.
 defaults:
+  server: llamacpp
   gpu_layers: 99
   threads: 8
   threads_batch: 8
@@ -177,7 +174,9 @@ defaults:
   top_p: 0.95
   min_p: 0.05
 
-# Named profiles (model configurations)
+# Named profiles (model configurations).
+# Profiles can target different servers — switching between them
+# stops the old server and starts/connects to the new one.
 profiles:
   code-deepseek:
     description: "DeepSeek Coder V2 Lite — coding tasks"
@@ -194,21 +193,27 @@ profiles:
     threads: 6
     parallel: 2
 
-  reasoning-phi:
-    description: "Phi-4 — structured reasoning"
-    model: phi-4-Q5_K_M.gguf
-    context_size: 8192
-    temperature: 0.4
-    repeat_penalty: 1.2
+  ollama-llama3:
+    description: "Llama 3.1 8B via Ollama"
+    server: ollama
+    model: llama3.1:8b
+
+  lmstudio-codegen:
+    description: "Code model via LM Studio"
+    server: lmstudio
+    model: lmstudio-community/meta-llama-3.1-8b-instruct
 ```
+
+The `servers` map lists available backends. Keys are backend names (`llamacpp`, `ollama`, `lmstudio`). Values are optional: empty for auto-detect, a custom binary path, or a `host:port` address for non-default endpoints. Managed vs external is determined by backend type — llamacpp is always managed (fork), Ollama and LM Studio are always external (connect).
 
 ### 4.3 Parameter Resolution
 
 Parameters are resolved in order of precedence (highest first):
 
-1. Profile-level value
-2. `defaults` block value
-3. Built-in fallback (only for `host: 127.0.0.1` and `port: 8080`)
+1. Profile-level value (including `server`)
+2. `defaults` block value (including `server`)
+3. Backend-specific fallback from `servers` map address or `Backend.DefaultAddr()` (e.g. Ollama defaults to `localhost:11434`, LM Studio to `localhost:1234`)
+4. Built-in fallback (only for `host: 127.0.0.1` and `port: 8080`)
 
 All numeric and boolean parameters use pointer types internally to distinguish "not set" from zero/false. A nil pointer means "inherit from the next level."
 
@@ -221,7 +226,7 @@ The `model` field in a profile is resolved as follows:
 3. `models_dir` itself supports `~` expansion.
 4. Validate that the resolved path exists and is a regular file before loading.
 
-Model path resolution is delegated to the backend via `Backend.ResolveModel()`, allowing future backends to use non-file-based model references (e.g., Ollama model identifiers).
+Model path resolution is delegated to the backend via `Backend.ResolveModel()`. llama.cpp validates that the file exists on disk. Ollama and LM Studio accept opaque model identifiers (e.g. `llama3.1:8b`, `lmstudio-community/meta-llama-3.1-8b-instruct`) without file validation.
 
 ### 4.5 Extra Arguments
 
@@ -229,7 +234,7 @@ The `extra_args` list in a profile is appended verbatim to the assembled server 
 
 ### 4.6 Backend Selection
 
-Each profile can specify a `backend` field to override the `default_backend`. If omitted, the profile uses the default. If `default_backend` is also omitted and only one server is configured, that server's backend is used automatically.
+Each profile can specify a `server` field to override `defaults.server`. The `server` field participates in the same tier merge as all other parameters (profile → defaults → fallback). If only one server is configured and `defaults.server` is not set, it is auto-detected.
 
 ## 5. Architecture
 
@@ -241,22 +246,18 @@ Each profile can specify a `backend` field to override the `default_backend`. If
 │  (main.go)   │     │ (config.go)  │     │ (server.go)  │
 │  (menu.go)   │     └──────────────┘     └──────┬───────┘
 │  (ui.go)     │                                 │
-└──────────────┘     ┌──────────────┐            │ fork + detach
-                     │   Backend    │◀───────────┤
-                     │ (backend.go) │            │ HTTP API
-                     └──────┬───────┘            │ (load/unload)
-                            │                    │
-                     ┌──────┴───────┐     ┌──────┴───────┐
-                     │  LlamaCpp    │     │  State File  │
-                     │ (backend_    │     │ (state.json) │
-                     │  llamacpp.go)│     └──────────────┘
-                     └──────────────┘            │
-                                                 ▼
-                                          ┌──────────────┐
-                                          │ llama-server  │
-                                          │  (detached,   │
-                                          │  router mode) │
-                                          └──────────────┘
+└──────────────┘     ┌──────────────┐            │ managed: fork
+                     │   Backend    │◀───────────┤ external: connect
+                     │ (backend.go) │            │
+                     └──────┬───────┘     ┌──────┴───────┐
+                            │             │  State File  │
+              ┌─────────────┼──────────┐  │ (state.json) │
+              │             │          │  └──────────────┘
+       ┌──────┴───────┐ ┌───┴───┐ ┌────┴─────┐
+       │  LlamaCpp    │ │Ollama │ │ LMStudio │
+       │ (backend_    │ │       │ │          │
+       │  llamacpp.go)│ │       │ │          │
+       └──────────────┘ └───────┘ └──────────┘
 ```
 
 ### 5.2 Source Files
@@ -265,32 +266,44 @@ Each profile can specify a `backend` field to override the `default_backend`. If
 |---|---|
 | `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. |
 | `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading, `~` expansion, parameter merging, validation, example config generation. |
-| `backend.go` | `Backend` interface definition, `ResolvedProfile` struct, backend registry (register/get). |
-| `backend_llamacpp.go` | llama-cpp backend: server arg assembly, HTTP model load/unload/status, model path resolution. Registers via `init()`. |
-| `server.go` | Backend-agnostic process lifecycle: start (fork/detach), stop (SIGTERM/SIGKILL), state file read/write, PID tracking, health check polling, `LoadProfile`/`UnloadProfile` orchestration, log management. |
+| `backend.go` | `Backend` and `ManagedBackend` interface definitions, `ResolvedProfile` struct, backend registry (register/get). |
+| `backend_llamacpp.go` | llama.cpp backend (managed): server arg assembly, model path resolution. Registers via `init()`. |
+| `backend_ollama.go` | Ollama backend (external): HTTP API model load/unload, auto-start via `ollama serve`. Registers via `init()`. |
+| `backend_lmstudio.go` | LM Studio backend (external): HTTP API model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
+| `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). State file read/write, PID tracking, `LoadProfile` orchestration, log management. |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
-| `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), simple fallback for non-terminals. |
+| `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. |
 
 ### 5.3 Backend Interface
 
 ```go
 type Backend interface {
     Name() string
-    ServerBinary(cfg *Config) string
-    BuildServerArgs(cfg *Config, params *ProfileParams) []string
+    DisplayName() string
+    DefaultAddr() string
+    HealthCheck(addr string) error
     ResolveModel(cfg *Config, modelRef string) (string, error)
-    SupportsHotSwap() bool
     LoadModel(addr string, profile *ResolvedProfile) error
     UnloadModel(addr string, modelID string) error
-    ModelStatus(addr string) ([]ModelInfo, error)
+    TryStart(cfg *Config, addr string) error
+    TryStop(addr string) error
+}
+
+type ManagedBackend interface {
+    Backend
+    ServerBinary(cfg *Config) string
+    BuildServerArgs(cfg *Config, profile *ResolvedProfile) []string
+    BuildServerEnv(cfg *Config, profile *ResolvedProfile) []string
 }
 ```
 
+`ManagedBackend` is for backends where the launcher forks and owns the server process (llama.cpp). External backends (Ollama, LM Studio) implement only `Backend` with `TryStart`/`TryStop` hooks for auto-starting. The server lifecycle code uses `if mb, ok := b.(ManagedBackend)` to determine the process model.
+
 Adding a new backend requires:
-1. Create `backend_<name>.go` implementing the `Backend` interface.
+1. Create `backend_<name>.go` implementing `Backend` (and optionally `ManagedBackend`).
 2. Register via `init()` calling `RegisterBackend()`.
-3. Add an entry to `servers:` in the config YAML.
-4. Set `backend:` on relevant profiles (or set as `default_backend`).
+3. Add the backend name to `servers:` in the config YAML.
+4. Set `server:` on relevant profiles (or set as `defaults.server`).
 
 ### 5.4 External Dependencies
 
@@ -303,39 +316,65 @@ Standard library only beyond that. No TUI framework; ANSI escape codes are used 
 
 ## 6. Process and Model Management
 
-### 6.1 Starting the Server (Router Mode)
+### 6.1 Starting the Server
+
+#### Managed backends (llama.cpp)
 
 1. Load and validate config.
-2. Resolve the default backend.
-3. Build server arguments from merged defaults (host, port, threads, gpu_layers, flash_attn, models_dir, etc.). No model flag — router mode.
+2. Resolve the backend; verify binary exists via `exec.LookPath`.
+3. Build server arguments via `ManagedBackend.BuildServerArgs()` and environment via `BuildServerEnv()`.
 4. Check state file — if a server is already running (PID alive) with the same backend, reuse it.
 5. If a server is running with a different backend, stop it first.
 6. Open the log file for stdout/stderr redirection.
 7. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
 8. Call `cmd.Start()` (non-blocking).
-9. Write state file with PID, backend, host, port, context_size, gpu_layers, and timestamp.
+9. Write state file with `managed: true`, PID, backend, host, port, and timestamp.
 10. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
-11. Wait for `/health` endpoint to respond 200 (up to 15 seconds).
+11. Wait for backend health check to succeed (up to 15 seconds).
 12. Print confirmation line.
+
+#### External backends (Ollama, LM Studio)
+
+1. Resolve the backend address from `servers` map (if host:port value) or `Backend.DefaultAddr()`.
+2. Call `Backend.HealthCheck(addr)` to verify server is reachable.
+3. If not reachable, call `Backend.TryStart()` (e.g. `lms server start`, `ollama serve`).
+4. Poll health check until successful (up to 15 seconds) or fail with a user-friendly message.
+5. Write state file with `managed: false`, PID 0, backend, host, port, and timestamp.
+6. Print confirmation.
 
 ### 6.2 Loading a Model
 
+#### Managed backends (llama.cpp)
+
 1. Ensure server is running (start if needed — see 6.1).
-2. If the same model is already loaded (check state file), exit early.
-3. If a different model is loaded, unload it first via `POST /models/unload`.
-4. Warn if the profile's hardware params (context_size, gpu_layers) differ from the server's — these cannot be overridden per-model in router mode (llama.cpp issue [#20851](https://github.com/ggml-org/llama.cpp/issues/20851)).
-5. Load the new model via `POST /models/load` with the model filename.
-6. Update state file with active_profile and active_model.
-7. Print confirmation.
+2. If the same profile is already loaded (check state file), exit early.
+3. Stop existing server, start new server with model in args (llama.cpp bakes model path into `--model` flag).
+4. Wait for health check (up to 30 seconds).
+5. Update state file with active_profile and active_model.
+6. Print confirmation.
+
+#### External backends (Ollama, LM Studio)
+
+1. Ensure server is connected (connect if needed — see 6.1).
+2. If the same profile is already loaded, exit early.
+3. If a different model is loaded, call `Backend.UnloadModel()` via HTTP API.
+4. Call `Backend.LoadModel()` via HTTP API.
+5. Update state file with active_profile and active_model.
+6. Print confirmation.
 
 ### 6.3 Unloading a Model
 
-1. Read state file; verify server is running.
-2. Call `POST /models/unload` with the model filename.
-3. Clear active_profile and active_model in state file.
-4. Print confirmation. Server remains running.
+#### Managed backends
+
+Stop the server entirely (model is embedded in server args).
+
+#### External backends
+
+Call `Backend.UnloadModel()` via HTTP API. Clear active_profile and active_model in state file. Server remains connected.
 
 ### 6.4 Stopping the Server
+
+#### Managed backends
 
 1. Read state file; extract PID.
 2. Verify the process is alive (`syscall.Kill(pid, 0)`).
@@ -345,16 +384,23 @@ Standard library only beyond that. No TUI framework; ANSI escape codes are used 
 6. Remove state file.
 7. Print confirmation.
 
+#### External backends
+
+1. Read state file.
+2. Optionally call `Backend.TryStop()` (e.g. `lms server stop`).
+3. Remove state file.
+4. Print "Disconnected from X (server still running at addr)".
+
 ### 6.5 Status Check
 
 1. Read state file. If missing → report stopped, exit 1.
-2. Verify PID is alive.
-   - Alive → report running with model (if any), backend, PID, port, uptime. Exit 0.
-   - Dead → report stale state ("server exited unexpectedly"), clean up state file. Exit 1.
+2. Verify server is alive (`IsServerAlive` — PID check for managed, health check for external).
+   - Alive → report running/connected with model (if any), backend display name, address. For managed: also PID, uptime, log. Exit 0.
+   - Dead/unreachable → report stale state, clean up state file. Exit 1.
 
-### 6.6 Stale PID Handling
+### 6.6 Stale State Handling
 
-On every operation that reads the state file, the launcher verifies the recorded PID is alive. If the process has exited (crashed, killed externally), the state file is automatically removed and the launcher proceeds as if no server is running. A notice is printed to inform the user.
+On every operation that reads the state file, the launcher verifies the server is alive. For managed backends, this is a PID check. For external backends, this is a health check HTTP call. If the server is gone, the state file is removed and the launcher proceeds as if no server is running.
 
 ## 7. State File
 
@@ -367,6 +413,7 @@ On every operation that reads the state file, the launcher verifies the recorded
 ```json
 {
   "pid": 41023,
+  "managed": true,
   "backend": "llamacpp",
   "host": "127.0.0.1",
   "port": 8080,
@@ -379,7 +426,11 @@ On every operation that reads the state file, the launcher verifies the recorded
 }
 ```
 
-`active_profile` and `active_model` are empty strings when the server is running but no model is loaded. `context_size` and `gpu_layers` record the server's global settings for hardware conflict detection.
+`managed` indicates whether the launcher owns the server process (true) or connected to an external server (false). For managed backends, PID is tracked and used for liveness checks. For external backends, PID is 0 and liveness is checked via the backend's health endpoint.
+
+`active_profile` and `active_model` are empty strings when the server is running but no model is loaded. `context_size` and `gpu_layers` record the server's global settings for hardware conflict detection. `log_file` is omitted for external backends.
+
+**Backward compatibility**: Legacy state files without the `managed` field are treated as managed if PID > 0.
 
 ### 7.3 Atomicity
 
@@ -474,24 +525,32 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 - **Multiple simultaneous servers**: Track multiple state entries keyed by port. Requires rethinking the state file and the interactive menu.
 - **Shell completions**: Generate bash/zsh/fish completions for subcommands and profile names.
 - **Config reload**: A `reload` subcommand that restarts with the same profile using updated config values.
-- **Additional backends**: LM Studio, Ollama, vLLM — each as a new `backend_<name>.go` file implementing the `Backend` interface.
+- **Additional backends**: vLLM and other backends — each as a new `backend_<name>.go` file implementing the `Backend` interface.
 - **Homebrew formula**: Package for `brew install llama-launcher`.
 - **Launchd integration**: Generate a launchd plist for auto-start on login.
 - **Health-based model status**: Query `GET /models` to verify actual loaded state rather than relying solely on state file.
 
 ## 14. Build and Installation
 
+The version number lives in the root `VERSION` file and is injected at build time via `ldflags` into `launcher.Version`.
+
 ```bash
-# Clone and build
-cd llama-launcher
-go mod tidy
-go build -o llama-launcher .
+make build          # builds ./llama-launcher binary (version injected from VERSION file)
+make install        # builds + copies to ~/.local/bin, adds to PATH if needed
+make clean          # removes binary
 
-# Install to PATH
-cp llama-launcher /usr/local/bin/
-
-# Or, for user-local install
-cp llama-launcher ~/.local/bin/
+go test ./...       # run all tests
+go test ./internal/launcher/ -run TestMergeParams  # run a single test
+go vet ./...        # static analysis
 ```
 
 The binary is statically linked (default for Go on macOS with CGO_ENABLED=0) and has no external dependencies at runtime.
+
+## 15. Coding Standards
+
+Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read the base references and the Go-specific extensions before making changes.
+
+### After Changing Code
+
+1. Update the documents `llama-launcher.TDD.md` as well as `CHANGELOG.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
+2. Run `make install` to build and install the updated binary.

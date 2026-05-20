@@ -181,8 +181,8 @@ profiles:
 		if len(cfg.Profiles) != 1 {
 			t.Errorf("Profiles count = %d, want 1", len(cfg.Profiles))
 		}
-		if cfg.DefaultBackend != "llamacpp" {
-			t.Errorf("DefaultBackend = %q, want llamacpp", cfg.DefaultBackend)
+		if cfg.Defaults.Server == nil || *cfg.Defaults.Server != "llamacpp" {
+			t.Errorf("Defaults.Server = %v, want llamacpp", cfg.Defaults.Server)
 		}
 	})
 
@@ -248,9 +248,11 @@ func TestResolveProfile(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		strPtr := func(v string) *string { return &v }
 		cfg := &Config{
-			ModelsDir:      dir,
-			DefaultBackend: "llamacpp",
+			Servers:  map[string]string{"llamacpp": ""},
+			ModelsDir: dir,
+			Defaults: ProfileParams{Server: strPtr("llamacpp")},
 			Profiles: map[string]Profile{
 				"test": {Description: "test", Model: modelRef},
 			},
@@ -273,8 +275,9 @@ func TestResolveProfile(t *testing.T) {
 		t.Parallel()
 
 		cfg := &Config{
-			DefaultBackend: "llamacpp",
-			Profiles:       map[string]Profile{},
+			Servers:  map[string]string{"llamacpp": ""},
+			Defaults: ProfileParams{Server: func() *string { s := "llamacpp"; return &s }()},
+			Profiles: map[string]Profile{},
 		}
 
 		_, err := cfg.ResolveProfile("nonexistent")
