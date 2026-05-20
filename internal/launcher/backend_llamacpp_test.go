@@ -1,8 +1,11 @@
 package launcher
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -185,6 +188,47 @@ func TestLlamaCppServerBinary(t *testing.T) {
 	if got := b.ServerBinary(cfg); got != "llama-server" {
 		t.Errorf("ServerBinary = %q, want llama-server", got)
 	}
+}
+
+func TestLlamaCppHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+
+	t.Run("healthy with 200", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		if err := b.HealthCheck(addrFromURL(t, srv.URL)); err != nil {
+			t.Errorf("expected healthy, got: %v", err)
+		}
+	})
+
+	t.Run("unhealthy with non-200", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+
+		err := b.HealthCheck(addrFromURL(t, srv.URL))
+		if err == nil {
+			t.Fatal("expected error for unhealthy status")
+		}
+		if !strings.Contains(err.Error(), "unhealthy") {
+			t.Errorf("error = %q, want it to contain 'unhealthy'", err)
+		}
+	})
+
+	t.Run("unreachable server", func(t *testing.T) {
+		t.Parallel()
+		if err := b.HealthCheck("127.0.0.1:1"); err == nil {
+			t.Fatal("expected error for unreachable server")
+		}
+	})
 }
 
 // --- test helpers ---

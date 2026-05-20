@@ -184,16 +184,15 @@ func (c *Config) BackendAddr(backendName string) string {
 	return b.DefaultAddr()
 }
 
-// ConfiguredBackendAddr returns the default address for a backend. Each
-// backend uses its own default address (e.g. llamacpp→:8080,
-// lmstudio→:1234) so that health checks don't cross-detect another
-// backend's server.
+// ConfiguredBackendAddr returns the address for a backend as resolved from
+// config defaults and backend fallbacks. This is the address the launcher
+// would use when connecting to the backend without a profile-specific override.
 func (c *Config) ConfiguredBackendAddr(backendName string) string {
 	b, err := GetBackend(backendName)
 	if err != nil {
 		return ""
 	}
-	var params ProfileParams
+	params := c.Defaults
 	applyBackendFallbacks(&params, c, backendName, b)
 	return fmt.Sprintf("%s:%d", *params.Host, *params.Port)
 }

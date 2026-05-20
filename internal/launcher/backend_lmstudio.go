@@ -23,7 +23,10 @@ func (b *LMStudio) DisplayName() string { return "LM-Studio" }
 func (b *LMStudio) DefaultAddr() string { return "localhost:1234" }
 
 func (b *LMStudio) HealthCheck(addr string) error {
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + addr + "/v1/models")
+	client := &http.Client{Timeout: 2 * time.Second}
+	base := "http://" + addr
+
+	resp, err := client.Get(base + "/v1/models")
 	if err != nil {
 		return err
 	}
@@ -31,6 +34,22 @@ func (b *LMStudio) HealthCheck(addr string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
+
+	// Exclude other backends that also serve /v1/models.
+	// llamacpp uniquely serves /health; Ollama uniquely serves /api/tags.
+	for _, chk := range []struct{ path, name string }{
+		{"/health", "llamacpp"},
+		{"/api/tags", "Ollama"},
+	} {
+		r, err := client.Get(base + chk.path)
+		if err == nil {
+			r.Body.Close()
+			if r.StatusCode == http.StatusOK {
+				return fmt.Errorf("not LM Studio: %s endpoint responded (%s detected)", chk.path, chk.name)
+			}
+		}
+	}
+
 	return nil
 }
 

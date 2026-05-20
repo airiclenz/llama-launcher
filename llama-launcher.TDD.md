@@ -284,6 +284,11 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). Per-backend state file read/write (`state-{backend}.json`), PID tracking, `LoadProfile` orchestration with configurable auto-stop/auto-unload, log management. |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
 | `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. |
+| `config_test.go` | Tests for config loading, validation, and parameter merging. |
+| `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, model resolution, and httptest-based health check. |
+| `backend_ollama_test.go` | httptest-based tests for Ollama health check, including body discrimination. |
+| `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check, including cross-backend exclusion. |
+| `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
 
 ### 5.3 Backend Interface
 
@@ -326,6 +331,18 @@ Adding a new backend requires:
 2. Register via `init()` calling `RegisterBackend()`.
 3. Add the backend name to `servers:` in the config YAML.
 4. Set `server:` on relevant profiles (or set as `defaults.server`).
+
+#### Health Check Discrimination
+
+All backends may share the same address so that a single client configuration works regardless of which backend is active. Each backend's `HealthCheck` must therefore identify whether the responding server is actually its own, not another backend running on the same port.
+
+| Backend | Primary Endpoint | Discrimination |
+|---|---|---|
+| `llamacpp` | `GET /health` → 200 | Unique — only llama-server serves `/health`. |
+| `lmstudio` | `GET /v1/models` → 200 | Negative checks: excludes llamacpp (rejects if `GET /health` returns 200) and Ollama (rejects if `GET /api/tags` returns 200). |
+| `ollama` | `GET /` → 200 | Body must contain "Ollama" (positive identification). |
+
+When adding a new backend that shares an endpoint with an existing one (e.g. `/v1/models`), add an exclusion entry to any existing backend whose health check could false-positive, and ensure the new backend either uses a unique endpoint or performs its own exclusion checks.
 
 ### 5.4 External Dependencies
 
@@ -424,7 +441,7 @@ Call `Backend.UnloadModel()` via HTTP API. Clear active_profile and active_model
 
 ### 6.6 Stale State Handling
 
-On every operation that reads state, the launcher verifies the server is alive. For managed backends, this is a PID check. For external backends, this is a health check HTTP call. If the server is gone, the per-backend state file is removed and the launcher proceeds as if that backend is not running.
+On every operation that reads state, the launcher verifies the server is alive. For managed backends, this is a PID check. For external backends, this is a health check HTTP call. Health checks are discriminating — each backend identifies its own server and rejects responses from other backends sharing the same address (see §5.3 Health Check Discrimination). If the server is gone or belongs to a different backend, the per-backend state file is removed and the launcher proceeds as if that backend is not running.
 
 ## 7. State Files
 
@@ -566,7 +583,31 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 - **Launchd integration**: Generate a launchd plist for auto-start on login.
 - **Health-based model status**: Query `GET /models` to verify actual loaded state rather than relying solely on state file.
 
-## 14. Build and Installation
+## 14. Testing
+
+### 14.1 Unit Tests (httptest)
+
+Backend health check methods are tested using `net/http/httptest` mock servers. These tests run as part of `go test ./...` with no external dependencies.
+
+Each backend's test verifies correct HTTP request/response handling:
+
+| Test | What it covers |
+|---|---|
+| `TestLlamaCppHealthCheck` | 200 on `/health` → success; non-200 → error; unreachable → error. |
+| `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error. |
+| `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when exclusion probes fail; detects llamacpp via `/health` returning 200; detects Ollama via `/api/tags` returning 200; non-200 → error; unreachable → error. |
+
+The LM Studio tests are notable for verifying the cross-detection discrimination: the health check must reject responses from other backends running on the same port.
+
+Existing unit tests also cover config loading/validation (`TestLoadConfig`), parameter merging (`TestMergeParams`), llama.cpp arg assembly (`TestLlamaCppBuildServerArgs`), and model resolution (`TestLlamaCppResolveModel`).
+
+### 14.2 Test Helpers
+
+`helpers_test.go` provides `addrFromURL(t, rawURL) string`, which parses an `httptest.NewServer` URL and returns the `host:port` portion for passing to backend methods that expect an `addr` string.
+
+## 15. Build and Installation
+
+
 
 The version number lives in the root `VERSION` file and is injected at build time via `ldflags` into `launcher.Version`.
 
@@ -582,7 +623,7 @@ go vet ./...        # static analysis
 
 The binary is statically linked (default for Go on macOS with CGO_ENABLED=0) and has no external dependencies at runtime.
 
-## 15. Coding Standards
+## 16. Coding Standards
 
 Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read the base references and the Go-specific extensions before making changes.
 

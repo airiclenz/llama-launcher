@@ -37,7 +37,7 @@ func (b *Ollama) HealthCheck(addr string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
-	if len(body) > 0 && !bytes.Contains(body, []byte("Ollama")) {
+	if !bytes.Contains(body, []byte("Ollama")) {
 		return fmt.Errorf("unexpected response from %s", addr)
 	}
 	return nil

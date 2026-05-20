@@ -2,6 +2,11 @@
 
 ## 1.2.0
 
+### Fixed
+
+- **Health check cross-detection** — LM Studio no longer falsely shows as "online" when another backend (llamacpp or Ollama) is running on the same port. Each backend's health check now discriminates by probing backend-specific endpoints.
+- **Ollama health check** — an empty-body 200 response no longer passes the health check; the body must contain "Ollama".
+
 ### Added
 
 - **Server enable/disable toggle** — servers in the `servers` section now use boolean values (`true`/`false`). Disabled servers are hidden from status display, and their profiles are excluded from menus and CLI output. At least one server must be enabled.
@@ -15,6 +20,7 @@
 - **`PIDTracker` interface** — external backends that auto-start (Ollama) now track PID and log file for proper managed-mode lifecycle.
 - **`ModelLister` interface** — backends can list running models (Ollama's `/api/ps`), shown in status output.
 - **Ollama lifecycle management** — `ollama serve` auto-start with PID tracking, proper process stop via `ollama stop` + SIGTERM, model unload via API with error checking.
+- **Backend health check tests** — httptest-based unit tests for all three backends' `HealthCheck` methods, including cross-detection discrimination (LM Studio excludes llamacpp and Ollama responses on the same port).
 
 ### Changed
 
