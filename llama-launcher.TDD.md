@@ -106,7 +106,7 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
     ↑↓ select · enter load · q quit
 ```
 
-Selecting "Switch model" presents the profile list (excluding the currently loaded profile), unloads the current model via API, loads the new one, and exits.
+Selecting "Switch model" presents the profile list (excluding the currently loaded profile), unloads the current model via API, loads the new one, and exits. When only one profile is configured, "Switch model" is omitted from the menu entirely.
 
 ### 3.2 Subcommands
 

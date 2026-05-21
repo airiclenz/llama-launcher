@@ -120,7 +120,7 @@ llama-launcher
 The menu adapts to three states:
 
 - **Stopped** -- select a profile to start the server and load a model
-- **Running with model** -- switch models, show config, unload model, stop/disconnect, show log, edit config
+- **Running with model** -- switch models (hidden when only one profile is configured), show config, unload model, stop/disconnect, show log, edit config
 - **Running (no model)** -- load a profile, stop/disconnect, show log, edit config
 
 ### CLI commands

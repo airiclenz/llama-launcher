@@ -118,10 +118,11 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 		return serverStatusLines(cfg)
 	}
 
-	items := []menuItem{
-		{Label: "Switch model"},
-		{Label: "Show model config"},
+	items := []menuItem{}
+	if len(cfg.ProfileNames()) > 1 {
+		items = append(items, menuItem{Label: "Switch model"})
 	}
+	items = append(items, menuItem{Label: "Show model config"})
 	items = append(items, menuItem{Label: "Unload model"})
 	items = append(items, menuItem{Label: "Stop server"})
 	if state.LogFile != "" {
@@ -759,39 +760,47 @@ func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 			displayName, state.Host, state.Port)
 	}
 
-	fmt.Println("    1  Switch model")
-	fmt.Println("    2  Show config")
-	fmt.Println("    3  Unload model")
-	fmt.Println("    4  Stop server")
-	n := 4
+	n := 0
+	switchIdx, configIdx, unloadIdx, stopIdx, logIdx, editIdx := -1, -1, -1, -1, -1, -1
+	if len(cfg.ProfileNames()) > 1 {
+		n++
+		switchIdx = n
+		fmt.Printf("    %d  Switch model\n", n)
+	}
+	n++
+	configIdx = n
+	fmt.Printf("    %d  Show config\n", n)
+	n++
+	unloadIdx = n
+	fmt.Printf("    %d  Unload model\n", n)
+	n++
+	stopIdx = n
+	fmt.Printf("    %d  Stop server\n", n)
 	if state.LogFile != "" {
 		n++
+		logIdx = n
 		fmt.Printf("    %d  Show log\n", n)
 	}
 	n++
+	editIdx = n
 	fmt.Printf("    %d  Edit config\n", n)
 	fmt.Println("    q  Quit")
 	fmt.Printf("\n  Select [1-%d, q]: ", n)
 
-	choice := readLine()
+	choice, _ := strconv.Atoi(readLine())
 	switch choice {
-	case "1":
+	case switchIdx:
 		return doSwitchModel(cfg, state)
-	case "2":
+	case configIdx:
 		return doShowConfig(cfg, state)
-	case "3":
+	case unloadIdx:
 		return doUnloadModel(cfg)
-	case "4":
+	case stopIdx:
 		return doStopServer(cfg, state)
-	case "5":
-		if state.LogFile != "" {
-			return TailLog(state.LogFile, false)
-		}
+	case logIdx:
+		return TailLog(state.LogFile, false)
+	case editIdx:
 		return doEditConfig(cfg)
-	case "6":
-		if state.LogFile != "" {
-			return doEditConfig(cfg)
-		}
 	}
 	return nil
 }

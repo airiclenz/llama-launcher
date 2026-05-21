@@ -2,6 +2,10 @@
 
 ## 1.2.1
 
+### Changed
+
+- **Hide "Switch model" when only one profile exists** — when the config defines a single profile and it is loaded, the "Switch model" menu item is no longer shown. Applies to both the TUI and non-terminal fallback menus.
+
 ### Fixed
 
 - **State file persisted model before load succeeded** — `connectExternalServer` and `startManagedServer` wrote `active_profile` and `active_model` to the state file before the model was actually loaded. If `LoadModel` or the health check then failed, the state file on disk incorrectly showed the model as loaded. Model fields are now written only after the load or health check succeeds.
