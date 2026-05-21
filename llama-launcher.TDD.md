@@ -412,10 +412,11 @@ Standard library only beyond that. No TUI framework; ANSI escape codes are used 
 6. Open the log file for stdout/stderr redirection.
 7. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
 8. Call `cmd.Start()` (non-blocking).
-9. Write state file with `managed: true`, PID, backend, host, port, and timestamp.
+9. Write state file with `managed: true`, PID, backend, host, port, and timestamp. Model fields (`active_profile`, `active_model`) are not written yet.
 10. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
 11. Wait for backend health check to succeed (up to 15 seconds).
-12. Print confirmation line.
+12. Write `active_profile`, `active_model`, `context_size`, and `gpu_layers` to the state file only after the health check succeeds.
+13. Print confirmation line.
 
 #### External backends (Ollama, LM Studio)
 
@@ -423,7 +424,7 @@ Standard library only beyond that. No TUI framework; ANSI escape codes are used 
 2. Call `Backend.HealthCheck(addr)` to verify server is reachable.
 3. If not reachable, call `Backend.TryStart()` (e.g. `lms server start`, `ollama serve`).
 4. Poll health check until successful (up to 15 seconds) or fail with a user-friendly message.
-5. Write state file with `managed: false`, PID 0, backend, host, port, and timestamp.
+5. Write state file with `managed: false`, PID 0, backend, host, port, and timestamp. Model fields (`active_profile`, `active_model`) are not written yet.
 6. Print confirmation.
 
 ### 6.2 Loading a Model
@@ -436,7 +437,7 @@ Before loading, if `auto_stop_server` is true (the default), any running servers
 2. If the same profile is already loaded (check state file), exit early.
 3. Stop existing server, start new server with model in args (llama.cpp bakes model path into `--model` flag).
 4. Wait for health check (up to 30 seconds).
-5. Update per-backend state file with active_profile and active_model.
+5. Update per-backend state file with active_profile, active_model, context_size, and gpu_layers only after the health check succeeds. If starting or health check fails, the state file contains only server connection info — no model fields.
 6. Print confirmation.
 
 #### External backends (Ollama, LM Studio)
@@ -445,7 +446,7 @@ Before loading, if `auto_stop_server` is true (the default), any running servers
 2. If the same profile is already loaded, exit early.
 3. If a different model is loaded and `auto_unload` is true (the default), call `Backend.UnloadModel()` via HTTP API. When `auto_unload: false`, the previous model remains loaded.
 4. Call `Backend.LoadModel()` via HTTP API.
-5. Update per-backend state file with active_profile and active_model.
+5. Update per-backend state file with active_profile and active_model only after LoadModel succeeds. If LoadModel fails, the state file contains only server connection info — no model fields.
 6. Print confirmation.
 
 ### 6.3 Unloading a Model

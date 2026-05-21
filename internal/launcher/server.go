@@ -103,27 +103,14 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend
 	}
 	logFile.Close()
 
-	ctxSize := 0
-	if profile.ContextSize != nil {
-		ctxSize = *profile.ContextSize
-	}
-	gpuLayers := 0
-	if profile.GPULayers != nil {
-		gpuLayers = *profile.GPULayers
-	}
-
 	state := &ServerState{
-		PID:           cmd.Process.Pid,
-		Managed:       true,
-		Backend:       profile.Backend,
-		Host:          *profile.Host,
-		Port:          *profile.Port,
-		StartedAt:     time.Now(),
-		LogFile:       logPath,
-		ActiveProfile: profile.Name,
-		ActiveModel:   profile.ModelPath,
-		ContextSize:   ctxSize,
-		GPULayers:     gpuLayers,
+		PID:       cmd.Process.Pid,
+		Managed:   true,
+		Backend:   profile.Backend,
+		Host:      *profile.Host,
+		Port:      *profile.Port,
+		StartedAt: time.Now(),
+		LogFile:   logPath,
 	}
 
 	if err := writeBackendState(state.Backend, state); err != nil {
@@ -165,15 +152,13 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b Backend) (*S
 	}
 
 	state := &ServerState{
-		PID:           pid,
-		Managed:       pid > 0,
-		Backend:       profile.Backend,
-		Host:          *profile.Host,
-		Port:          *profile.Port,
-		StartedAt:     time.Now(),
-		LogFile:       logFile,
-		ActiveProfile: profile.Name,
-		ActiveModel:   profile.ModelPath,
+		PID:       pid,
+		Managed:   pid > 0,
+		Backend:   profile.Backend,
+		Host:      *profile.Host,
+		Port:      *profile.Port,
+		StartedAt: time.Now(),
+		LogFile:   logFile,
 	}
 
 	if err := writeBackendState(state.Backend, state); err != nil {
@@ -334,6 +319,18 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerStat
 	reportStep(progress, "Waiting for server")
 	if err := WaitForHealth(b, state.Addr(), 30*time.Second); err != nil {
 		return nil, false, err
+	}
+
+	state.ActiveProfile = profile.Name
+	state.ActiveModel = profile.ModelPath
+	if profile.ContextSize != nil {
+		state.ContextSize = *profile.ContextSize
+	}
+	if profile.GPULayers != nil {
+		state.GPULayers = *profile.GPULayers
+	}
+	if err := writeBackendState(state.Backend, state); err != nil {
+		return nil, false, fmt.Errorf("writing state: %w", err)
 	}
 
 	return state, true, nil

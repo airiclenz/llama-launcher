@@ -2,6 +2,10 @@
 
 ## 1.2.1
 
+### Fixed
+
+- **State file persisted model before load succeeded** — `connectExternalServer` and `startManagedServer` wrote `active_profile` and `active_model` to the state file before the model was actually loaded. If `LoadModel` or the health check then failed, the state file on disk incorrectly showed the model as loaded. Model fields are now written only after the load or health check succeeds.
+
 ### Added
 
 - **`logs clean` subcommand** — delete old log files from the log directory. Defaults to removing files older than 7 days; `--days N` changes the threshold, `--all` removes everything. Always skips log files belonging to running servers. Reports how many files were removed and how much space was freed.

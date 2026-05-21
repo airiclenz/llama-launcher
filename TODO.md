@@ -14,11 +14,6 @@
   - `config init` creates if missing, `config init --force` overwrites existing
   - Helpful when the user has mangled their config and wants a fresh starting point
 
-- [x] Log cleanup / rotation
-  - `logs clean` subcommand that deletes logs older than N days (default 7), with `--days N` and `--all` flags
-  - `log_retention` config option (e.g. `log_retention: 7`) with automatic cleanup on server start
-  - Cleanup reports how many files and how much space was freed; active server logs are always protected
-
 - [ ] `status --json` and `list --json` output
   - Structured JSON output for scripting and integration with tools like `jq`
   - `status --json`: backend name, running state, address, active profile/model, PID, uptime
