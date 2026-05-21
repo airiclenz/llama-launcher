@@ -116,7 +116,7 @@ For scripting, automation, and quick access:
 |---|---|
 | `llama-launcher load <profile>` | Primary command. Start server if needed, then load model via API. Unloads current model first if different (respects `auto_unload`/`auto_stop_server`). |
 | `llama-launcher unload [profile]` | Unload model via API (external backends) or stop server (managed backends). Optional profile argument to target a specific backend; auto-detects when only one model is loaded. |
-| `llama-launcher start` | Start server without loading a model. |
+| `llama-launcher start [--profile p]` | Start server without loading a model. With `--profile` (or `-p`), resolve the named profile and load it — equivalent to `load <profile>`. |
 | `llama-launcher stop [backend]` | Send SIGTERM to running server, wait for graceful shutdown, clean up state. Optional backend argument; auto-detects when only one server is running. |
 | `llama-launcher status` | Print per-backend server state (running/stopped, model, address) for all configured backends. Exit code 0 if any running, 1 if all stopped. |
 | `llama-launcher list` | Print all configured profiles with descriptions and backend. |

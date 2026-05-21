@@ -75,7 +75,7 @@ func Run(args []string) int {
 	case "unload":
 		return cmdUnload(cfg, args[1:])
 	case "start":
-		return cmdStart(cfg)
+		return cmdStart(cfg, args[1:])
 	case "stop":
 		return cmdStop(cfg, args[1:])
 	case "status":
@@ -182,7 +182,26 @@ func cmdUnload(cfg *Config, args []string) int {
 	return 0
 }
 
-func cmdStart(cfg *Config) int {
+func cmdStart(cfg *Config, args []string) int {
+	var profileName string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--profile" || args[i] == "-p" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a profile name\n", args[i])
+				return 2
+			}
+			profileName = args[i+1]
+			i++
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", args[i])
+		return 2
+	}
+
+	if profileName != "" {
+		return cmdLoad(cfg, []string{profileName})
+	}
+
 	if cfg.Defaults.Server == nil {
 		fmt.Fprintln(os.Stderr, "Error: no default server configured in defaults section")
 		return 2
@@ -532,7 +551,7 @@ Usage: llama-launcher [--config path] [command] [args]
 Commands:
   load <profile>        Start server with model (stops existing if different)
   unload [profile]      Unload model (for managed backends: stops server)
-  start                 Start server without a model
+  start [--profile p]   Start server (optionally with a profile)
   stop [backend]        Stop the server
   status                Show server and model status
   list                  List available profiles

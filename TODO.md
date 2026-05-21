@@ -9,7 +9,7 @@
   - Useful since "Edit config" opens the file externally with no feedback loop
   - Reports all validation errors at once (missing servers, unknown backends, deprecated fields, missing models)
 
-- [ ] `--profile` flag on `start` subcommand
+- [x] `--profile` flag on `start` subcommand
   - `llama-launcher start --profile <name>` as an alias for `load`
   - More intuitive for users who think in terms of "start the server with this model"
   - Keeps plain `start` behavior unchanged (starts default server without a model)

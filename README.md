@@ -125,7 +125,7 @@ The menu adapts to three states:
 ```bash
 llama-launcher load <profile>        # Start server (if needed) and load model
 llama-launcher unload [profile]      # Unload model (stops server for managed backends)
-llama-launcher start                 # Start server without loading a model
+llama-launcher start [--profile p]   # Start server (optionally with a profile)
 llama-launcher stop [backend]        # Stop the server
 llama-launcher status                # Show all server and model status
 llama-launcher list                  # List available profiles
