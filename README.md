@@ -55,6 +55,9 @@ servers:
 models_dir: ~/Models
 log_dir: ~/.config/llama-launcher/logs
 
+# Automatically delete log files older than N days on server start
+# log_retention: 7
+
 # Keep the interactive menu open after each action (default: close)
 auto_close: false
 
@@ -129,7 +132,8 @@ llama-launcher start [--profile p]   # Start server (optionally with a profile)
 llama-launcher stop [backend]        # Stop the server
 llama-launcher status                # Show all server and model status
 llama-launcher list                  # List available profiles
-llama-launcher logs [backend] [-f]   # Tail the server log
+llama-launcher logs [backend] [-f]          # Tail the server log
+llama-launcher logs clean [--days N|--all]  # Remove old log files
 ```
 
 ### Options

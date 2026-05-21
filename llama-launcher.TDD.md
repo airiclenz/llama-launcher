@@ -121,6 +121,7 @@ For scripting, automation, and quick access:
 | `llama-launcher status` | Print per-backend server state (running/stopped, model, address) for all configured backends. Exit code 0 if any running, 1 if all stopped. |
 | `llama-launcher list` | Print all configured profiles with descriptions and backend. |
 | `llama-launcher logs [backend] [--follow]` | Tail a server's log file. Optional backend argument; auto-detects the active backend. With `--follow`, behaves like `tail -f`. This is the one subcommand that remains running until interrupted. |
+| `llama-launcher logs clean [--days N\|--all]` | Delete old log files. Default threshold is 7 days; `--days N` overrides. `--all` removes everything. Always skips logs belonging to running servers. Reports files removed and space freed. |
 | `llama-launcher config validate` | Parse config and report all validation problems at once (deprecated fields, unknown/disabled servers, missing models). Uses `parseConfig` + `validateAll` to collect errors without stopping at the first. Exit 0 if valid, 2 if invalid. |
 
 All subcommands except `logs --follow` exit immediately after completing their action.
@@ -161,6 +162,10 @@ models_dir: ~/Models
 
 # Directory for server log files.
 log_dir: ~/.config/llama-launcher/logs
+
+# Automatically delete log files older than N days on server start.
+# Runs silently before each new log file is created. Unset = no cleanup.
+# log_retention: 7
 
 # Stop the old server when switching to a different backend (default: true).
 # Set to false to allow multiple servers to run simultaneously.
@@ -293,7 +298,8 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | `backend_llamacpp.go` | llama.cpp backend (managed): server arg assembly, model path resolution. Registers via `init()`. |
 | `backend_ollama.go` | Ollama backend (external): HTTP API model load/unload, auto-start via `ollama serve`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio backend (external): HTTP API model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
-| `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). Per-backend state file read/write (`state-{backend}.json`), PID tracking, `LoadProfile` orchestration with configurable auto-stop/auto-unload, log management. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
+| `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). Per-backend state file read/write (`state-{backend}.json`), PID tracking, `LoadProfile` orchestration with configurable auto-stop/auto-unload, log management. `createLogPath` triggers automatic cleanup when `log_retention` is set. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
+| `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
 | `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. |
@@ -302,6 +308,7 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
 | `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, and `extractLMStudioError`. |
 | `backend_test.go` | Tests for `GetBackend` with known and unknown backends. |
+| `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `backendStatePath`, `ServerState` methods, and state file permissions. |
 | `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting. |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
@@ -586,7 +593,14 @@ Example: `~/.config/llama-launcher/logs/llamacpp-20260519-171200.log`
 
 The `logs` subcommand tails the current server's log file (path from state file). With `--follow`, it uses `tail -f` and is the only mode where the launcher remains running.
 
-Log rotation and cleanup are out of scope — the user manages this externally or the files are small enough to be irrelevant.
+### 10.1 Log Cleanup
+
+Old log files can be cleaned up manually or automatically:
+
+- **Manual:** `logs clean` deletes files older than 7 days (default). `--days N` overrides the threshold; `--all` removes everything. Reports files removed and space freed.
+- **Automatic:** Setting `log_retention: N` in config causes `createLogPath` to silently delete files older than N days before each new log is created. No output during automatic cleanup.
+
+Both paths use `cleanupLogs()`, which determines file age from the filename timestamp (not mtime) and always skips log files belonging to running servers (checked via `ReadAllStates` + `IsServerAlive`).
 
 ## 11. Error Handling
 

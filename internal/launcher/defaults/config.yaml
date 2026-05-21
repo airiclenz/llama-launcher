@@ -49,6 +49,9 @@ auto_stop_server: true
 # server (default: true). Set to false to keep multiple models loaded at once.
 auto_unload: true
 
+# Automatically delete log files older than N days on server start.
+log_retention: 7
+
 # ──────────────────────────────────────────────────────────────
 # UI behaviour
 # ──────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 var Version = "dev"
@@ -441,6 +442,10 @@ func cmdList(cfg *Config) int {
 }
 
 func cmdLogs(cfg *Config, args []string) int {
+	if len(args) > 0 && args[0] == "clean" {
+		return cmdLogsClean(cfg, args[1:])
+	}
+
 	follow := false
 	var backend string
 	for _, arg := range args {
@@ -506,6 +511,59 @@ func cmdLogs(cfg *Config, args []string) int {
 	return 0
 }
 
+func cmdLogsClean(cfg *Config, args []string) int {
+	days := 7
+	daysSet := false
+	deleteAll := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--days":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --days requires a value")
+				return 2
+			}
+			n := 0
+			for _, c := range args[i+1] {
+				if c < '0' || c > '9' {
+					fmt.Fprintln(os.Stderr, "Error: --days value must be a positive integer")
+					return 2
+				}
+				n = n*10 + int(c-'0')
+			}
+			days = n
+			daysSet = true
+			i++
+		case "--all":
+			deleteAll = true
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", args[i])
+			fmt.Fprintln(os.Stderr, "Usage: llama-launcher logs clean [--days N|--all]")
+			return 2
+		}
+	}
+
+	if daysSet && deleteAll {
+		fmt.Fprintln(os.Stderr, "Error: --days and --all are mutually exclusive")
+		return 2
+	}
+
+	maxAge := time.Duration(days) * 24 * time.Hour
+	result, err := cleanupLogs(cfg.LogDir, maxAge, deleteAll)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 3
+	}
+
+	if result.Removed == 0 {
+		fmt.Println("No log files to clean.")
+		return 0
+	}
+
+	fmt.Printf("Removed %d file(s), freed %s\n", result.Removed, formatBytes(result.Freed))
+	return 0
+}
+
 func cmdConfig(configPath string, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: llama-launcher config <subcommand>")
@@ -555,7 +613,8 @@ Commands:
   stop [backend]        Stop the server
   status                Show server and model status
   list                  List available profiles
-  logs [backend] [-f]   Tail the server log
+  logs [backend] [-f]          Tail the server log
+  logs clean [--days N|--all]  Remove old log files
   config validate       Check config file for errors
   version               Print version and exit
 

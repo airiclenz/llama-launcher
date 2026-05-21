@@ -78,7 +78,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend
 	}
 
 	args := mb.BuildServerArgs(cfg, profile)
-	logPath, err := createLogPath(cfg.LogDir, profile.Backend)
+	logPath, err := createLogPath(cfg.LogDir, profile.Backend, cfg.LogRetention)
 	if err != nil {
 		return nil, err
 	}
@@ -545,7 +545,10 @@ func TailLog(logPath string, follow bool) error {
 	return cmd.Run()
 }
 
-func createLogPath(logDir, name string) (string, error) {
+func createLogPath(logDir, name string, retentionDays *int) (string, error) {
+	if retentionDays != nil {
+		autoCleanupLogs(logDir, *retentionDays)
+	}
 	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating log directory: %w", err)
 	}

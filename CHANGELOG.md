@@ -4,6 +4,8 @@
 
 ### Added
 
+- **`logs clean` subcommand** — delete old log files from the log directory. Defaults to removing files older than 7 days; `--days N` changes the threshold, `--all` removes everything. Always skips log files belonging to running servers. Reports how many files were removed and how much space was freed.
+- **`log_retention` config option** — set `log_retention: 7` (days) to automatically clean up old log files on every server start. Runs silently before the new log file is created. Unset by default (no automatic cleanup).
 - **`start --profile` flag** — `llama-launcher start --profile <name>` (or `-p`) starts the server and loads a profile in one step, acting as an alias for `load`. Plain `start` behavior is unchanged.
 - **`config validate` subcommand** — dedicated command to check the config file for errors after editing. Reports all validation problems at once (deprecated fields, unknown servers, disabled servers, missing model files) instead of stopping at the first error. Exit code 0 for valid, 2 for invalid.
 - **Step-by-step progress popup** — loading, stopping, and unloading operations now show a multi-step progress popup that updates in place as each lifecycle stage completes (e.g. "Starting server" → "Waiting for server"). CLI subcommands print plain text step output. Replaces the static single-line activity indicator.

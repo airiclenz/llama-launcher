@@ -621,7 +621,6 @@ func hasMultipleBackends(cfg *Config) bool {
 	return false
 }
 
-
 func backendDisplayName(backendName string) string {
 	b, err := GetBackend(backendName)
 	if err != nil {
@@ -710,7 +709,7 @@ func serverStatusLines(cfg *Config) []string {
 			}
 			detail := addr
 			if s, ok := stateMap[name]; ok && s.ActiveProfile != "" {
-				detail = addr + " · " + profileDisplayName(cfg, s.ActiveProfile)
+				detail = addr + " · " + fmt.Sprintf("%s%s%s", cBoldLightGray, profileDisplayName(cfg, s.ActiveProfile), cReset)
 			}
 			if modelStr != "" {
 				detail += " · " + modelStr

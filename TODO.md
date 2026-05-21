@@ -3,17 +3,6 @@
 
 ## Feature ideas
 
-- [x] `config validate` subcommand
-  - Dedicated command to verify config YAML is correct after editing
-  - Currently validation only happens implicitly on load
-  - Useful since "Edit config" opens the file externally with no feedback loop
-  - Reports all validation errors at once (missing servers, unknown backends, deprecated fields, missing models)
-
-- [x] `--profile` flag on `start` subcommand
-  - `llama-launcher start --profile <name>` as an alias for `load`
-  - More intuitive for users who think in terms of "start the server with this model"
-  - Keeps plain `start` behavior unchanged (starts default server without a model)
-
 - [ ] Shell completions (bash/zsh/fish)
   - Tab-complete profile names for `load`, `unload`, and the new `start --profile`
   - Tab-complete backend names for `stop` and `logs`
@@ -25,11 +14,10 @@
   - `config init` creates if missing, `config init --force` overwrites existing
   - Helpful when the user has mangled their config and wants a fresh starting point
 
-- [ ] Log cleanup / rotation
-  - Log files accumulate in `~/.config/llama-launcher/logs/` with no cleanup
-  - Option A: `logs clean` subcommand that deletes logs older than N days (default 7)
-  - Option B: `log_retention` config option (e.g. `log_retention: 7d`) with automatic cleanup on server start
-  - Should report how many files and how much space was freed
+- [x] Log cleanup / rotation
+  - `logs clean` subcommand that deletes logs older than N days (default 7), with `--days N` and `--all` flags
+  - `log_retention` config option (e.g. `log_retention: 7`) with automatic cleanup on server start
+  - Cleanup reports how many files and how much space was freed; active server logs are always protected
 
 - [ ] `status --json` and `list --json` output
   - Structured JSON output for scripting and integration with tools like `jq`

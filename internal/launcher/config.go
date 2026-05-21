@@ -31,6 +31,7 @@ type Config struct {
 	Endpoints       map[string]string  `yaml:"endpoints"`       // deprecated: merge into servers
 	ModelsDir       string             `yaml:"models_dir"`
 	LogDir          string             `yaml:"log_dir"`
+	LogRetention    *int               `yaml:"log_retention"`
 	AutoClose       *bool              `yaml:"auto_close"`
 	AutoStopServer  *bool              `yaml:"auto_stop_server"`
 	AutoUnload      *bool              `yaml:"auto_unload"`
@@ -165,6 +166,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config: profile %q uses 'backend' which has been renamed to 'server'\n  Change to: server: %s", name, p.Backend)
 		}
 	}
+	if c.LogRetention != nil && *c.LogRetention < 0 {
+		return fmt.Errorf("config: log_retention must be 0 or positive")
+	}
 	if c.LogDir == "" {
 		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
 	}
@@ -216,6 +220,9 @@ func (c *Config) validateAll() []string {
 		}
 	}
 
+	if c.LogRetention != nil && *c.LogRetention < 0 {
+		problems = append(problems, "log_retention must be 0 or positive")
+	}
 	if c.LogDir == "" {
 		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
 	}
