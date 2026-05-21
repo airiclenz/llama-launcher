@@ -41,6 +41,10 @@ func Run(args []string) int {
 		configPath = DefaultConfigPath()
 	}
 
+	if len(args) >= 1 && args[0] == "config" {
+		return cmdConfig(configPath, args[1:])
+	}
+
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		if errors.Is(err, ErrConfigNotFound) {
@@ -483,6 +487,44 @@ func cmdLogs(cfg *Config, args []string) int {
 	return 0
 }
 
+func cmdConfig(configPath string, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: llama-launcher config <subcommand>")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Subcommands:")
+		fmt.Fprintln(os.Stderr, "  validate    Check config file for errors")
+		return 2
+	}
+
+	switch args[0] {
+	case "validate":
+		return cmdConfigValidate(configPath)
+	default:
+		fmt.Fprintf(os.Stderr, "Error: unknown config subcommand %q\n", args[0])
+		return 2
+	}
+}
+
+func cmdConfigValidate(configPath string) int {
+	cfg, err := parseConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+
+	problems := cfg.validateAll()
+	if len(problems) == 0 {
+		fmt.Printf("Config OK: %s\n", configPath)
+		return 0
+	}
+
+	fmt.Fprintf(os.Stderr, "Found %d problem(s) in %s:\n\n", len(problems), configPath)
+	for i, p := range problems {
+		fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, p)
+	}
+	return 2
+}
+
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `
 Usage: llama-launcher [--config path] [command] [args]
@@ -495,6 +537,7 @@ Commands:
   status                Show server and model status
   list                  List available profiles
   logs [backend] [-f]   Tail the server log
+  config validate       Check config file for errors
   version               Print version and exit
 
 Run without arguments for interactive mode.

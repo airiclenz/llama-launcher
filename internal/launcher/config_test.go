@@ -468,6 +468,180 @@ func TestShouldDisplayCentered(t *testing.T) {
 	})
 }
 
+func TestParseConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns config even with validation issues", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.yaml")
+		yaml := `
+servers:
+  llamacpp: false
+profiles:
+  test:
+    model: test.gguf
+`
+		if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+
+		cfg, err := parseConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("parseConfig should succeed: %v", err)
+		}
+		if len(cfg.Profiles) != 1 {
+			t.Errorf("Profiles count = %d, want 1", len(cfg.Profiles))
+		}
+	})
+
+	t.Run("returns error for invalid YAML", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(cfgPath, []byte("not: valid: yaml: ["), 0o644); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+
+		_, err := parseConfig(cfgPath)
+		if err == nil {
+			t.Fatal("expected parse error, got nil")
+		}
+	})
+
+	t.Run("returns ErrConfigNotFound for missing file", func(t *testing.T) {
+		t.Parallel()
+		_, err := parseConfig("/nonexistent/config.yaml")
+		if !isConfigNotFoundError(err) {
+			t.Errorf("expected ErrConfigNotFound, got: %v", err)
+		}
+	})
+}
+
+func TestValidateAll(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid config returns no problems", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		modelPath := filepath.Join(dir, "test.gguf")
+		if err := os.WriteFile(modelPath, []byte("fake"), 0o644); err != nil {
+			t.Fatalf("writing model: %v", err)
+		}
+
+		server := "llamacpp"
+		cfg := &Config{
+			Servers:   map[string]bool{"llamacpp": true},
+			ModelsDir: dir,
+			Defaults:  ProfileParams{Server: &server},
+			Profiles: map[string]Profile{
+				"test": {Description: "Test", Model: "test.gguf"},
+			},
+		}
+		problems := cfg.validateAll()
+		if len(problems) != 0 {
+			t.Errorf("expected no problems, got: %v", problems)
+		}
+	})
+
+	t.Run("collects multiple errors", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			DefaultBackend: "llamacpp",
+			Endpoints:      map[string]string{"llamacpp": "localhost:8080"},
+			Servers:        map[string]bool{},
+			Profiles:       map[string]Profile{},
+		}
+		problems := cfg.validateAll()
+		if len(problems) < 3 {
+			t.Errorf("expected at least 3 problems, got %d: %v", len(problems), problems)
+		}
+	})
+
+	t.Run("reports deprecated backend in profiles", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]bool{"llamacpp": true},
+			Profiles: map[string]Profile{
+				"test": {Backend: "llamacpp", Model: "test.gguf"},
+			},
+		}
+		problems := cfg.validateAll()
+		found := false
+		for _, p := range problems {
+			if strings.Contains(p, "backend") && strings.Contains(p, "renamed") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected deprecated backend warning, got: %v", problems)
+		}
+	})
+
+	t.Run("reports missing model file", func(t *testing.T) {
+		t.Parallel()
+		server := "llamacpp"
+		cfg := &Config{
+			Servers:   map[string]bool{"llamacpp": true},
+			ModelsDir: "/nonexistent/models",
+			Defaults:  ProfileParams{Server: &server},
+			Profiles: map[string]Profile{
+				"test": {Model: "missing.gguf"},
+			},
+		}
+		problems := cfg.validateAll()
+		found := false
+		for _, p := range problems {
+			if strings.Contains(p, "model not found") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected model-not-found problem, got: %v", problems)
+		}
+	})
+
+	t.Run("reports unknown server", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]bool{"nonexistent_backend": true},
+			Profiles: map[string]Profile{
+				"test": {Model: "test.gguf"},
+			},
+		}
+		problems := cfg.validateAll()
+		found := false
+		for _, p := range problems {
+			if strings.Contains(p, "unknown server") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected unknown server problem, got: %v", problems)
+		}
+	})
+
+	t.Run("reports no servers enabled", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]bool{"llamacpp": false},
+			Profiles: map[string]Profile{
+				"test": {Model: "test.gguf"},
+			},
+		}
+		problems := cfg.validateAll()
+		found := false
+		for _, p := range problems {
+			if strings.Contains(p, "no servers enabled") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected no-servers-enabled problem, got: %v", problems)
+		}
+	})
+}
+
 func isConfigNotFoundError(err error) bool {
 	for err != nil {
 		if err.Error() == "config file not found" {

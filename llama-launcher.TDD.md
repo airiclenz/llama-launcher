@@ -121,6 +121,7 @@ For scripting, automation, and quick access:
 | `llama-launcher status` | Print per-backend server state (running/stopped, model, address) for all configured backends. Exit code 0 if any running, 1 if all stopped. |
 | `llama-launcher list` | Print all configured profiles with descriptions and backend. |
 | `llama-launcher logs [backend] [--follow]` | Tail a server's log file. Optional backend argument; auto-detects the active backend. With `--follow`, behaves like `tail -f`. This is the one subcommand that remains running until interrupted. |
+| `llama-launcher config validate` | Parse config and report all validation problems at once (deprecated fields, unknown/disabled servers, missing models). Uses `parseConfig` + `validateAll` to collect errors without stopping at the first. Exit 0 if valid, 2 if invalid. |
 
 All subcommands except `logs --follow` exit immediately after completing their action.
 
@@ -285,7 +286,7 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | File | Responsibility |
 |---|---|
 | `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. |
-| `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading, `~` expansion, parameter merging, validation, example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
+| `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems), example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
 | `defaults/config.yaml` | Example config template, embedded at compile time via `go:embed`. |
 | `defaults/embed.go` | Embeds `config.yaml` and exports it as `defaults.ExampleConfig`. |
 | `backend.go` | `Backend` and `ManagedBackend` interface definitions, `ResolvedProfile` struct, backend registry (register/get). |
@@ -699,5 +700,5 @@ Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read t
 
 ### After Changing Code
 
-1. Update the documents `llama-launcher.TDD.md`. `README.md` as well as `CHANGELOG.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
+1. Update the documents `llama-launcher.TDD.md`. `README.md` as well as `CHANGELOG.md` and `TODO.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
 2. Run `make install` to build and install the updated binary.

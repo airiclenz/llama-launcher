@@ -4,6 +4,7 @@
 
 ### Added
 
+- **`config validate` subcommand** — dedicated command to check the config file for errors after editing. Reports all validation problems at once (deprecated fields, unknown servers, disabled servers, missing model files) instead of stopping at the first error. Exit code 0 for valid, 2 for invalid.
 - **Step-by-step progress popup** — loading, stopping, and unloading operations now show a multi-step progress popup that updates in place as each lifecycle stage completes (e.g. "Starting server" → "Waiting for server"). CLI subcommands print plain text step output. Replaces the static single-line activity indicator.
 
 ## 1.2.0

@@ -106,8 +106,8 @@ func DefaultConfigPath() string {
 	return filepath.Join(DefaultConfigDir(), configFileName)
 }
 
-// LoadConfig reads, parses, and validates the YAML configuration at the given path.
-func LoadConfig(path string) (*Config, error) {
+// parseConfig reads and unmarshals the YAML config without running validation.
+func parseConfig(path string) (*Config, error) {
 	path = ExpandTilde(path)
 
 	data, err := os.ReadFile(path)
@@ -127,11 +127,19 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.ModelsDir = ExpandTilde(cfg.ModelsDir)
 	cfg.LogDir = ExpandTilde(cfg.LogDir)
 
+	return &cfg, nil
+}
+
+// LoadConfig reads, parses, and validates the YAML configuration at the given path.
+func LoadConfig(path string) (*Config, error) {
+	cfg, err := parseConfig(path)
+	if err != nil {
+		return nil, err
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-
-	return &cfg, nil
+	return cfg, nil
 }
 
 func (c *Config) validate() error {
@@ -173,6 +181,62 @@ func (c *Config) validate() error {
 		c.Defaults.Server = &enabledServers[0]
 	}
 	return nil
+}
+
+func (c *Config) validateAll() []string {
+	var problems []string
+
+	if c.DefaultBackend != "" {
+		problems = append(problems, fmt.Sprintf(
+			"'default_backend' is no longer supported — use 'server' in the defaults section instead\n     Move to:\n       defaults:\n         server: %s", c.DefaultBackend))
+	}
+	if len(c.Endpoints) > 0 {
+		problems = append(problems, "'endpoints' has been merged into 'servers' — move entries to the servers section")
+	}
+
+	if len(c.Servers) == 0 {
+		problems = append(problems, "no servers defined")
+	} else {
+		for name := range c.Servers {
+			if _, err := GetBackend(name); err != nil {
+				problems = append(problems, fmt.Sprintf("unknown server %q in servers section", name))
+			}
+		}
+		var enabledServers []string
+		for name, enabled := range c.Servers {
+			if enabled {
+				enabledServers = append(enabledServers, name)
+			}
+		}
+		if len(enabledServers) == 0 {
+			problems = append(problems, "no servers enabled")
+		}
+		if c.Defaults.Server == nil && len(enabledServers) == 1 {
+			c.Defaults.Server = &enabledServers[0]
+		}
+	}
+
+	if c.LogDir == "" {
+		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
+	}
+
+	if len(c.Profiles) == 0 {
+		problems = append(problems, "no profiles defined")
+	} else {
+		for name, p := range c.Profiles {
+			if p.Backend != "" {
+				problems = append(problems, fmt.Sprintf(
+					"profile %q uses 'backend' which has been renamed to 'server'\n     Change to: server: %s", name, p.Backend))
+			}
+		}
+		for name := range c.Profiles {
+			if _, err := c.ResolveProfile(name); err != nil {
+				problems = append(problems, err.Error())
+			}
+		}
+	}
+
+	return problems
 }
 
 func (c *Config) backendAddr(backendName string) string {
