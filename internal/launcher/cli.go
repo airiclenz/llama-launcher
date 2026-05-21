@@ -104,8 +104,8 @@ func cmdLoad(cfg *Config, args []string) int {
 	if displayName == "" {
 		displayName = profile.Name
 	}
-	fmt.Printf("Loading %s...\n", displayName)
-	state, started, err := LoadProfile(cfg, profile)
+	progress := newCLIProgress(fmt.Sprintf("Loading %s", displayName))
+	state, started, err := LoadProfile(cfg, profile, progress)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
@@ -159,15 +159,16 @@ func cmdUnload(cfg *Config, args []string) int {
 		return 3
 	}
 
+	progress := newCLIProgress("Unloading model")
 	if _, ok := b.(ManagedBackend); ok {
-		state, err := StopBackendServer(backend)
+		state, err := StopBackendServer(backend, progress)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 3
 		}
 		fmt.Printf("Model unloaded, server stopped (PID %d)\n", state.PID)
 	} else {
-		state, err := UnloadBackendModel(backend)
+		state, err := UnloadBackendModel(backend, progress)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 3
@@ -248,7 +249,8 @@ func cmdStop(cfg *Config, args []string) int {
 		backend = running[0].Backend
 	}
 
-	state, err := StopBackendServer(backend)
+	progress := newCLIProgress("Stopping server")
+	state, err := StopBackendServer(backend, progress)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
 			fmt.Println("No server running.")

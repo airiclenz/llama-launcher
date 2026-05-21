@@ -239,8 +239,14 @@ func doLoadProfile(cfg *Config, name string) error {
 	if displayName == "" {
 		displayName = name
 	}
-	showActivity(fmt.Sprintf("Loading %s...", displayName))
-	state, started, err := LoadProfile(cfg, profile)
+
+	var progress ProgressFunc
+	if isTerminal() {
+		_, progress = newTUIProgress(fmt.Sprintf("Loading %s", displayName))
+	} else {
+		progress = newCLIProgress(fmt.Sprintf("Loading %s", displayName))
+	}
+	state, started, err := LoadProfile(cfg, profile, progress)
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return err
@@ -345,9 +351,14 @@ func doStopServer(cfg *Config, state *ServerState) error {
 		target = running[idx]
 	}
 
-	showActivity(fmt.Sprintf("Stopping %s...", backendDisplayName(target.name)))
+	var progress ProgressFunc
+	if isTerminal() {
+		_, progress = newTUIProgress(fmt.Sprintf("Stopping %s", backendDisplayName(target.name)))
+	} else {
+		progress = newCLIProgress(fmt.Sprintf("Stopping %s", backendDisplayName(target.name)))
+	}
 
-	st, err := StopBackendServer(target.name)
+	st, err := StopBackendServer(target.name, progress)
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
@@ -412,17 +423,23 @@ func doUnloadModel(cfg *Config) error {
 	}
 
 	displayName := profileDisplayName(cfg, target.ActiveProfile)
-	showActivity(fmt.Sprintf("Unloading %s...", displayName))
+
+	var progress ProgressFunc
+	if isTerminal() {
+		_, progress = newTUIProgress(fmt.Sprintf("Unloading %s", displayName))
+	} else {
+		progress = newCLIProgress(fmt.Sprintf("Unloading %s", displayName))
+	}
 
 	if _, ok := b.(ManagedBackend); ok {
-		st, err := StopBackendServer(target.Backend)
+		st, err := StopBackendServer(target.Backend, progress)
 		fmt.Print(escClear + escCursorShow)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("  Model unloaded, server stopped (PID %d)\n", st.PID)
 	} else {
-		st, err := UnloadBackendModel(target.Backend)
+		st, err := UnloadBackendModel(target.Backend, progress)
 		fmt.Print(escClear + escCursorShow)
 		if err != nil {
 			return err

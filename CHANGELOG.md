@@ -18,6 +18,7 @@
 
 ### Added
 
+- **Step-by-step progress popup** — loading, stopping, and unloading operations now show a multi-step progress popup that updates in place as each lifecycle stage completes (e.g. "Starting server" → "Waiting for server"). CLI subcommands print plain text step output. Replaces the static single-line activity indicator.
 - **Server enable/disable toggle** — servers in the `servers` section now use boolean values (`true`/`false`). Disabled servers are hidden from status display, and their profiles are excluded from menus and CLI output. At least one server must be enabled.
 - **Embedded example config** — the default config template is now a standalone YAML file (`internal/launcher/defaults/config.yaml`) embedded at compile time via `go:embed`, instead of an inline string constant.
 - **Multi-server support** — multiple servers can run simultaneously when `auto_stop_server` is set to `false`. Status, menus, and CLI commands are aware of all running backends.

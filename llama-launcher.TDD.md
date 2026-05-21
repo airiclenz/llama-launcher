@@ -51,10 +51,21 @@ Running `llama-launcher` with no arguments enters a one-shot interactive menu wi
     ↑↓ select · enter start & load · q quit
 ```
 
-After selecting a profile, the launcher starts `llama-server`, loads the model via API, prints a confirmation, and exits:
+After selecting a profile, the launcher shows a step-by-step progress popup that updates in place as each lifecycle stage completes, then prints a confirmation and exits:
 
 ```
-  Loading code-deepseek...
+    ╭──────────────────────────────────╮
+    │                                  │
+    │   Loading code-deepseek...       │
+    │   Starting server                │
+    │   ▸ Waiting for server...        │
+    │                                  │
+    ╰──────────────────────────────────╯
+```
+
+Completed steps are shown dimmed; the current step has a `▸` prefix. In non-interactive mode (CLI subcommands, piped output), steps print as plain text lines. After completion:
+
+```
   ● Server started (PID 41023)
   ● Loaded code-deepseek on 127.0.0.1:8080
     Log: ~/.config/llama-launcher/logs/llamacpp-20260519-171200.log
@@ -281,7 +292,8 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | `backend_llamacpp.go` | llama.cpp backend (managed): server arg assembly, model path resolution. Registers via `init()`. |
 | `backend_ollama.go` | Ollama backend (external): HTTP API model load/unload, auto-start via `ollama serve`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio backend (external): HTTP API model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
-| `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). Per-backend state file read/write (`state-{backend}.json`), PID tracking, `LoadProfile` orchestration with configurable auto-stop/auto-unload, log management. |
+| `server.go` | Backend-agnostic lifecycle: managed path (fork/detach/SIGTERM/SIGKILL) and external path (connect/health-check/disconnect). Per-backend state file read/write (`state-{backend}.json`), PID tracking, `LoadProfile` orchestration with configurable auto-stop/auto-unload, log management. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
+| `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
 | `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. |
 | `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |

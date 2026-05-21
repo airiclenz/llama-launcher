@@ -184,7 +184,7 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b Backend) (*S
 }
 
 // StopBackendServer stops a managed server or disconnects from an external one for the given backend.
-func StopBackendServer(backend string) (*ServerState, error) {
+func StopBackendServer(backend string, progress ProgressFunc) (*ServerState, error) {
 	state, err := ReadBackendState(backend)
 	if err != nil {
 		return nil, err
@@ -194,12 +194,12 @@ func StopBackendServer(backend string) (*ServerState, error) {
 	}
 
 	if state.Managed {
-		return stopManagedServer(state)
+		return stopManagedServer(state, progress)
 	}
-	return disconnectExternalServer(state)
+	return disconnectExternalServer(state, progress)
 }
 
-func stopManagedServer(state *ServerState) (*ServerState, error) {
+func stopManagedServer(state *ServerState, progress ProgressFunc) (*ServerState, error) {
 	if !IsProcessAlive(state.PID) {
 		removeBackendState(state.Backend)
 		return state, nil
@@ -211,6 +211,7 @@ func stopManagedServer(state *ServerState) (*ServerState, error) {
 		return state, nil
 	}
 
+	reportStep(progress, "Sending stop signal")
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		removeBackendState(state.Backend)
 		return state, fmt.Errorf("sending SIGTERM: %w", err)
@@ -218,6 +219,7 @@ func stopManagedServer(state *ServerState) (*ServerState, error) {
 	// Also signal the process group (Setsid gives the child PGID=PID).
 	_ = syscall.Kill(-state.PID, syscall.SIGTERM)
 
+	reportStep(progress, "Waiting for shutdown")
 	deadline := time.Now().Add(sigtermTimeout)
 	for time.Now().Before(deadline) {
 		if !IsProcessAlive(state.PID) {
@@ -243,7 +245,8 @@ func stopManagedServer(state *ServerState) (*ServerState, error) {
 	return state, nil
 }
 
-func disconnectExternalServer(state *ServerState) (*ServerState, error) {
+func disconnectExternalServer(state *ServerState, progress ProgressFunc) (*ServerState, error) {
+	reportStep(progress, "Disconnecting")
 	b, _ := GetBackend(state.Backend)
 	if b != nil {
 		b.TryStop(state.Addr())
@@ -283,7 +286,7 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, er
 }
 
 // LoadProfile stops any existing server and starts a new one with the given profile's model.
-func LoadProfile(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, error) {
+func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (*ServerState, bool, error) {
 	state, _ := ReadBackendState(profile.Backend)
 
 	b, err := GetBackend(profile.Backend)
@@ -295,7 +298,8 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, err
 		allStates, _ := ReadAllStates()
 		for _, s := range allStates {
 			if s.Backend != profile.Backend && IsServerAlive(s) {
-				if _, err := StopBackendServer(s.Backend); err != nil && !errors.Is(err, ErrNotRunning) {
+				reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(s.Backend)))
+				if _, err := StopBackendServer(s.Backend, nil); err != nil && !errors.Is(err, ErrNotRunning) {
 					return nil, false, fmt.Errorf("auto-stopping %s: %w", s.Backend, err)
 				}
 			}
@@ -303,28 +307,31 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, err
 	}
 
 	if _, ok := b.(ManagedBackend); ok {
-		return loadProfileManaged(cfg, profile, state, b)
+		return loadProfileManaged(cfg, profile, state, b, progress)
 	}
-	return loadProfileExternal(cfg, profile, b, state)
+	return loadProfileExternal(cfg, profile, b, state, progress)
 }
 
-func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b Backend) (*ServerState, bool, error) {
+func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b Backend, progress ProgressFunc) (*ServerState, bool, error) {
 	if state != nil && IsServerAlive(state) {
 		if state.ActiveProfile == profile.Name {
 			return state, false, nil
 		}
-		if _, err := StopBackendServer(profile.Backend); err != nil {
+		reportStep(progress, "Stopping current server")
+		if _, err := StopBackendServer(profile.Backend, nil); err != nil {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
 		}
 	} else if state != nil {
 		removeBackendState(profile.Backend)
 	}
 
+	reportStep(progress, "Starting server")
 	state, err := StartServer(cfg, profile)
 	if err != nil {
 		return nil, false, err
 	}
 
+	reportStep(progress, "Waiting for server")
 	if err := WaitForHealth(b, state.Addr(), 30*time.Second); err != nil {
 		return nil, false, err
 	}
@@ -332,12 +339,13 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerStat
 	return state, true, nil
 }
 
-func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state *ServerState) (*ServerState, bool, error) {
+func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state *ServerState, progress ProgressFunc) (*ServerState, bool, error) {
 	if state != nil && IsServerAlive(state) {
 		if state.ActiveProfile == profile.Name {
 			return state, false, nil
 		}
 		if state.ActiveModel != "" && cfg.ShouldAutoUnload() {
+			reportStep(progress, "Unloading current model")
 			if err := b.UnloadModel(state.Addr(), state.ActiveModel); err != nil {
 				return nil, false, fmt.Errorf("unloading current model: %w", err)
 			}
@@ -346,6 +354,7 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state
 		if state != nil {
 			removeBackendState(profile.Backend)
 		}
+		reportStep(progress, "Connecting to server")
 		newState, err := connectExternalServer(cfg, profile, b)
 		if err != nil {
 			return nil, false, err
@@ -353,6 +362,7 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state
 		state = newState
 	}
 
+	reportStep(progress, "Loading model")
 	if err := b.LoadModel(state.Addr(), profile); err != nil {
 		return nil, false, fmt.Errorf("loading model: %w", err)
 	}
@@ -382,7 +392,7 @@ func WaitForHealth(b Backend, addr string, timeout time.Duration) error {
 }
 
 // UnloadBackendModel unloads the active model for the given backend without stopping the server.
-func UnloadBackendModel(backend string) (*ServerState, error) {
+func UnloadBackendModel(backend string, progress ProgressFunc) (*ServerState, error) {
 	state, err := ReadBackendState(backend)
 	if err != nil {
 		return nil, err
@@ -399,6 +409,7 @@ func UnloadBackendModel(backend string) (*ServerState, error) {
 		return nil, err
 	}
 
+	reportStep(progress, "Unloading model")
 	if err := b.UnloadModel(state.Addr(), state.ActiveModel); err != nil {
 		return nil, fmt.Errorf("unloading model: %w", err)
 	}
