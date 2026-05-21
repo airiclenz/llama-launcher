@@ -18,6 +18,7 @@ var errUserQuit = errors.New("quit")
 // When auto_close is false, the menu re-displays after each action.
 func RunInteractiveMenu(cfg *Config) error {
 	for {
+		cfg.Reload()
 		states, _ := ReadAllStates()
 
 		var primaryState *ServerState
@@ -77,6 +78,7 @@ func runStoppedMenu(cfg *Config) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
+		cfg.Reload()
 		return serverStatusLines(cfg)
 	}
 
@@ -115,6 +117,7 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
+		cfg.Reload()
 		return serverStatusLines(cfg)
 	}
 
@@ -122,12 +125,12 @@ func runLoadedMenu(cfg *Config, state *ServerState) error {
 	if len(cfg.ProfileNames()) > 1 {
 		items = append(items, menuItem{Label: "Switch model"})
 	}
-	items = append(items, menuItem{Label: "Show model config"})
 	items = append(items, menuItem{Label: "Unload model"})
 	items = append(items, menuItem{Label: "Stop server"})
 	if state.LogFile != "" {
 		items = append(items, menuItem{Label: "Show log"})
 	}
+	items = append(items, menuItem{Label: "Show model config"})
 	items = append(items, menuItem{Label: "Edit config"})
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered())
@@ -165,6 +168,7 @@ func runIdleMenu(cfg *Config, state *ServerState) error {
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := func() []string {
+		cfg.Reload()
 		return serverStatusLines(cfg)
 	}
 
@@ -715,7 +719,8 @@ func serverStatusLines(cfg *Config) []string {
 			if modelStr != "" {
 				detail += " · " + modelStr
 			}
-			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, b.DisplayName(), detail))
+			serverName := fmt.Sprintf("%s%s%s", cBoldLightGray, b.DisplayName(), cReset)
+			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
 		} else {
 			lines = append(lines, fmt.Sprintf("%s○%s %-*s  %sstopped%s", cDim, cReset, maxLen, b.DisplayName(), cDim, cReset))
 		}
@@ -761,15 +766,12 @@ func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 	}
 
 	n := 0
-	switchIdx, configIdx, unloadIdx, stopIdx, logIdx, editIdx := -1, -1, -1, -1, -1, -1
+	switchIdx, unloadIdx, stopIdx, logIdx, configIdx, editIdx := -1, -1, -1, -1, -1, -1
 	if len(cfg.ProfileNames()) > 1 {
 		n++
 		switchIdx = n
 		fmt.Printf("    %d  Switch model\n", n)
 	}
-	n++
-	configIdx = n
-	fmt.Printf("    %d  Show config\n", n)
 	n++
 	unloadIdx = n
 	fmt.Printf("    %d  Unload model\n", n)
@@ -781,6 +783,9 @@ func runLoadedMenuSimple(cfg *Config, state *ServerState) error {
 		logIdx = n
 		fmt.Printf("    %d  Show log\n", n)
 	}
+	n++
+	configIdx = n
+	fmt.Printf("    %d  Show config\n", n)
 	n++
 	editIdx = n
 	fmt.Printf("    %d  Edit config\n", n)

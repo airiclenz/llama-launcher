@@ -33,7 +33,7 @@ Target platform: macOS (Apple Silicon). The compiled binary is the only artifact
 
 ### 3.1 Interactive Mode
 
-Running `llama-launcher` with no arguments enters a one-shot interactive menu with arrow-key navigation, colored output, and full-screen repainting. Falls back to numbered input when stdin is not a terminal.
+Running `llama-launcher` with no arguments enters a one-shot interactive menu with arrow-key navigation, colored output, and full-screen repainting. Falls back to numbered input when stdin is not a terminal. The config file is automatically reloaded before each menu display and on every 10-second header refresh, so changes made via "Edit config" or an external editor take effect without restarting. If the reloaded file is invalid, the last good config is silently preserved.
 
 **When no server is running:**
 
@@ -84,6 +84,8 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
       Unload model
       Stop server
       Show log
+      Show model config
+      Edit config
 
     ↑↓ select · enter confirm · q quit
 ```
@@ -102,6 +104,7 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
       ─
       Stop server
       Show log
+      Edit config
 
     ↑↓ select · enter load · q quit
 ```
@@ -123,6 +126,8 @@ For scripting, automation, and quick access:
 | `llama-launcher logs [backend] [--follow]` | Tail a server's log file. Optional backend argument; auto-detects the active backend. With `--follow`, behaves like `tail -f`. This is the one subcommand that remains running until interrupted. |
 | `llama-launcher logs clean [--days N\|--all]` | Delete old log files. Default threshold is 7 days; `--days N` overrides. `--all` removes everything. Always skips logs belonging to running servers. Reports files removed and space freed. |
 | `llama-launcher config validate` | Parse config and report all validation problems at once (deprecated fields, unknown/disabled servers, missing models). Uses `parseConfig` + `validateAll` to collect errors without stopping at the first. Exit 0 if valid, 2 if invalid. |
+| `llama-launcher config init [--force]` | Generate the example config file at the configured path. Refuses to overwrite an existing file unless `--force` (or `-f`) is passed. Exit 0 on success, 2 on error or if the file already exists. |
+| `llama-launcher config reset` | Overwrite the config file with the example config unconditionally. Provides a quick way to return to a known-good starting point. Exit 0 on success, 2 on error. |
 
 All subcommands except `logs --follow` exit immediately after completing their action.
 
@@ -291,7 +296,7 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | File | Responsibility |
 |---|---|
 | `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. |
-| `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems), example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
+| `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `Reload` for in-place re-read, `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems), example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
 | `defaults/config.yaml` | Example config template, embedded at compile time via `go:embed`. |
 | `defaults/embed.go` | Embeds `config.yaml` and exports it as `defaults.ExampleConfig`. |
 | `backend.go` | `Backend` and `ManagedBackend` interface definitions, `ResolvedProfile` struct, backend registry (register/get). |
@@ -302,7 +307,7 @@ Each profile can specify a `server` field to override `defaults.server`. The `se
 | `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
-| `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. |
+| `menu.go` | Interactive menu logic for three states (stopped, running-with-model, running-no-model), backend-aware headers/items, simple fallback for non-terminals. Config is reloaded at the top of each menu loop iteration and on every 10-second header refresh, so edits to the config file take effect without restarting. |
 | `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, model resolution, and httptest-based health check. |
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
@@ -639,7 +644,7 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 - **Automatic restart for hardware conflicts**: When a profile needs different context_size/gpu_layers, offer to restart the server with updated global settings.
 - **Multiple simultaneous servers**: Basic support is implemented via `auto_stop_server: false` and per-backend state files. Advanced orchestration (e.g. load balancing, port conflict detection) could be added.
 - **Shell completions**: Generate bash/zsh/fish completions for subcommands and profile names.
-- **Config reload**: A `reload` subcommand that restarts with the same profile using updated config values.
+- **Config reload subcommand**: A `reload` subcommand that restarts with the same profile using updated config values. (Note: automatic config reload in the interactive menu is already implemented — this item covers the CLI subcommand.)
 - **Additional backends**: vLLM and other backends — each as a new `backend_<name>.go` file implementing the `Backend` interface.
 - **Homebrew formula**: Package for `brew install llama-launcher`.
 - **Launchd integration**: Generate a launchd plist for auto-start on login.

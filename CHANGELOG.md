@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.2
+
+### Added
+
+- **`config init` subcommand** — generate the example config file on demand. Refuses to overwrite an existing file unless `--force` (or `-f`) is passed.
+- **`config reset` subcommand** — overwrite the config file with the example config, providing a quick way to return to a known-good starting point.
+- **Automatic config reload** — the interactive menu re-reads the config file before each menu display and on every 10-second header refresh. Changes made via "Edit config" or an external editor take effect without restarting. If the file is invalid, the last good config is silently preserved.
+
+### Changed
+
+- **Reorder loaded-model menu** — menu items now appear as: Switch model, Unload model, Stop server, Show log, Show model config, Edit config. Moves destructive actions closer to the top and informational items toward the bottom. Applies to both TUI and non-terminal menus.
+
 ## 1.2.1
 
 ### Changed

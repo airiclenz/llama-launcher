@@ -9,11 +9,6 @@
   - Tab-complete subcommand names
   - Data is already available from config; generate completion scripts via a `completions` subcommand
 
-- [ ] `config init` / `config reset` subcommand
-  - Regenerate the example config on demand (currently only auto-generated on first run)
-  - `config init` creates if missing, `config init --force` overwrites existing
-  - Helpful when the user has mangled their config and wants a fresh starting point
-
 - [ ] `status --json` and `list --json` output
   - Structured JSON output for scripting and integration with tools like `jq`
   - `status --json`: backend name, running state, address, active profile/model, PID, uptime

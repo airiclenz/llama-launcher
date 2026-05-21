@@ -576,6 +576,10 @@ func cmdConfig(configPath string, args []string) int {
 	switch args[0] {
 	case "validate":
 		return cmdConfigValidate(configPath)
+	case "init":
+		return cmdConfigInit(configPath, args[1:])
+	case "reset":
+		return cmdConfigReset(configPath)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown config subcommand %q\n", args[0])
 		return 2
@@ -602,6 +606,39 @@ func cmdConfigValidate(configPath string) int {
 	return 2
 }
 
+func cmdConfigInit(configPath string, args []string) int {
+	force := false
+	for _, a := range args {
+		if a == "--force" || a == "-f" {
+			force = true
+		}
+	}
+
+	// If file exists and not forced, error.
+	if !force {
+		if _, err := os.Stat(configPath); err == nil {
+			fmt.Fprintf(os.Stderr, "Error: config already exists. Use --force to overwrite.\n")
+			return 2
+		}
+	}
+
+	if err := GenerateExampleConfig(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+	fmt.Printf("Generated example config at: %s\n", configPath)
+	return 0
+}
+
+func cmdConfigReset(configPath string) int {
+	if err := GenerateExampleConfig(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+	fmt.Printf("Reset config to example at: %s\n", configPath)
+	return 0
+}
+
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `
 Usage: llama-launcher [--config path] [command] [args]
@@ -616,6 +653,8 @@ Commands:
   logs [backend] [-f]          Tail the server log
   logs clean [--days N|--all]  Remove old log files
   config validate       Check config file for errors
+  config init [--force]   Generate example config (overwrite if --force)
+  config reset           Reset config to example (overwrite)
   version               Print version and exit
 
 Run without arguments for interactive mode.

@@ -143,6 +143,16 @@ func LoadConfig(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// Reload re-reads and validates the config file, updating the receiver in place.
+// If the file is unreadable or invalid, the receiver is left unchanged.
+func (c *Config) Reload() {
+	newCfg, err := LoadConfig(c.ConfigPath)
+	if err != nil {
+		return
+	}
+	*c = *newCfg
+}
+
 func (c *Config) validate() error {
 	if c.DefaultBackend != "" {
 		return fmt.Errorf("config: 'default_backend' is no longer supported — use 'server' in the defaults section instead\n  Move to:\n    defaults:\n      server: %s", c.DefaultBackend)
