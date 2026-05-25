@@ -3,6 +3,8 @@
 
 ## Feature ideas
 
+- [x] **Possibility to `Star` mark configurations in the conifg (`is-favourite`)**. Star marked items will listed first in the list of available models. The following ordering applies: first sort by star-marked items, then sort by server-type, then sort by name.
+
 - [ ] Shell completions (bash/zsh/fish)
   - Tab-complete profile names for `load`, `unload`, and the new `start --profile`
   - Tab-complete backend names for `stop` and `logs`

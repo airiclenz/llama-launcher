@@ -12,6 +12,8 @@ build:
 install: build
 	@mkdir -p $(INSTALL)
 	@cp $(BINARY) $(INSTALL)/$(BINARY)
+	@xattr -d com.apple.provenance $(INSTALL)/$(BINARY) 2>/dev/null || true
+	@codesign --sign - --force $(INSTALL)/$(BINARY) 2>/dev/null || true
 	@echo "Installed $(INSTALL)/$(BINARY)"
 	@if ! echo "$$PATH" | tr ':' '\n' | grep -qx "$(INSTALL)"; then \
 		echo 'export PATH="$$HOME/.local/bin:$$PATH"' >> $(SHELL_RC); \

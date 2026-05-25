@@ -127,6 +127,8 @@ defaults:
 #   model         Model reference (file path for llamacpp, name for ollama,
 #                 publisher/repo/file for lmstudio)
 #   server        Server to use (llamacpp, ollama, lmstudio)
+#   is_favourite  Pin this profile to the top of the menu (default: false).
+#                 Favourites sort before all other profiles.
 #   extra_args    Additional CLI flags appended verbatim (llamacpp only)
 #   <param>       Any parameter from the defaults block
 
@@ -137,6 +139,7 @@ profiles:
     description: "Example profile"
     model: your-model-file.gguf
     context_size: 8192
+    # is_favourite: true
 
   # ── LM Studio examples ────────────────────────────────────
   # Model is an LM Studio model key (publisher/repo or full path

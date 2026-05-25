@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Favourite profiles** — set `is_favourite: true` on a profile to pin it to the top of the menu and `list` output. Favourites display a right-aligned `★` marker at the end of the row, in a consistent column across the listing. Profile ordering now sorts by favourite status first, then by server (default backend first), then by name. Applies to the TUI menu, non-terminal fallback, and the `list` subcommand.
 - **`config init` subcommand** — generate the example config file on demand. Refuses to overwrite an existing file unless `--force` (or `-f`) is passed.
 - **`config reset` subcommand** — overwrite the config file with the example config, providing a quick way to return to a known-good starting point.
 - **Automatic config reload** — the interactive menu re-reads the config file before each menu display and on every 10-second header refresh. Changes made via "Edit config" or an external editor take effect without restarting. If the file is invalid, the last good config is silently preserved.

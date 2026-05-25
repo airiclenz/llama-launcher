@@ -208,10 +208,12 @@ defaults:
 # Named profiles (model configurations).
 # Profiles can target different servers — switching between them
 # stops the old server and starts/connects to the new one.
+# Set is_favourite: true to pin a profile to the top of menus and listings.
 profiles:
   code-deepseek:
     description: "DeepSeek Coder V2 Lite — coding tasks"
     model: deepseek-coder-v2-lite-instruct-Q4_K_M.gguf
+    is_favourite: true
     context_size: 8192
     temperature: 0.3
     extra_args:
@@ -266,6 +268,10 @@ The `extra_args` list in a profile is appended verbatim to the assembled server 
 ### 4.6 Backend Selection
 
 Each profile can specify a `server` field to override `defaults.server`. The `server` field participates in the same tier merge as all other parameters (profile → defaults → fallback). If only one server is configured and `defaults.server` is not set, it is auto-detected.
+
+### 4.7 Favourite Profiles
+
+Each profile may set `is_favourite: true` to pin it to the top of the menu and `list` output. Profiles are sorted by three keys in order: favourite status first (favourites before non-favourites), then by server (default backend first, remaining backends alphabetically), then by profile name alphabetically. Favourite profiles display a `★` marker right-aligned at the end of the row, in the same column across the entire list (descriptions are padded so the marker column is consistent). When no profile in the listing is starred, no marker column is rendered. This ordering and rendering are produced by `Config.ProfileNames()` together with `buildProfileItems`/`buildSimpleProfileLines`/`cmdList`, and apply to every UI surface that lists profiles (TUI menu, non-terminal fallback, `llama-launcher list`).
 
 ## 5. Architecture
 

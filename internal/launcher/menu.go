@@ -545,8 +545,30 @@ func profileDisplayName(cfg *Config, profileName string) string {
 	return profileName
 }
 
+// favouriteSuffix returns the trailing fragment appended to a description so
+// that the ★ marker right-aligns across the profile list. Non-favourite rows
+// return an empty suffix — the surrounding frame auto-pads them, and plain
+// text output stays free of trailing whitespace.
+func favouriteSuffix(fav bool, desc string, maxDescWidth int, anyFavourite bool) string {
+	if !anyFavourite || !fav {
+		return ""
+	}
+	pad := strings.Repeat(" ", maxDescWidth-visibleWidth(desc))
+	return pad + " ★"
+}
+
+func anyProfileFavourite(cfg *Config, names []string) bool {
+	for _, name := range names {
+		if cfg.Profiles[name].IsFavourite {
+			return true
+		}
+	}
+	return false
+}
+
 func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	hasMixed := hasMultipleBackends(cfg)
+	anyFav := anyProfileFavourite(cfg, names)
 
 	maxNameLen := 0
 	maxTagLen := 0
@@ -563,16 +585,26 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 		}
 	}
 
+	descs := make([]string, len(names))
+	maxDescWidth := 0
+	for i, name := range names {
+		descs[i] = cfg.Profiles[name].Description
+		if w := visibleWidth(descs[i]); w > maxDescWidth {
+			maxDescWidth = w
+		}
+	}
+
 	lines := make([]string, len(names))
 	for i, name := range names {
 		p := cfg.Profiles[name]
-		desc := p.Description
+		desc := descs[i]
+		suffix := favouriteSuffix(p.IsFavourite, desc, maxDescWidth, anyFav)
 		if hasMixed {
 			server := resolveProfileServer(cfg, &p)
 			tag := backendDisplayName(server)
-			lines[i] = fmt.Sprintf("%-*s  [%-*s] %s", maxNameLen, name, maxTagLen, tag, desc)
+			lines[i] = fmt.Sprintf("%-*s  [%-*s] %s%s", maxNameLen, name, maxTagLen, tag, desc, suffix)
 		} else {
-			lines[i] = fmt.Sprintf("%-*s  %s", maxNameLen, name, desc)
+			lines[i] = fmt.Sprintf("%-*s  %s%s", maxNameLen, name, desc, suffix)
 		}
 	}
 	return lines
@@ -580,6 +612,7 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 
 func buildProfileItems(cfg *Config, names []string) []menuItem {
 	hasMixed := hasMultipleBackends(cfg)
+	anyFav := anyProfileFavourite(cfg, names)
 
 	maxTagLen := 0
 	if hasMixed {
@@ -593,8 +626,9 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 		}
 	}
 
-	items := make([]menuItem, 0, len(names))
-	for _, name := range names {
+	descs := make([]string, len(names))
+	maxDescWidth := 0
+	for i, name := range names {
 		p := cfg.Profiles[name]
 		desc := p.Description
 		if hasMixed {
@@ -606,7 +640,17 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 				desc = fmt.Sprintf("[%-*s]", maxTagLen, tag)
 			}
 		}
-		items = append(items, menuItem{Label: name, Description: desc})
+		descs[i] = desc
+		if w := visibleWidth(desc); w > maxDescWidth {
+			maxDescWidth = w
+		}
+	}
+
+	items := make([]menuItem, 0, len(names))
+	for i, name := range names {
+		p := cfg.Profiles[name]
+		suffix := favouriteSuffix(p.IsFavourite, descs[i], maxDescWidth, anyFav)
+		items = append(items, menuItem{Label: name, Description: descs[i] + suffix})
 	}
 	return items
 }

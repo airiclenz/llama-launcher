@@ -81,6 +81,7 @@ profiles:
   qwen-27b:
     description: "Qwen 3.6 27B MTP Q4-K-S"
     model: qwen-27b.gguf
+    is_favourite: true
     context_size: 8192
 
   gemma-4b:
@@ -94,6 +95,8 @@ profiles:
 ```
 
 Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. All numeric and boolean params use pointer types so "not set" is distinct from zero.
+
+Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then by server (default backend first), then alphabetically by name.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 

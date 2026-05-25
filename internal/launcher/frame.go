@@ -13,12 +13,13 @@ const (
 )
 
 type Frame struct {
-	Title       string
-	Header      []string
-	Footer      []string
-	Padding     int
-	RawMode     bool
-	BorderColor string
+	Title        string
+	Header       []string
+	Footer       []string
+	Padding      int
+	RightPadding int
+	RawMode      bool
+	BorderColor  string
 }
 
 func (f Frame) Render(body []string) string {
@@ -27,6 +28,9 @@ func (f Frame) Render(body []string) string {
 		pad = 1
 	}
 	rightPad := pad + 1
+	if f.RightPadding > 0 {
+		rightPad = f.RightPadding
+	}
 
 	maxContent := 0
 	for _, section := range [][]string{f.Header, body, f.Footer} {

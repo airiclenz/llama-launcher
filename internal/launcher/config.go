@@ -67,6 +67,7 @@ type Profile struct {
 	Description   string   `yaml:"description"`
 	Model         string   `yaml:"model"`
 	Backend       string   `yaml:"backend"`
+	IsFavourite   bool     `yaml:"is_favourite,omitempty"`
 	ExtraArgs     []string `yaml:"extra_args"`
 	ProfileParams `yaml:",inline"`
 }
@@ -324,19 +325,15 @@ func (c *Config) ResolveProfile(name string) (*ResolvedProfile, error) {
 	}, nil
 }
 
-// ProfileNames returns profile names grouped by backend (default backend first,
-// then remaining backends sorted), alphabetically within each group.
+// ProfileNames returns profile names sorted by favourite status first
+// (favourites before non-favourites), then by server (default backend
+// first, then remaining backends alphabetically), then alphabetically
+// within each group.
 func (c *Config) ProfileNames() []string {
-	groups := make(map[string][]string)
-	for name, p := range c.Profiles {
-		server := resolveProfileServer(c, &p)
-		if !c.IsServerEnabled(server) {
-			continue
-		}
-		groups[server] = append(groups[server], name)
-	}
-	for _, names := range groups {
-		sort.Strings(names)
+	type entry struct {
+		name     string
+		fav      bool
+		server   string
 	}
 
 	defaultServer := ""
@@ -344,20 +341,40 @@ func (c *Config) ProfileNames() []string {
 		defaultServer = *c.Defaults.Server
 	}
 
-	backends := make([]string, 0, len(groups))
-	for b := range groups {
-		if b != defaultServer {
-			backends = append(backends, b)
+	var entries []entry
+	for name, p := range c.Profiles {
+		server := resolveProfileServer(c, &p)
+		if !c.IsServerEnabled(server) {
+			continue
 		}
-	}
-	sort.Strings(backends)
-	if _, ok := groups[defaultServer]; ok {
-		backends = append([]string{defaultServer}, backends...)
+		entries = append(entries, entry{name: name, fav: p.IsFavourite, server: server})
 	}
 
-	var result []string
-	for _, b := range backends {
-		result = append(result, groups[b]...)
+	serverRank := func(s string) int {
+		if s == defaultServer {
+			return 0
+		}
+		return 1
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.fav != b.fav {
+			return a.fav
+		}
+		if a.server != b.server {
+			ra, rb := serverRank(a.server), serverRank(b.server)
+			if ra != rb {
+				return ra < rb
+			}
+			return a.server < b.server
+		}
+		return a.name < b.name
+	})
+
+	result := make([]string, len(entries))
+	for i, e := range entries {
+		result[i] = e.name
 	}
 	return result
 }

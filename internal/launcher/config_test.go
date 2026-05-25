@@ -238,6 +238,48 @@ func TestProfileNames(t *testing.T) {
 	}
 }
 
+func TestProfileNames_FavouritesFirst(t *testing.T) {
+	t.Parallel()
+
+	defaultServer := "llamacpp"
+	otherServer := "ollama"
+	cfg := &Config{
+		Servers:  map[string]bool{"llamacpp": true, "ollama": true},
+		Defaults: ProfileParams{Server: &defaultServer},
+		Profiles: map[string]Profile{
+			"zeta-default":  {Description: "Z default"},
+			"alpha-default": {Description: "A default"},
+			"bravo-fav":     {Description: "B fav", IsFavourite: true},
+			"alpha-other":   {Description: "A ollama", ProfileParams: ProfileParams{Server: &otherServer}},
+			"zeta-other-fav": {
+				Description:   "Z ollama fav",
+				IsFavourite:   true,
+				ProfileParams: ProfileParams{Server: &otherServer},
+			},
+		},
+	}
+
+	names := cfg.ProfileNames()
+	want := []string{
+		// favourites first, default backend before other, alphabetical within group
+		"bravo-fav",
+		"zeta-other-fav",
+		// non-favourites, default backend first then ollama, alphabetical within group
+		"alpha-default",
+		"zeta-default",
+		"alpha-other",
+	}
+
+	if len(names) != len(want) {
+		t.Fatalf("len = %d, want %d: got %v", len(names), len(want), names)
+	}
+	for i, name := range names {
+		if name != want[i] {
+			t.Errorf("names[%d] = %q, want %q (got order: %v)", i, name, want[i], names)
+		}
+	}
+}
+
 func TestResolveProfile(t *testing.T) {
 	t.Parallel()
 

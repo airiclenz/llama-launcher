@@ -412,9 +412,12 @@ func cmdStatus(cfg *Config) int {
 
 func cmdList(cfg *Config) int {
 	names := cfg.ProfileNames()
+	anyFav := anyProfileFavourite(cfg, names)
 
 	maxNameLen := 0
 	maxTagLen := 0
+	maxDescLen := 0
+	descs := make(map[string]string, len(names))
 	for _, name := range names {
 		if len(name) > maxNameLen {
 			maxNameLen = len(name)
@@ -425,18 +428,30 @@ func cmdList(cfg *Config) int {
 		if len(tag) > maxTagLen {
 			maxTagLen = len(tag)
 		}
+		desc := p.Description
+		if desc == "" {
+			desc = "-"
+		}
+		descs[name] = desc
+		if w := len(desc); w > maxDescLen {
+			maxDescLen = w
+		}
 	}
 
 	fmt.Println("Profiles:")
 	fmt.Println()
 	for _, name := range names {
 		p := cfg.Profiles[name]
-		desc := p.Description
-		if desc == "" {
-			desc = "-"
-		}
 		server := resolveProfileServer(cfg, &p)
-		fmt.Printf("  %-*s  [%-*s] %s\n", maxNameLen, name, maxTagLen, backendDisplayName(server), desc)
+		desc := descs[name]
+		suffix := ""
+		if anyFav {
+			pad := strings.Repeat(" ", maxDescLen-len(desc))
+			if p.IsFavourite {
+				suffix = pad + " ★"
+			}
+		}
+		fmt.Printf("  %-*s  [%-*s] %s%s\n", maxNameLen, name, maxTagLen, backendDisplayName(server), desc, suffix)
 	}
 	return 0
 }

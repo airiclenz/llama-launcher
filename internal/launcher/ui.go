@@ -119,6 +119,12 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 		Footer:  []string{fmt.Sprintf("%s%s%s", cDim, hints, cReset)},
 		RawMode: true,
 	}
+	for _, item := range items {
+		if !item.Separator && strings.Contains(item.Description, "★") {
+			frame.RightPadding = 1
+			break
+		}
+	}
 
 	labelWidth := 0
 	for _, item := range items {
