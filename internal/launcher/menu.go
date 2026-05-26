@@ -669,83 +669,120 @@ func backendDisplayName(backendName string) string {
 
 func serverStatusLines(cfg *Config) []string {
 	states, _ := ReadAllStates()
+	statesByBackend := make(map[string][]*ServerState)
+	for _, s := range states {
+		statesByBackend[s.Backend] = append(statesByBackend[s.Backend], s)
+	}
 
-	type probeResult struct {
+	names := make([]string, 0, len(cfg.Servers))
+	for name := range cfg.Servers {
+		if cfg.IsServerEnabled(name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	type probe struct {
+		addr    string
 		state   *ServerState
 		healthy bool
 		models  []RunningModelInfo
 	}
 
-	results := make(chan probeResult, len(states))
-	for _, s := range states {
-		go func(s *ServerState) {
-			b, err := GetBackend(s.Backend)
-			if err != nil {
-				results <- probeResult{state: s}
-				return
-			}
-			healthy := b.HealthCheck(s.Addr()) == nil
-			var models []RunningModelInfo
-			if healthy {
-				if ml, ok := b.(ModelLister); ok {
-					models, _ = ml.ListRunningModels(s.Addr())
-				}
-			}
-			results <- probeResult{state: s, healthy: healthy, models: models}
-		}(s)
-	}
-
-	probes := make([]probeResult, 0, len(states))
-	for range states {
-		probes = append(probes, <-results)
-	}
-	sort.Slice(probes, func(i, j int) bool {
-		if probes[i].state.Backend != probes[j].state.Backend {
-			return probes[i].state.Backend < probes[j].state.Backend
-		}
-		return probes[i].state.Addr() < probes[j].state.Addr()
-	})
-
-	maxLen := 0
-	for _, p := range probes {
-		if !p.healthy {
+	probesByBackend := make(map[string][]probe)
+	for _, name := range names {
+		known := statesByBackend[name]
+		if len(known) == 0 {
+			probesByBackend[name] = []probe{{addr: cfg.ConfiguredBackendAddr(name)}}
 			continue
 		}
-		if n := len(backendDisplayName(p.state.Backend)); n > maxLen {
+		ps := make([]probe, 0, len(known))
+		for _, s := range known {
+			ps = append(ps, probe{addr: s.Addr(), state: s})
+		}
+		probesByBackend[name] = ps
+	}
+
+	type result struct {
+		name    string
+		idx     int
+		healthy bool
+		models  []RunningModelInfo
+	}
+	total := 0
+	for _, ps := range probesByBackend {
+		total += len(ps)
+	}
+	ch := make(chan result, total)
+	for _, name := range names {
+		b, err := GetBackend(name)
+		if err != nil {
+			for i := range probesByBackend[name] {
+				ch <- result{name: name, idx: i}
+			}
+			continue
+		}
+		for i, p := range probesByBackend[name] {
+			go func(name string, i int, addr string, b Backend) {
+				healthy := b.HealthCheck(addr) == nil
+				var models []RunningModelInfo
+				if healthy {
+					if ml, ok := b.(ModelLister); ok {
+						models, _ = ml.ListRunningModels(addr)
+					}
+				}
+				ch <- result{name: name, idx: i, healthy: healthy, models: models}
+			}(name, i, p.addr, b)
+		}
+	}
+	for i := 0; i < total; i++ {
+		r := <-ch
+		ps := probesByBackend[r.name]
+		ps[r.idx].healthy = r.healthy
+		ps[r.idx].models = r.models
+	}
+
+	maxLen := 0
+	for _, name := range names {
+		if n := len(backendDisplayName(name)); n > maxLen {
 			maxLen = n
 		}
 	}
 
 	var lines []string
-	for _, p := range probes {
-		if !p.healthy {
-			continue
-		}
-		b, err := GetBackend(p.state.Backend)
+	for _, name := range names {
+		b, err := GetBackend(name)
 		if err != nil {
 			continue
 		}
-		modelStr := ""
-		if len(p.models) > 0 {
-			modelNames := make([]string, len(p.models))
-			for i, m := range p.models {
-				modelNames[i] = m.Name
-			}
-			modelStr = strings.Join(modelNames, ", ")
-		}
-		detail := p.state.Addr()
-		if p.state.ActiveProfile != "" {
-			detail += " · " + fmt.Sprintf("%s%s%s", cBoldLightGray, profileDisplayName(cfg, p.state.ActiveProfile), cReset)
-		}
-		if modelStr != "" {
-			detail += " · " + modelStr
-		}
 		serverName := fmt.Sprintf("%s%s%s", cBoldLightGray, b.DisplayName(), cReset)
-		lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
-	}
-
-	if len(lines) == 0 {
-		lines = append(lines, fmt.Sprintf("%s○%s stopped", cDim, cReset))
+		ps := probesByBackend[name]
+		anyHealthy := false
+		for _, p := range ps {
+			if !p.healthy {
+				continue
+			}
+			anyHealthy = true
+			modelStr := ""
+			if len(p.models) > 0 {
+				modelNames := make([]string, len(p.models))
+				for i, m := range p.models {
+					modelNames[i] = m.Name
+				}
+				modelStr = strings.Join(modelNames, ", ")
+			}
+			detail := p.addr
+			if p.state != nil && p.state.ActiveProfile != "" {
+				detail += " · " + fmt.Sprintf("%s%s%s", cBoldLightGray, profileDisplayName(cfg, p.state.ActiveProfile), cReset)
+			}
+			if modelStr != "" {
+				detail += " · " + modelStr
+			}
+			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
+		}
+		if !anyHealthy {
+			lines = append(lines, fmt.Sprintf("%s○%s %-*s  %sstopped%s", cDim, cReset, maxLen, b.DisplayName(), cDim, cReset))
+		}
 	}
 	return lines
 }

@@ -2,6 +2,10 @@
 
 ## 1.3.0
 
+### Fixed
+
+- **Menu header lists every enabled server again** — the status header now shows one row per enabled server in `servers:` (sorted alphabetically), with running/stopped indicator, address, active profile, and loaded model. The Phase 4 per-instance rewrite had reduced the header to a single `stopped` line when no state files existed, hiding configured-but-not-currently-tracked servers (including external servers running on their configured addresses). For each enabled server, the header probes either the known per-instance state addresses (when present) or the configured default address (when no state file exists yet), so externally-started servers light up without re-activation. Multi-instance is preserved: each healthy instance gets its own row; `stopped` is only emitted when no instance of that server type is reachable.
+
 ### Changed
 
 - **Idempotent profile activation with drift notice** — `load <profile>` is now a no-op when the same profile is already active at the target address. If the recorded resolved parameters match, the call exits silently. If they have drifted (e.g. the user edited `context_size` in the config), a notice is printed to stderr listing each divergent field as `old → new` and pointing to `--restart`. Pass `--restart` (or `-r` / `--force`) to bypass the check and force re-activation. The check is per-address: activating the same profile on a different `host:port` does not collide. Implements [ADR-0007](docs/adr/0007-profile-activation-idempotency.md).
