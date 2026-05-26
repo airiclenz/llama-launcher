@@ -289,12 +289,42 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (
 				}
 			}
 		}
+	} else if cfg.ShouldAutoUnload() {
+		allStates, _ := ReadAllStates()
+		for _, s := range allStates {
+			if !shouldCrossServerUnload(s, profile.Backend) {
+				continue
+			}
+			if !IsServerAlive(s) {
+				continue
+			}
+			reportStep(progress, fmt.Sprintf("Unloading model on %s", backendDisplayName(s.Backend)))
+			if _, err := UnloadBackendModel(s.Backend, nil); err != nil && !errors.Is(err, ErrNotRunning) {
+				return nil, false, fmt.Errorf("auto-unloading %s: %w", s.Backend, err)
+			}
+		}
 	}
 
 	if _, ok := b.(ManagedBackend); ok {
 		return loadProfileManaged(cfg, profile, state, b, progress)
 	}
 	return loadProfileExternal(cfg, profile, b, state, progress)
+}
+
+// shouldCrossServerUnload reports whether the given instance is a candidate
+// for cross-server auto_unload when activating a profile on targetBackend.
+// Managed backends are skipped: an unload without a stop is not possible for
+// them (see ADR-0004), so auto_unload is silently ignored on those instances.
+func shouldCrossServerUnload(s *ServerState, targetBackend string) bool {
+	if s == nil || s.Backend == targetBackend || s.ActiveModel == "" {
+		return false
+	}
+	b, err := GetBackend(s.Backend)
+	if err != nil {
+		return false
+	}
+	_, isManaged := b.(ManagedBackend)
+	return !isManaged
 }
 
 func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b Backend, progress ProgressFunc) (*ServerState, bool, error) {

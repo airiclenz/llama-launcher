@@ -166,6 +166,64 @@ func TestBackendStatePath(t *testing.T) {
 	}
 }
 
+func TestShouldCrossServerUnload(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		state          *ServerState
+		targetBackend  string
+		want           bool
+	}{
+		{
+			name:          "nil state",
+			state:         nil,
+			targetBackend: "ollama",
+			want:          false,
+		},
+		{
+			name:          "same backend as target",
+			state:         &ServerState{Backend: "ollama", ActiveModel: "llama3.1:8b"},
+			targetBackend: "ollama",
+			want:          false,
+		},
+		{
+			name:          "no model loaded",
+			state:         &ServerState{Backend: "ollama", ActiveModel: ""},
+			targetBackend: "lmstudio",
+			want:          false,
+		},
+		{
+			name:          "managed backend is skipped",
+			state:         &ServerState{Backend: "llamacpp", ActiveModel: "/models/foo.gguf"},
+			targetBackend: "ollama",
+			want:          false,
+		},
+		{
+			name:          "external backend with model loaded",
+			state:         &ServerState{Backend: "ollama", ActiveModel: "llama3.1:8b"},
+			targetBackend: "lmstudio",
+			want:          true,
+		},
+		{
+			name:          "unknown backend",
+			state:         &ServerState{Backend: "doesnotexist", ActiveModel: "x"},
+			targetBackend: "ollama",
+			want:          false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldCrossServerUnload(tc.state, tc.targetBackend); got != tc.want {
+				t.Errorf("shouldCrossServerUnload = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteBackendState_Permissions(t *testing.T) {
 	t.Parallel()
 

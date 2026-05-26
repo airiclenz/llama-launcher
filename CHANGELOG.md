@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Cross-server `auto_unload`** — when `auto_stop_server: false` and `auto_unload: true` (default), activating a profile now unloads any model loaded on other still-running instances, not just the previous model on the same server. Implements [ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md): a single rule covers both same-server swap and cross-server cases. Managed backends (llamacpp) are silently skipped — they cannot unload without stopping the server.
+
 ### Architecture
 
 - **Documented architectural decisions in ADRs** — the design intent behind `llama-launcher` is now recorded as numbered Architectural Decision Records under [`docs/adr/`](docs/adr/):
