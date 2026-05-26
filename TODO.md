@@ -7,7 +7,7 @@
   - [x] Phase 1: documentation alignment (TDD, README, CHANGELOG)
   - [x] Phase 2: cross-server `auto_unload` (ADR-0004)
   - [x] Phase 3: `defaults.server` soft-deprecation (ADR-0005)
-  - Phase 4: state schema + multi-instance — combined `Managed`-removal and addr-keyed instances (ADR-0001 + ADR-0006)
+  - [x] Phase 4: state schema + multi-instance — combined `Managed`-removal and addr-keyed instances (ADR-0001 + ADR-0006)
   - Phase 5: idempotency drift notice + `--restart` flag (ADR-0007)
   - Phase 6 (optional): rename `Backend` → `LLMServer` interface
 

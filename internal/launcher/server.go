@@ -20,22 +20,23 @@ const (
 	healthPollInterval = 500 * time.Millisecond
 	crashLogTailLines  = 10
 	defaultTailLines   = "50"
+	loopbackHost       = "127.0.0.1"
 )
 
 var ErrNotRunning = errors.New("no server running")
 
 type ServerState struct {
-	PID           int       `json:"pid"`
-	Managed       bool      `json:"managed"`
-	Backend       string    `json:"backend"`
-	Host          string    `json:"host"`
-	Port          int       `json:"port"`
-	StartedAt     time.Time `json:"started_at"`
-	LogFile       string    `json:"log_file,omitempty"`
-	ActiveProfile string    `json:"active_profile,omitempty"`
-	ActiveModel   string    `json:"active_model,omitempty"`
-	ContextSize   int       `json:"context_size,omitempty"`
-	GPULayers     int       `json:"gpu_layers,omitempty"`
+	PID            int           `json:"pid"`
+	Backend        string        `json:"backend"`
+	Host           string        `json:"host"`
+	Port           int           `json:"port"`
+	StartedAt      time.Time     `json:"started_at"`
+	LogFile        string        `json:"log_file,omitempty"`
+	ActiveProfile  string        `json:"active_profile,omitempty"`
+	ActiveModel    string        `json:"active_model,omitempty"`
+	ContextSize    int           `json:"context_size,omitempty"`
+	GPULayers      int           `json:"gpu_layers,omitempty"`
+	ResolvedParams ProfileParams `json:"resolved_params,omitempty"`
 }
 
 func (s *ServerState) Uptime() time.Duration {
@@ -46,11 +47,9 @@ func (s *ServerState) Addr() string {
 	return fmt.Sprintf("%s:%d", s.Host, s.Port)
 }
 
-// IsServerAlive checks whether the tracked server is still reachable.
+// IsServerAlive checks whether the recorded server is reachable. Liveness is
+// decided by the backend's health check, not by PID (see ADR-0001).
 func IsServerAlive(state *ServerState) bool {
-	if state.Managed {
-		return IsProcessAlive(state.PID)
-	}
 	b, err := GetBackend(state.Backend)
 	if err != nil {
 		return false
@@ -105,7 +104,6 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend
 
 	state := &ServerState{
 		PID:       cmd.Process.Pid,
-		Managed:   true,
 		Backend:   profile.Backend,
 		Host:      *profile.Host,
 		Port:      *profile.Port,
@@ -113,13 +111,13 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend
 		LogFile:   logPath,
 	}
 
-	if err := writeBackendState(state.Backend, state); err != nil {
+	if err := writeInstanceState(state); err != nil {
 		return nil, fmt.Errorf("writing state: %w", err)
 	}
 
 	time.Sleep(startupGracePeriod)
 	if !IsProcessAlive(state.PID) {
-		removeBackendState(profile.Backend)
+		removeInstanceState(state)
 		tail := readLastLines(logPath, crashLogTailLines)
 		return nil, fmt.Errorf("server exited immediately after start\nLog tail:\n%s", tail)
 	}
@@ -153,7 +151,6 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b Backend) (*S
 
 	state := &ServerState{
 		PID:       pid,
-		Managed:   pid > 0,
 		Backend:   profile.Backend,
 		Host:      *profile.Host,
 		Port:      *profile.Port,
@@ -161,45 +158,53 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b Backend) (*S
 		LogFile:   logFile,
 	}
 
-	if err := writeBackendState(state.Backend, state); err != nil {
+	if err := writeInstanceState(state); err != nil {
 		return nil, fmt.Errorf("writing state: %w", err)
 	}
 
 	return state, nil
 }
 
-// StopBackendServer stops a managed server or disconnects from an external one for the given backend.
-func StopBackendServer(backend string, progress ProgressFunc) (*ServerState, error) {
-	state, err := ReadBackendState(backend)
+// StopInstance stops the LLM Server instance at the given address. Stop is
+// unconditional (ADR-0001): the launcher does not distinguish servers it
+// started from servers that were already running. If a PID is recorded and
+// alive, the process is signalled; the backend's TryStop is also called so
+// each backend's native shutdown command runs (`ollama stop`, `lms server
+// stop`). The per-instance state file is removed in either case.
+func StopInstance(addr string, progress ProgressFunc) (*ServerState, error) {
+	state, err := ReadInstanceState(addr)
 	if err != nil {
 		return nil, err
 	}
 	if state == nil {
 		return nil, ErrNotRunning
 	}
-
-	if state.Managed {
-		return stopManagedServer(state, progress)
-	}
-	return disconnectExternalServer(state, progress)
+	return stopInstance(state, progress)
 }
 
-func stopManagedServer(state *ServerState, progress ProgressFunc) (*ServerState, error) {
-	if !IsProcessAlive(state.PID) {
-		removeBackendState(state.Backend)
-		return state, nil
+func stopInstance(state *ServerState, progress ProgressFunc) (*ServerState, error) {
+	if state.PID > 0 && IsProcessAlive(state.PID) {
+		signalAndWait(state, progress)
 	}
 
+	if b, err := GetBackend(state.Backend); err == nil {
+		reportStep(progress, "Disconnecting")
+		b.TryStop(state.Addr())
+	}
+
+	removeInstanceState(state)
+	return state, nil
+}
+
+func signalAndWait(state *ServerState, progress ProgressFunc) {
 	proc, err := os.FindProcess(state.PID)
 	if err != nil {
-		removeBackendState(state.Backend)
-		return state, nil
+		return
 	}
 
 	reportStep(progress, "Sending stop signal")
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		removeBackendState(state.Backend)
-		return state, fmt.Errorf("sending SIGTERM: %w", err)
+		return
 	}
 	// Also signal the process group (Setsid gives the child PGID=PID).
 	_ = syscall.Kill(-state.PID, syscall.SIGTERM)
@@ -208,8 +213,7 @@ func stopManagedServer(state *ServerState, progress ProgressFunc) (*ServerState,
 	deadline := time.Now().Add(sigtermTimeout)
 	for time.Now().Before(deadline) {
 		if !IsProcessAlive(state.PID) {
-			removeBackendState(state.Backend)
-			return state, nil
+			return
 		}
 		time.Sleep(stopPollInterval)
 	}
@@ -225,30 +229,18 @@ func stopManagedServer(state *ServerState, progress ProgressFunc) (*ServerState,
 		time.Sleep(stopPollInterval)
 	}
 	time.Sleep(startupGracePeriod)
-
-	removeBackendState(state.Backend)
-	return state, nil
-}
-
-func disconnectExternalServer(state *ServerState, progress ProgressFunc) (*ServerState, error) {
-	reportStep(progress, "Disconnecting")
-	b, _ := GetBackend(state.Backend)
-	if b != nil {
-		b.TryStop(state.Addr())
-	}
-	removeBackendState(state.Backend)
-	return state, nil
 }
 
 // EnsureServer returns the running server state, starting one if needed.
 func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, error) {
-	state, _ := ReadBackendState(profile.Backend)
+	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	state, _ := ReadInstanceState(addr)
 
 	if state != nil && IsServerAlive(state) {
 		return state, false, nil
 	}
 	if state != nil {
-		removeBackendState(profile.Backend)
+		removeInstanceState(state)
 	}
 
 	b, err := GetBackend(profile.Backend)
@@ -272,7 +264,8 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, er
 
 // LoadProfile stops any existing server and starts a new one with the given profile's model.
 func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (*ServerState, bool, error) {
-	state, _ := ReadBackendState(profile.Backend)
+	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	state, _ := ReadInstanceState(targetAddr)
 
 	b, err := GetBackend(profile.Backend)
 	if err != nil {
@@ -282,16 +275,23 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (
 	if cfg.ShouldAutoStopServer() {
 		allStates, _ := ReadAllStates()
 		for _, s := range allStates {
-			if s.Backend != profile.Backend && IsServerAlive(s) {
-				reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(s.Backend)))
-				if _, err := StopBackendServer(s.Backend, nil); err != nil && !errors.Is(err, ErrNotRunning) {
-					return nil, false, fmt.Errorf("auto-stopping %s: %w", s.Backend, err)
-				}
+			if s.Addr() == targetAddr {
+				continue
+			}
+			if !IsServerAlive(s) {
+				continue
+			}
+			reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(s.Backend)))
+			if _, err := StopInstance(s.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
+				return nil, false, fmt.Errorf("auto-stopping %s: %w", s.Backend, err)
 			}
 		}
 	} else if cfg.ShouldAutoUnload() {
 		allStates, _ := ReadAllStates()
 		for _, s := range allStates {
+			if s.Addr() == targetAddr {
+				continue
+			}
 			if !shouldCrossServerUnload(s, profile.Backend) {
 				continue
 			}
@@ -299,7 +299,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (
 				continue
 			}
 			reportStep(progress, fmt.Sprintf("Unloading model on %s", backendDisplayName(s.Backend)))
-			if _, err := UnloadBackendModel(s.Backend, nil); err != nil && !errors.Is(err, ErrNotRunning) {
+			if _, err := UnloadInstanceModel(s.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
 				return nil, false, fmt.Errorf("auto-unloading %s: %w", s.Backend, err)
 			}
 		}
@@ -333,11 +333,11 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerStat
 			return state, false, nil
 		}
 		reportStep(progress, "Stopping current server")
-		if _, err := StopBackendServer(profile.Backend, nil); err != nil {
+		if _, err := StopInstance(state.Addr(), nil); err != nil {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
 		}
 	} else if state != nil {
-		removeBackendState(profile.Backend)
+		removeInstanceState(state)
 	}
 
 	reportStep(progress, "Starting server")
@@ -359,7 +359,8 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerStat
 	if profile.GPULayers != nil {
 		state.GPULayers = *profile.GPULayers
 	}
-	if err := writeBackendState(state.Backend, state); err != nil {
+	state.ResolvedParams = profile.ProfileParams
+	if err := writeInstanceState(state); err != nil {
 		return nil, false, fmt.Errorf("writing state: %w", err)
 	}
 
@@ -379,7 +380,7 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state
 		}
 	} else {
 		if state != nil {
-			removeBackendState(profile.Backend)
+			removeInstanceState(state)
 		}
 		reportStep(progress, "Connecting to server")
 		newState, err := connectExternalServer(cfg, profile, b)
@@ -399,7 +400,8 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state
 	if profile.ContextSize != nil {
 		state.ContextSize = *profile.ContextSize
 	}
-	if err := writeBackendState(state.Backend, state); err != nil {
+	state.ResolvedParams = profile.ProfileParams
+	if err := writeInstanceState(state); err != nil {
 		return nil, false, fmt.Errorf("writing state: %w", err)
 	}
 
@@ -418,9 +420,10 @@ func WaitForHealth(b Backend, addr string, timeout time.Duration) error {
 	return fmt.Errorf("server at %s did not become healthy within %s", addr, timeout)
 }
 
-// UnloadBackendModel unloads the active model for the given backend without stopping the server.
-func UnloadBackendModel(backend string, progress ProgressFunc) (*ServerState, error) {
-	state, err := ReadBackendState(backend)
+// UnloadInstanceModel unloads the active model for the instance at the given
+// address without stopping the server.
+func UnloadInstanceModel(addr string, progress ProgressFunc) (*ServerState, error) {
+	state, err := ReadInstanceState(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -444,36 +447,57 @@ func UnloadBackendModel(backend string, progress ProgressFunc) (*ServerState, er
 	state.ActiveProfile = ""
 	state.ActiveModel = ""
 	state.ContextSize = 0
-	if err := writeBackendState(state.Backend, state); err != nil {
+	state.ResolvedParams = ProfileParams{}
+	if err := writeInstanceState(state); err != nil {
 		return nil, fmt.Errorf("writing state: %w", err)
 	}
 
 	return state, nil
 }
 
-func backendStatePath(backend string) string {
-	return filepath.Join(DefaultConfigDir(), fmt.Sprintf("state-%s.json", backend))
+// instanceStatePath returns the state-file path for an instance. The host is
+// omitted when loopback (127.0.0.1) and included otherwise. See ADR-0006.
+func instanceStatePath(backend, host string, port int) string {
+	var name string
+	if host == "" || host == loopbackHost {
+		name = fmt.Sprintf("state-%s-%d.json", backend, port)
+	} else {
+		name = fmt.Sprintf("state-%s-%s-%d.json", backend, host, port)
+	}
+	return filepath.Join(DefaultConfigDir(), name)
 }
 
-func ReadBackendState(backend string) (*ServerState, error) {
-	migrateOldState()
-
-	data, err := os.ReadFile(backendStatePath(backend))
+// ReadInstanceState returns the state record for the instance bound to addr,
+// or nil if no record exists. Scans state files because the backend type is
+// not known from the address alone (any backend could in principle bind a
+// given port).
+func ReadInstanceState(addr string) (*ServerState, error) {
+	states, err := ReadAllStates()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+		return nil, err
+	}
+	for _, s := range states {
+		if s.Addr() == addr {
+			return s, nil
 		}
-		return nil, fmt.Errorf("reading state: %w", err)
 	}
+	return nil, nil
+}
 
-	var state ServerState
-	if err := json.Unmarshal(data, &state); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: corrupt state file for %s, removing\n", backend)
-		removeBackendState(backend)
-		return nil, nil
+// ReadInstancesForBackend returns all instance state records whose backend
+// matches the given name.
+func ReadInstancesForBackend(backend string) ([]*ServerState, error) {
+	states, err := ReadAllStates()
+	if err != nil {
+		return nil, err
 	}
-
-	return &state, nil
+	var matches []*ServerState
+	for _, s := range states {
+		if s.Backend == backend {
+			matches = append(matches, s)
+		}
+	}
+	return matches, nil
 }
 
 func ReadAllStates() ([]*ServerState, error) {
@@ -503,7 +527,7 @@ func ReadAllStates() ([]*ServerState, error) {
 	return states, nil
 }
 
-func writeBackendState(backend string, state *ServerState) error {
+func writeInstanceState(state *ServerState) error {
 	dir := DefaultConfigDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
@@ -514,7 +538,7 @@ func writeBackendState(backend string, state *ServerState) error {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	path := backendStatePath(backend)
+	path := instanceStatePath(state.Backend, state.Host, state.Port)
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp state: %w", err)
@@ -523,32 +547,42 @@ func writeBackendState(backend string, state *ServerState) error {
 	return os.Rename(tmpPath, path)
 }
 
-func removeBackendState(backend string) {
-	os.Remove(backendStatePath(backend))
+func removeInstanceState(state *ServerState) {
+	os.Remove(instanceStatePath(state.Backend, state.Host, state.Port))
 }
 
 var migrateOnce sync.Once
 
+// migrateOldState removes legacy state files. The pre-ADR-0006 schemes
+// (`state.json` and per-backend `state-{backend}.json`) are no longer
+// readable — the per-instance API keys by address. Legacy records are
+// treated as stale and deleted; if the recorded process is still alive,
+// the user re-activates the relevant Profile to recreate the per-instance
+// state record. See ADR-0006.
 func migrateOldState() {
 	migrateOnce.Do(func() {
-		oldPath := filepath.Join(DefaultConfigDir(), "state.json")
-		data, err := os.ReadFile(oldPath)
-		if err != nil {
-			return
-		}
-		var state ServerState
-		if err := json.Unmarshal(data, &state); err != nil {
-			os.Remove(oldPath)
-			return
-		}
-		if state.Backend != "" {
-			if err := writeBackendState(state.Backend, &state); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to migrate old state: %v\n", err)
-				return
-			}
-		}
-		os.Remove(oldPath)
+		removeLegacyStateFiles(DefaultConfigDir())
 	})
+}
+
+func removeLegacyStateFiles(dir string) {
+	// Remove the original single-file state.
+	os.Remove(filepath.Join(dir, "state.json"))
+
+	// Remove legacy per-backend files of the form state-{backend}.json
+	// (exactly one dash-separated segment after "state"). New per-instance
+	// files always include a port and so have two or more segments.
+	matches, err := filepath.Glob(filepath.Join(dir, "state-*.json"))
+	if err != nil {
+		return
+	}
+	for _, path := range matches {
+		base := filepath.Base(path)
+		name := strings.TrimSuffix(strings.TrimPrefix(base, "state-"), ".json")
+		if !strings.Contains(name, "-") {
+			os.Remove(path)
+		}
+	}
 }
 
 func IsProcessAlive(pid int) bool {

@@ -116,9 +116,9 @@ func cmdLoad(cfg *Config, args []string) int {
 		return 3
 	}
 
-	if started && state.Managed {
+	if started && state.PID > 0 {
 		fmt.Printf("Server started (PID %d)\n", state.PID)
-	} else if started && !state.Managed {
+	} else if started {
 		fmt.Printf("Connected to %s\n", backendDisplayName(state.Backend))
 	}
 	if state.ActiveProfile == profile.Name {
@@ -128,14 +128,19 @@ func cmdLoad(cfg *Config, args []string) int {
 }
 
 func cmdUnload(cfg *Config, args []string) int {
-	var backend string
+	var target *ServerState
 	if len(args) > 0 {
 		profile, err := cfg.ResolveProfile(args[0])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 2
 		}
-		backend = profile.Backend
+		addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+		target, _ = ReadInstanceState(addr)
+		if target == nil || target.Backend != profile.Backend {
+			fmt.Println("No model loaded for that profile.")
+			return 1
+		}
 	} else {
 		states, _ := ReadAllStates()
 		var loaded []*ServerState
@@ -151,14 +156,14 @@ func cmdUnload(cfg *Config, args []string) int {
 		if len(loaded) > 1 {
 			fmt.Fprintln(os.Stderr, "Multiple models loaded — specify which to unload:")
 			for _, s := range loaded {
-				fmt.Fprintf(os.Stderr, "  %s: %s (%s)\n", backendDisplayName(s.Backend), s.ActiveModel, s.ActiveProfile)
+				fmt.Fprintf(os.Stderr, "  %s at %s: %s (%s)\n", backendDisplayName(s.Backend), s.Addr(), s.ActiveModel, s.ActiveProfile)
 			}
 			return 2
 		}
-		backend = loaded[0].Backend
+		target = loaded[0]
 	}
 
-	b, err := GetBackend(backend)
+	b, err := GetBackend(target.Backend)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
@@ -166,14 +171,14 @@ func cmdUnload(cfg *Config, args []string) int {
 
 	progress := newCLIProgress("Unloading model")
 	if _, ok := b.(ManagedBackend); ok {
-		state, err := StopBackendServer(backend, progress)
+		state, err := StopInstance(target.Addr(), progress)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 3
 		}
-		fmt.Printf("Model unloaded, server stopped (PID %d)\n", state.PID)
+		fmt.Printf("Model unloaded, server stopped at %s\n", state.Addr())
 	} else {
-		state, err := UnloadBackendModel(backend, progress)
+		state, err := UnloadInstanceModel(target.Addr(), progress)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 3
@@ -227,54 +232,98 @@ func cmdStart(cfg *Config, args []string) int {
 		return 3
 	}
 	if !started {
-		if state.Managed {
+		if state.PID > 0 {
 			fmt.Printf("Server already running on %s:%d (PID %d)\n", state.Host, state.Port, state.PID)
 		} else {
 			fmt.Printf("Already connected to %s at %s:%d\n", b.DisplayName(), state.Host, state.Port)
 		}
 		return 0
 	}
-	if state.Managed {
+	if state.PID > 0 {
 		fmt.Printf("Server started on %s:%d (PID %d)\n", state.Host, state.Port, state.PID)
-		fmt.Printf("Log: %s\n", state.LogFile)
+		if state.LogFile != "" {
+			fmt.Printf("Log: %s\n", state.LogFile)
+		}
 	} else {
 		fmt.Printf("Connected to %s at %s:%d\n", b.DisplayName(), state.Host, state.Port)
 	}
 	return 0
 }
 
-func cmdStop(cfg *Config, args []string) int {
-	var backend string
-	if len(args) > 0 {
-		backend = args[0]
-		if _, err := GetBackend(backend); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: unknown backend %q\n", backend)
-			return 2
+// resolveStopTarget interprets the optional [target] argument for stop/logs.
+// The target may be an explicit host:port or a backend name; if no target is
+// given and exactly one instance is running, it is selected automatically.
+// On ambiguity (multiple matches), the candidates are printed to stderr and
+// the returned error is non-nil.
+func resolveStopTarget(target string) (*ServerState, error) {
+	states, _ := ReadAllStates()
+	var running []*ServerState
+	for _, s := range states {
+		if IsServerAlive(s) {
+			running = append(running, s)
 		}
-	} else {
-		states, _ := ReadAllStates()
-		var running []*ServerState
-		for _, s := range states {
-			if IsServerAlive(s) {
-				running = append(running, s)
+	}
+	if len(running) == 0 {
+		return nil, ErrNotRunning
+	}
+
+	if target == "" {
+		if len(running) == 1 {
+			return running[0], nil
+		}
+		fmt.Fprintln(os.Stderr, "Multiple servers running — specify which to stop:")
+		for _, s := range running {
+			fmt.Fprintf(os.Stderr, "  %s at %s\n", backendDisplayName(s.Backend), s.Addr())
+		}
+		return nil, fmt.Errorf("ambiguous target")
+	}
+
+	if strings.Contains(target, ":") {
+		for _, s := range running {
+			if s.Addr() == target {
+				return s, nil
 			}
 		}
-		if len(running) == 0 {
+		return nil, fmt.Errorf("no running instance at %s", target)
+	}
+
+	var matches []*ServerState
+	for _, s := range running {
+		if s.Backend == target {
+			matches = append(matches, s)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no running %s instance", target)
+	}
+	if len(matches) > 1 {
+		fmt.Fprintf(os.Stderr, "Multiple %s instances running — specify host:port:\n", target)
+		for _, s := range matches {
+			fmt.Fprintf(os.Stderr, "  %s\n", s.Addr())
+		}
+		return nil, fmt.Errorf("ambiguous target")
+	}
+	return matches[0], nil
+}
+
+func cmdStop(cfg *Config, args []string) int {
+	_ = cfg
+	target := ""
+	if len(args) > 0 {
+		target = args[0]
+	}
+
+	state, err := resolveStopTarget(target)
+	if err != nil {
+		if errors.Is(err, ErrNotRunning) {
 			fmt.Println("No server running.")
 			return 1
 		}
-		if len(running) > 1 {
-			fmt.Fprintln(os.Stderr, "Multiple servers running — specify which to stop:")
-			for _, s := range running {
-				fmt.Fprintf(os.Stderr, "  %s at %s:%d\n", backendDisplayName(s.Backend), s.Host, s.Port)
-			}
-			return 2
-		}
-		backend = running[0].Backend
+		return 2
 	}
 
 	progress := newCLIProgress("Stopping server")
-	state, err := StopBackendServer(backend, progress)
+	stopped, err := StopInstance(state.Addr(), progress)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
 			fmt.Println("No server running.")
@@ -283,117 +332,96 @@ func cmdStop(cfg *Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}
-	if state.Managed {
-		fmt.Printf("Stopped server (PID %d)\n", state.PID)
+	if stopped.PID > 0 {
+		fmt.Printf("Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
 	} else {
-		fmt.Printf("Disconnected from %s (server still running at %s:%d)\n",
-			backendDisplayName(state.Backend), state.Host, state.Port)
+		fmt.Printf("Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
 	}
 	return 0
 }
 
 func cmdStatus(cfg *Config) int {
 	states, _ := ReadAllStates()
-	stateMap := make(map[string]*ServerState)
-	for _, s := range states {
-		stateMap[s.Backend] = s
-	}
-
-	names := make([]string, 0, len(cfg.Servers))
-	for name := range cfg.Servers {
-		if cfg.IsServerEnabled(name) {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
 
 	type probeResult struct {
-		name    string
+		state   *ServerState
 		healthy bool
 		models  []RunningModelInfo
 	}
-	results := make(chan probeResult, len(names))
-	for _, name := range names {
-		go func(name string) {
-			b, err := GetBackend(name)
+	results := make(chan probeResult, len(states))
+	for _, s := range states {
+		go func(s *ServerState) {
+			b, err := GetBackend(s.Backend)
 			if err != nil {
-				results <- probeResult{name: name}
+				results <- probeResult{state: s}
 				return
 			}
-			addr := cfg.ConfiguredBackendAddr(name)
-			if s, ok := stateMap[name]; ok {
-				addr = s.Addr()
-			}
-			healthy := b.HealthCheck(addr) == nil
+			healthy := b.HealthCheck(s.Addr()) == nil
 			var models []RunningModelInfo
 			if healthy {
 				if ml, ok := b.(ModelLister); ok {
-					models, _ = ml.ListRunningModels(addr)
+					models, _ = ml.ListRunningModels(s.Addr())
 				}
 			}
-			results <- probeResult{name: name, healthy: healthy, models: models}
-		}(name)
+			results <- probeResult{state: s, healthy: healthy, models: models}
+		}(s)
 	}
-	healthMap := make(map[string]probeResult)
-	for range names {
-		r := <-results
-		healthMap[r.name] = r
+
+	probes := make([]probeResult, 0, len(states))
+	for range states {
+		probes = append(probes, <-results)
 	}
+	sort.Slice(probes, func(i, j int) bool {
+		if probes[i].state.Backend != probes[j].state.Backend {
+			return probes[i].state.Backend < probes[j].state.Backend
+		}
+		return probes[i].state.Addr() < probes[j].state.Addr()
+	})
 
 	anyRunning := false
-
 	maxLen := 0
-	for _, name := range names {
-		if n := len(backendDisplayName(name)); n > maxLen {
+	for _, p := range probes {
+		if !p.healthy {
+			continue
+		}
+		if n := len(backendDisplayName(p.state.Backend)); n > maxLen {
 			maxLen = n
 		}
 	}
 
-	for _, name := range names {
-		b, err := GetBackend(name)
+	for _, p := range probes {
+		s := p.state
+		b, err := GetBackend(s.Backend)
 		if err != nil {
 			continue
 		}
-
-		addr := cfg.ConfiguredBackendAddr(name)
-		if s, ok := stateMap[name]; ok {
-			addr = s.Addr()
+		if !p.healthy {
+			removeInstanceState(s)
+			continue
 		}
-
-		r := healthMap[name]
-		if r.healthy {
-			anyRunning = true
-			modelStr := ""
-			if len(r.models) > 0 {
-				modelNames := make([]string, len(r.models))
-				for i, m := range r.models {
-					modelNames[i] = m.Name
-				}
-				modelStr = strings.Join(modelNames, ", ")
+		anyRunning = true
+		modelStr := ""
+		if len(p.models) > 0 {
+			modelNames := make([]string, len(p.models))
+			for i, m := range p.models {
+				modelNames[i] = m.Name
 			}
-			if modelStr != "" {
-				fmt.Printf("  ● %-*s  running    %-22s %s\n", maxLen, b.DisplayName(), addr, modelStr)
-			} else {
-				fmt.Printf("  ● %-*s  running    %s\n", maxLen, b.DisplayName(), addr)
-			}
+			modelStr = strings.Join(modelNames, ", ")
+		}
+		if modelStr != "" {
+			fmt.Printf("  ● %-*s  running    %-22s %s\n", maxLen, b.DisplayName(), s.Addr(), modelStr)
 		} else {
-			fmt.Printf("  ○ %-*s  stopped\n", maxLen, b.DisplayName())
-			if _, ok := stateMap[name]; ok {
-				removeBackendState(name)
-			}
+			fmt.Printf("  ● %-*s  running    %s\n", maxLen, b.DisplayName(), s.Addr())
 		}
 	}
 
-	for _, name := range names {
-		s, ok := stateMap[name]
-		if !ok || s.ActiveProfile == "" {
-			continue
-		}
-		if !healthMap[name].healthy {
+	for _, p := range probes {
+		s := p.state
+		if !p.healthy || s.ActiveProfile == "" {
 			continue
 		}
 		parts := []string{fmt.Sprintf("Active: %s", profileDisplayName(cfg, s.ActiveProfile))}
-		if s.Managed {
+		if s.PID > 0 {
 			parts = append(parts, fmt.Sprintf("PID %d", s.PID))
 			parts = append(parts, fmt.Sprintf("Uptime %s", formatUptime(s.Uptime())))
 		}
@@ -405,6 +433,7 @@ func cmdStatus(cfg *Config) int {
 	}
 
 	if !anyRunning {
+		fmt.Println("No servers running.")
 		return 1
 	}
 	return 0
@@ -462,21 +491,24 @@ func cmdLogs(cfg *Config, args []string) int {
 	}
 
 	follow := false
-	var backend string
+	var target string
 	for _, arg := range args {
 		if arg == "--follow" || arg == "-f" {
 			follow = true
 		} else {
-			backend = arg
+			target = arg
 		}
 	}
 
 	var state *ServerState
-	if backend != "" {
-		s, err := ReadBackendState(backend)
+	if target != "" {
+		s, err := resolveStopTarget(target)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 3
+			if errors.Is(err, ErrNotRunning) {
+				fmt.Println("No server running.")
+				return 1
+			}
+			return 2
 		}
 		state = s
 	} else {
@@ -508,14 +540,14 @@ func cmdLogs(cfg *Config, args []string) int {
 	}
 
 	if !IsServerAlive(state) {
-		if state.Managed {
+		if state.PID > 0 {
 			fmt.Fprintf(os.Stderr, "Notice: server exited unexpectedly (PID %d)\n", state.PID)
 		}
-		removeBackendState(state.Backend)
+		removeInstanceState(state)
 	}
 
 	if state.LogFile == "" {
-		fmt.Println("No log file available for external server.")
+		fmt.Println("No log file available for this instance.")
 		return 1
 	}
 
@@ -662,10 +694,10 @@ Commands:
   load <profile>        Start server with model (stops existing if different)
   unload [profile]      Unload model (for managed backends: stops server)
   start [--profile p]   Start server (optionally with a profile)
-  stop [backend]        Stop the server
+  stop [target]         Stop a server (target = host:port or backend name)
   status                Show server and model status
   list                  List available profiles
-  logs [backend] [-f]          Tail the server log
+  logs [target] [-f]           Tail an instance's log
   logs clean [--days N|--all]  Remove old log files
   config validate       Check config file for errors
   config init [--force]   Generate example config (overwrite if --force)

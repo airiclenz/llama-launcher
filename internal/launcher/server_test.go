@@ -8,14 +8,13 @@ import (
 	"time"
 )
 
-func TestWriteAndReadBackendState(t *testing.T) {
+func TestWriteAndReadInstanceState(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	backend := "testbackend"
 
 	state := &ServerState{
 		PID:           12345,
-		Managed:       true,
 		Backend:       backend,
 		Host:          "127.0.0.1",
 		Port:          8080,
@@ -25,7 +24,7 @@ func TestWriteAndReadBackendState(t *testing.T) {
 		ContextSize:   4096,
 	}
 
-	statePath := filepath.Join(dir, "state-testbackend.json")
+	statePath := filepath.Join(dir, "state-testbackend-8080.json")
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		t.Fatalf("marshaling state: %v", err)
@@ -52,9 +51,6 @@ func TestWriteAndReadBackendState(t *testing.T) {
 	}
 	if readState.ActiveProfile != state.ActiveProfile {
 		t.Errorf("ActiveProfile = %q, want %q", readState.ActiveProfile, state.ActiveProfile)
-	}
-	if readState.Managed != state.Managed {
-		t.Errorf("Managed = %v, want %v", readState.Managed, state.Managed)
 	}
 }
 
@@ -153,16 +149,51 @@ func TestReadLastLines(t *testing.T) {
 	})
 }
 
-func TestBackendStatePath(t *testing.T) {
+func TestInstanceStatePath(t *testing.T) {
 	t.Parallel()
 
-	path := backendStatePath("llamacpp")
-	if !filepath.IsAbs(path) {
-		t.Errorf("backendStatePath returned relative path: %q", path)
+	tests := []struct {
+		name     string
+		backend  string
+		host     string
+		port     int
+		wantBase string
+	}{
+		{
+			name:     "loopback host is omitted",
+			backend:  "llamacpp",
+			host:     "127.0.0.1",
+			port:     8080,
+			wantBase: "state-llamacpp-8080.json",
+		},
+		{
+			name:     "empty host treated as loopback",
+			backend:  "ollama",
+			host:     "",
+			port:     11434,
+			wantBase: "state-ollama-11434.json",
+		},
+		{
+			name:     "non-loopback host included",
+			backend:  "llamacpp",
+			host:     "192.168.1.50",
+			port:     8080,
+			wantBase: "state-llamacpp-192.168.1.50-8080.json",
+		},
 	}
-	base := filepath.Base(path)
-	if base != "state-llamacpp.json" {
-		t.Errorf("base = %q, want state-llamacpp.json", base)
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := instanceStatePath(tc.backend, tc.host, tc.port)
+			if !filepath.IsAbs(path) {
+				t.Errorf("instanceStatePath returned relative path: %q", path)
+			}
+			if base := filepath.Base(path); base != tc.wantBase {
+				t.Errorf("base = %q, want %q", base, tc.wantBase)
+			}
+		})
 	}
 }
 
@@ -221,6 +252,47 @@ func TestShouldCrossServerUnload(t *testing.T) {
 				t.Errorf("shouldCrossServerUnload = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStateMigration(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Legacy files that should be removed.
+	legacy := []string{
+		"state.json",
+		"state-llamacpp.json",
+		"state-ollama.json",
+	}
+	for _, name := range legacy {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Per-instance files that must be preserved.
+	keep := []string{
+		"state-llamacpp-8080.json",
+		"state-llamacpp-192.168.1.50-8081.json",
+	}
+	for _, name := range keep {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removeLegacyStateFiles(dir)
+
+	for _, name := range legacy {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("legacy file %s should be removed", name)
+		}
+	}
+	for _, name := range keep {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("per-instance file %s should be preserved: %v", name, err)
+		}
 	}
 }
 
