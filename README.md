@@ -2,7 +2,9 @@
 
 A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), and [LM Studio](https://lmstudio.ai) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
 
-Managed backends (llama.cpp) are started as detached background processes. External backends (Ollama, LM Studio) connect to running instances or auto-start them. The launcher is built for ultra low memory usage and even supports immediate exit after selecting a model.
+`llama-launcher` is a process manager, not a request router: it starts and stops LLM servers and tells them which model to load. Clients talk to each server directly via its native address. The launcher exits after dispatching work, consuming zero resident memory while the server runs. Multiple instances of any supported server may run concurrently as long as each binds a distinct `host:port`.
+
+See [CONTEXT.md](CONTEXT.md) for the project's domain language and [docs/adr/](docs/adr/) for the architectural decisions behind the design.
 
 <p align="center">
   <img src="media/screen_1.png" alt="llama-launcher interactive menu" width="600">
@@ -102,13 +104,13 @@ See the [technical design doc](llama-launcher.TDD.md) for full schema details an
 
 ### Backends
 
-| Backend | Type | Default address | Model reference |
-|---------|------|-----------------|-----------------|
-| `llamacpp` | Managed | `127.0.0.1:8080` | File path (relative to `models_dir` or absolute) |
-| `ollama` | External | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`) |
-| `lmstudio` | External | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
+| Backend | Default address | Model reference |
+|---------|-----------------|-----------------|
+| `llamacpp` | `127.0.0.1:8080` | File path (relative to `models_dir` or absolute) |
+| `ollama` | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`) |
+| `lmstudio` | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
 
-**Managed** backends are forked and owned by the launcher. **External** backends connect to a running instance or auto-start one; the server stays running after the launcher exits.
+For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)).
 
 ## Usage
 
@@ -123,19 +125,21 @@ llama-launcher
 The menu adapts to three states:
 
 - **Stopped** -- select a profile to start the server and load a model
-- **Running with model** -- switch models (hidden when only one profile is configured), unload model, stop/disconnect, show log, show model config, edit config
-- **Running (no model)** -- load a profile, stop/disconnect, show log, edit config
+- **Running with model** -- switch models (hidden when only one profile is configured), unload model, stop server, show log, show model config, edit config
+- **Running (no model)** -- load a profile, stop server, show log, edit config
+
+When more than one instance is running, the relevant actions (stop, unload, show log) present an instance picker disambiguated by `host:port`.
 
 ### CLI commands
 
 ```bash
-llama-launcher load <profile>        # Start server (if needed) and load model
-llama-launcher unload [profile]      # Unload model (stops server for managed backends)
-llama-launcher start [--profile p]   # Start server (optionally with a profile)
-llama-launcher stop [backend]        # Stop the server
-llama-launcher status                # Show all server and model status
-llama-launcher list                  # List available profiles
-llama-launcher logs [backend] [-f]          # Tail the server log
+llama-launcher load <profile> [--restart]   # Activate a profile (no-op if already active; --restart forces)
+llama-launcher unload [profile]             # Unload model from the matching instance
+llama-launcher start [--profile p]          # Start server (optionally with a profile)
+llama-launcher stop [target]                # Stop a server (target = host:port or backend name)
+llama-launcher status                       # Show all running instances
+llama-launcher list                         # List available profiles
+llama-launcher logs [target] [-f]           # Tail an instance's log
 llama-launcher logs clean [--days N|--all]  # Remove old log files
 ```
 
@@ -159,14 +163,14 @@ The version is read from the `VERSION` file and injected at build time.
 
 ## Architecture
 
-All code lives in `internal/launcher/`. Three backends are implemented behind a common `Backend` interface: llama.cpp (managed), Ollama (external), and LM Studio (external).
+All code lives in `internal/launcher/`. Three backends are implemented behind a common `Backend` interface: llama.cpp, Ollama, and LM Studio. The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
 
 Key paths:
 
 | Path | Purpose |
 |------|---------|
 | `~/.config/llama-launcher/config.yaml` | Configuration |
-| `~/.config/llama-launcher/state-*.json` | Per-backend runtime state (PID, active model) |
+| `~/.config/llama-launcher/state-{backend}-{port}.json` | Per-instance runtime state (PID, active profile/model, resolved-params snapshot) |
 | `~/.config/llama-launcher/logs/` | Server log files |
 
 ## License

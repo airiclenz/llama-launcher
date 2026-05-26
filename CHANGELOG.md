@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Architecture
+
+- **Documented architectural decisions in ADRs** — the design intent behind `llama-launcher` is now recorded as numbered Architectural Decision Records under [`docs/adr/`](docs/adr/):
+  - [ADR-0001](docs/adr/0001-stop-is-unconditional.md) — `stop` is unconditional; the `managed` distinction is removed.
+  - [ADR-0002](docs/adr/0002-not-a-router.md) — `llama-launcher` is a process manager, not a request router.
+  - [ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md) — llamacpp uses restart-per-Profile, not multi-Model hosting.
+  - [ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md) — `auto_unload` is one rule covering both same-server and cross-server cases.
+  - [ADR-0005](docs/adr/0005-profile-server-is-identity.md) — every Profile must name its LLM Server; `defaults.server` is soft-deprecated.
+  - [ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md) — LLM Server instances are keyed by `host:port`; multi-instance is supported.
+  - [ADR-0007](docs/adr/0007-profile-activation-idempotency.md) — Profile activation is idempotent by name within an address slot; `--restart` forces re-activation.
+- **Domain language pinned in CONTEXT.md** — the terms LLM Server, Model, and Profile (and the verbs Activate, Load/Unload, Start/Stop) are now defined in [CONTEXT.md](CONTEXT.md).
+- **Technical design doc realigned with the ADRs** — `llama-launcher.TDD.md` drops the obsolete "router mode" framing, the never-implemented hardware-conflict warning, and the managed/external split; rewrites the lifecycle and state-file sections to match the per-instance, address-keyed model. Implementation of the behavioural changes (cross-server `auto_unload`, `defaults.server` deprecation warning, per-instance state files, drift notice + `--restart`) lands in subsequent releases — see [`docs/handoffs/20260526-fit-gap-adrs-vs-code.md`](docs/handoffs/20260526-fit-gap-adrs-vs-code.md) for the phased plan.
+
 ## 1.2.2
 
 ### Added

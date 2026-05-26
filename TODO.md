@@ -1,9 +1,22 @@
 
 # TODO
 
+## Architecture refactor (ADRs 0001–0007)
+
+- [ ] Implement the fit-gap from [docs/handoffs/20260526-fit-gap-adrs-vs-code.md](docs/handoffs/20260526-fit-gap-adrs-vs-code.md)
+  - [x] Phase 1: documentation alignment (TDD, README, CHANGELOG)
+  - Phase 2: cross-server `auto_unload` (ADR-0004)
+  - Phase 3: `defaults.server` soft-deprecation (ADR-0005)
+  - Phase 4: state schema + multi-instance — combined `Managed`-removal and addr-keyed instances (ADR-0001 + ADR-0006)
+  - Phase 5: idempotency drift notice + `--restart` flag (ADR-0007)
+  - Phase 6 (optional): rename `Backend` → `LLMServer` interface
+
 ## Feature ideas
 
-- [x] **Possibility to `Star` mark configurations in the conifg (`is-favourite`)**. Star marked items will listed first in the list of available models. The following ordering applies: first sort by star-marked items, then sort by server-type, then sort by name.
+- [ ] Add `sort_alphabetically` to the config (default: `true`).
+  - When `true`, profiles are sorted alphabetically in menus and `list` output (current behaviour).
+  - When `false`, profiles appear in the order they are defined in the config file.
+  - `is_favourite: true` Profiles always float to the top regardless of this setting (favourite > sort mode).
 
 - [ ] Shell completions (bash/zsh/fish)
   - Tab-complete profile names for `load`, `unload`, and the new `start --profile`
