@@ -247,7 +247,7 @@ func doLoadProfile(cfg *Config, name string) error {
 	} else {
 		progress = newCLIProgress(fmt.Sprintf("Loading %s", displayName))
 	}
-	state, started, err := LoadProfile(cfg, profile, progress)
+	state, started, err := LoadProfile(cfg, profile, false, progress)
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return err

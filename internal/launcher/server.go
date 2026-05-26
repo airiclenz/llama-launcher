@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -262,14 +263,30 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, er
 	return state, true, nil
 }
 
-// LoadProfile stops any existing server and starts a new one with the given profile's model.
-func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (*ServerState, bool, error) {
+// LoadProfile stops any existing server and starts a new one with the given
+// profile's model. When the same profile is already active at the target
+// address, the call is a no-op (see ADR-0007): if the recorded resolved
+// parameters match the freshly resolved profile the call exits silently,
+// otherwise a drift notice is printed to stderr naming the divergent fields.
+// Pass restart=true to bypass the idempotency check and force re-activation.
+func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*ServerState, bool, error) {
 	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 	state, _ := ReadInstanceState(targetAddr)
 
 	b, err := GetBackend(profile.Backend)
 	if err != nil {
 		return nil, false, err
+	}
+
+	if !restart && state != nil && state.ActiveProfile == profile.Name && IsServerAlive(state) {
+		drifts := paramDrift(state.ResolvedParams, profile.ProfileParams)
+		if state.ActiveModel != "" && profile.ModelPath != "" && state.ActiveModel != profile.ModelPath {
+			drifts = append(drifts, fmt.Sprintf("model: %s → %s", state.ActiveModel, profile.ModelPath))
+		}
+		if len(drifts) > 0 {
+			printDriftNotice(profile.Name, targetAddr, drifts)
+		}
+		return state, false, nil
 	}
 
 	if cfg.ShouldAutoStopServer() {
@@ -311,6 +328,88 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, progress ProgressFunc) (
 	return loadProfileExternal(cfg, profile, b, state, progress)
 }
 
+// paramDrift returns a human-readable list of fields that differ between the
+// stored snapshot of a profile's resolved parameters and a freshly resolved
+// set. Slot-identity fields (Server, Host, Port) are intentionally skipped:
+// drift in those puts the activation in a different address slot, which the
+// idempotency check up the stack would not have matched in the first place.
+// Each returned string has the form "field: old → new".
+func paramDrift(stored, fresh ProfileParams) []string {
+	var drifts []string
+	addInt := func(name string, a, b *int) {
+		if a == nil && b == nil {
+			return
+		}
+		if a == nil || b == nil || *a != *b {
+			drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatIntPtr(a), formatIntPtr(b)))
+		}
+	}
+	addBool := func(name string, a, b *bool) {
+		if a == nil && b == nil {
+			return
+		}
+		if a == nil || b == nil || *a != *b {
+			drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatBoolPtr(a), formatBoolPtr(b)))
+		}
+	}
+	addFloat := func(name string, a, b *float64) {
+		if a == nil && b == nil {
+			return
+		}
+		if a == nil || b == nil || *a != *b {
+			drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatFloatPtr(a), formatFloatPtr(b)))
+		}
+	}
+
+	addInt("gpu_layers", stored.GPULayers, fresh.GPULayers)
+	addInt("threads", stored.Threads, fresh.Threads)
+	addInt("threads_batch", stored.ThreadsBatch, fresh.ThreadsBatch)
+	addInt("batch_size", stored.BatchSize, fresh.BatchSize)
+	addInt("context_size", stored.ContextSize, fresh.ContextSize)
+	addBool("flash_attn", stored.FlashAttn, fresh.FlashAttn)
+	addBool("cont_batching", stored.ContBatching, fresh.ContBatching)
+	addInt("parallel", stored.Parallel, fresh.Parallel)
+	addBool("mlock", stored.Mlock, fresh.Mlock)
+	addBool("no_mmap", stored.NoMmap, fresh.NoMmap)
+	addBool("embedding", stored.Embedding, fresh.Embedding)
+	addBool("jinja", stored.Jinja, fresh.Jinja)
+	addFloat("temperature", stored.Temperature, fresh.Temperature)
+	addFloat("repeat_penalty", stored.RepeatPenalty, fresh.RepeatPenalty)
+	addInt("top_k", stored.TopK, fresh.TopK)
+	addFloat("top_p", stored.TopP, fresh.TopP)
+	addFloat("min_p", stored.MinP, fresh.MinP)
+	return drifts
+}
+
+func formatIntPtr(p *int) string {
+	if p == nil {
+		return "(unset)"
+	}
+	return fmt.Sprintf("%d", *p)
+}
+
+func formatBoolPtr(p *bool) string {
+	if p == nil {
+		return "(unset)"
+	}
+	return fmt.Sprintf("%t", *p)
+}
+
+func formatFloatPtr(p *float64) string {
+	if p == nil {
+		return "(unset)"
+	}
+	return strconv.FormatFloat(*p, 'g', -1, 64)
+}
+
+func printDriftNotice(profileName, addr string, drifts []string) {
+	fmt.Fprintf(os.Stderr, "Notice: profile %q already active at %s, but its parameters have drifted:\n", profileName, addr)
+	for _, d := range drifts {
+		fmt.Fprintf(os.Stderr, "  %s\n", d)
+	}
+	fmt.Fprintf(os.Stderr, "Run `llama-launcher load %s --restart` to apply the new parameters.\n", profileName)
+}
+
 // shouldCrossServerUnload reports whether the given instance is a candidate
 // for cross-server auto_unload when activating a profile on targetBackend.
 // Managed backends are skipped: an unload without a stop is not possible for
@@ -329,9 +428,6 @@ func shouldCrossServerUnload(s *ServerState, targetBackend string) bool {
 
 func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b Backend, progress ProgressFunc) (*ServerState, bool, error) {
 	if state != nil && IsServerAlive(state) {
-		if state.ActiveProfile == profile.Name {
-			return state, false, nil
-		}
 		reportStep(progress, "Stopping current server")
 		if _, err := StopInstance(state.Addr(), nil); err != nil {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
@@ -369,9 +465,6 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerStat
 
 func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state *ServerState, progress ProgressFunc) (*ServerState, bool, error) {
 	if state != nil && IsServerAlive(state) {
-		if state.ActiveProfile == profile.Name {
-			return state, false, nil
-		}
 		if state.ActiveModel != "" && cfg.ShouldAutoUnload() {
 			reportStep(progress, "Unloading current model")
 			if err := b.UnloadModel(state.Addr(), state.ActiveModel); err != nil {

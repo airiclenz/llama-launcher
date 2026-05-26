@@ -296,6 +296,76 @@ func TestStateMigration(t *testing.T) {
 	}
 }
 
+func TestParamDrift(t *testing.T) {
+	t.Parallel()
+
+	intPtr := func(n int) *int { return &n }
+	boolPtr := func(b bool) *bool { return &b }
+	floatPtr := func(f float64) *float64 { return &f }
+
+	t.Run("identical params produce no drift", func(t *testing.T) {
+		t.Parallel()
+		p := ProfileParams{ContextSize: intPtr(8192), Temperature: floatPtr(0.7), FlashAttn: boolPtr(true)}
+		if d := paramDrift(p, p); len(d) != 0 {
+			t.Errorf("want no drift, got %v", d)
+		}
+	})
+
+	t.Run("nil-vs-nil fields are ignored", func(t *testing.T) {
+		t.Parallel()
+		a := ProfileParams{ContextSize: intPtr(8192)}
+		b := ProfileParams{ContextSize: intPtr(8192)}
+		if d := paramDrift(a, b); len(d) != 0 {
+			t.Errorf("want no drift for nil-vs-nil siblings, got %v", d)
+		}
+	})
+
+	t.Run("changed int field appears in drift", func(t *testing.T) {
+		t.Parallel()
+		a := ProfileParams{ContextSize: intPtr(8192)}
+		b := ProfileParams{ContextSize: intPtr(16384)}
+		d := paramDrift(a, b)
+		if len(d) != 1 || d[0] != "context_size: 8192 → 16384" {
+			t.Errorf("unexpected drift: %v", d)
+		}
+	})
+
+	t.Run("set-vs-unset is reported", func(t *testing.T) {
+		t.Parallel()
+		a := ProfileParams{ContextSize: intPtr(8192)}
+		b := ProfileParams{}
+		d := paramDrift(a, b)
+		if len(d) != 1 || d[0] != "context_size: 8192 → (unset)" {
+			t.Errorf("unexpected drift: %v", d)
+		}
+	})
+
+	t.Run("bool and float fields are compared", func(t *testing.T) {
+		t.Parallel()
+		a := ProfileParams{FlashAttn: boolPtr(true), Temperature: floatPtr(0.7)}
+		b := ProfileParams{FlashAttn: boolPtr(false), Temperature: floatPtr(0.3)}
+		d := paramDrift(a, b)
+		if len(d) != 2 {
+			t.Fatalf("want 2 drifts, got %d: %v", len(d), d)
+		}
+	})
+
+	t.Run("slot identity fields are not compared", func(t *testing.T) {
+		t.Parallel()
+		host := "127.0.0.1"
+		host2 := "192.168.0.1"
+		port1 := 8080
+		port2 := 8081
+		server1 := "llamacpp"
+		server2 := "ollama"
+		a := ProfileParams{Host: &host, Port: &port1, Server: &server1}
+		b := ProfileParams{Host: &host2, Port: &port2, Server: &server2}
+		if d := paramDrift(a, b); len(d) != 0 {
+			t.Errorf("slot identity should not produce drift, got %v", d)
+		}
+	})
+}
+
 func TestWriteBackendState_Permissions(t *testing.T) {
 	t.Parallel()
 

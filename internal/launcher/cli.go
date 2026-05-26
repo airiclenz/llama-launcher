@@ -94,12 +94,30 @@ func Run(args []string) int {
 
 
 func cmdLoad(cfg *Config, args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: llama-launcher load <profile>")
+	restart := false
+	var profileName string
+	for _, a := range args {
+		switch a {
+		case "--restart", "-r", "--force":
+			restart = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+				return 2
+			}
+			if profileName != "" {
+				fmt.Fprintln(os.Stderr, "Usage: llama-launcher load <profile> [--restart]")
+				return 2
+			}
+			profileName = a
+		}
+	}
+	if profileName == "" {
+		fmt.Fprintln(os.Stderr, "Usage: llama-launcher load <profile> [--restart]")
 		return 2
 	}
 
-	profile, err := cfg.ResolveProfile(args[0])
+	profile, err := cfg.ResolveProfile(profileName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 2
@@ -110,7 +128,7 @@ func cmdLoad(cfg *Config, args []string) int {
 		displayName = profile.Name
 	}
 	progress := newCLIProgress(fmt.Sprintf("Loading %s", displayName))
-	state, started, err := LoadProfile(cfg, profile, progress)
+	state, started, err := LoadProfile(cfg, profile, restart, progress)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
@@ -691,7 +709,8 @@ func printUsage() {
 Usage: llama-launcher [--config path] [command] [args]
 
 Commands:
-  load <profile>        Start server with model (stops existing if different)
+  load <profile> [--restart]
+                        Activate a profile (no-op if already active; --restart forces)
   unload [profile]      Unload model (for managed backends: stops server)
   start [--profile p]   Start server (optionally with a profile)
   stop [target]         Stop a server (target = host:port or backend name)
