@@ -204,7 +204,7 @@ func cmdStart(cfg *Config, args []string) int {
 	}
 
 	if cfg.Defaults.Server == nil {
-		fmt.Fprintln(os.Stderr, "Error: no default server configured in defaults section")
+		fmt.Fprintln(os.Stderr, "Error: multiple servers enabled and no default — specify --profile <name>")
 		return 2
 	}
 	serverName := *cfg.Defaults.Server

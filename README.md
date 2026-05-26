@@ -73,7 +73,6 @@ auto_close: false
 display_centered: true
 
 defaults:
-  server: llamacpp
   gpu_layers: 99
   threads: 8
   context_size: 4096
@@ -82,12 +81,14 @@ defaults:
 profiles:
   qwen-27b:
     description: "Qwen 3.6 27B MTP Q4-K-S"
+    server: llamacpp
     model: qwen-27b.gguf
     is_favourite: true
     context_size: 8192
 
   gemma-4b:
     description: "Gemma-4 E4B IT-Q4-K-M"
+    server: llamacpp
     model: gemma-4b.gguf
 
   llama-8b-ollama:
@@ -98,7 +99,7 @@ profiles:
 
 Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. All numeric and boolean params use pointer types so "not set" is distinct from zero.
 
-Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then by server (default backend first), then alphabetically by name.
+Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then alphabetically by server, then alphabetically by name.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 

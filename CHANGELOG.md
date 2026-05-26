@@ -4,6 +4,7 @@
 
 ### Changed
 
+- **`defaults.server` soft-deprecated** — every profile should declare `server:` explicitly. When more than one server is enabled and a profile omits `server:`, the launcher still falls back to `defaults.server` but emits a deprecation warning naming the profile (printed to stderr at config load, and reported by `config validate`). Single-enabled-server configs are unaffected: the missing `server:` is auto-resolved with no warning. `defaults.server` is removed from the example config, the `example:` profile now sets `server: llamacpp` explicitly, and profile sort order in menus and `list` no longer ranks "default backend first" (it sorts alphabetically by server). Implements [ADR-0005](docs/adr/0005-profile-server-is-identity.md).
 - **Cross-server `auto_unload`** — when `auto_stop_server: false` and `auto_unload: true` (default), activating a profile now unloads any model loaded on other still-running instances, not just the previous model on the same server. Implements [ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md): a single rule covers both same-server swap and cross-server cases. Managed backends (llamacpp) are silently skipped — they cannot unload without stopping the server.
 
 ### Architecture

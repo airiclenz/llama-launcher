@@ -39,7 +39,8 @@ type Config struct {
 	Defaults        ProfileParams      `yaml:"defaults"`
 	Profiles        map[string]Profile `yaml:"profiles"`
 
-	ConfigPath string `yaml:"-"`
+	ConfigPath string   `yaml:"-"`
+	Warnings   []string `yaml:"-"`
 }
 
 func (c *Config) ShouldAutoClose() bool {
@@ -133,6 +134,7 @@ func parseConfig(path string) (*Config, error) {
 }
 
 // LoadConfig reads, parses, and validates the YAML configuration at the given path.
+// Non-fatal deprecation warnings are written to stderr after a successful validation.
 func LoadConfig(path string) (*Config, error) {
 	cfg, err := parseConfig(path)
 	if err != nil {
@@ -140,6 +142,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
+	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 	return cfg, nil
 }
@@ -195,7 +200,35 @@ func (c *Config) validate() error {
 	if c.Defaults.Server == nil && len(enabledServers) == 1 {
 		c.Defaults.Server = &enabledServers[0]
 	}
+	c.Warnings = c.defaultsServerFallbackWarnings(enabledServers)
 	return nil
+}
+
+// defaultsServerFallbackWarnings returns one deprecation warning per profile
+// that relies on the soft-deprecated defaults.server fallback (multiple enabled
+// servers, profile omits server:). See ADR-0005.
+func (c *Config) defaultsServerFallbackWarnings(enabledServers []string) []string {
+	if len(enabledServers) <= 1 || c.Defaults.Server == nil {
+		return nil
+	}
+	fallback := *c.Defaults.Server
+	var names []string
+	for name, p := range c.Profiles {
+		if p.Server == nil {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	warnings := make([]string, 0, len(names))
+	for _, name := range names {
+		warnings = append(warnings, fmt.Sprintf(
+			"profile %q: missing 'server:' — falling back to defaults.server (%q). defaults.server is deprecated and will be removed; set server: explicitly on the profile",
+			name, fallback))
+	}
+	return warnings
 }
 
 func (c *Config) validateAll() []string {
@@ -229,6 +262,7 @@ func (c *Config) validateAll() []string {
 		if c.Defaults.Server == nil && len(enabledServers) == 1 {
 			c.Defaults.Server = &enabledServers[0]
 		}
+		problems = append(problems, c.defaultsServerFallbackWarnings(enabledServers)...)
 	}
 
 	if c.LogRetention != nil && *c.LogRetention < 0 {
@@ -326,19 +360,13 @@ func (c *Config) ResolveProfile(name string) (*ResolvedProfile, error) {
 }
 
 // ProfileNames returns profile names sorted by favourite status first
-// (favourites before non-favourites), then by server (default backend
-// first, then remaining backends alphabetically), then alphabetically
-// within each group.
+// (favourites before non-favourites), then by server name alphabetically,
+// then alphabetically within each group.
 func (c *Config) ProfileNames() []string {
 	type entry struct {
-		name     string
-		fav      bool
-		server   string
-	}
-
-	defaultServer := ""
-	if c.Defaults.Server != nil {
-		defaultServer = *c.Defaults.Server
+		name   string
+		fav    bool
+		server string
 	}
 
 	var entries []entry
@@ -350,23 +378,12 @@ func (c *Config) ProfileNames() []string {
 		entries = append(entries, entry{name: name, fav: p.IsFavourite, server: server})
 	}
 
-	serverRank := func(s string) int {
-		if s == defaultServer {
-			return 0
-		}
-		return 1
-	}
-
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
 		if a.fav != b.fav {
 			return a.fav
 		}
 		if a.server != b.server {
-			ra, rb := serverRank(a.server), serverRank(b.server)
-			if ra != rb {
-				return ra < rb
-			}
 			return a.server < b.server
 		}
 		return a.name < b.name

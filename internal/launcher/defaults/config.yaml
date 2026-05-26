@@ -68,7 +68,9 @@ auto_close: false
 # ──────────────────────────────────────────────────────────────
 #
 # Shared by all profiles. Per-profile values override these.
-# The "server" field selects which server to use by default.
+# Each profile should declare `server:` explicitly (see ADR-0005);
+# `defaults.server` is soft-deprecated and only kept as a fallback
+# when more than one server is enabled.
 #
 # Not all parameters apply to all servers:
 #
@@ -94,7 +96,6 @@ auto_close: false
 #   min_p           yes        -        -
 
 defaults:
-  server: llamacpp
   gpu_layers: 99
   threads: 8
   threads_batch: 8
@@ -119,7 +120,7 @@ defaults:
 # ──────────────────────────────────────────────────────────────
 #
 # Each profile specifies a model to load. The "server" field
-# selects which server to use (inherits from defaults if omitted).
+# selects which server to use and should be set on every profile.
 # Profile parameters override any parameter from the defaults block.
 #
 # Profile fields:
@@ -137,6 +138,7 @@ profiles:
   # Model is a file path, resolved relative to models_dir.
   example:
     description: "Example profile"
+    server: llamacpp
     model: your-model-file.gguf
     context_size: 8192
     # is_favourite: true

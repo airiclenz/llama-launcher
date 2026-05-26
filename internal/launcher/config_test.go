@@ -261,10 +261,10 @@ func TestProfileNames_FavouritesFirst(t *testing.T) {
 
 	names := cfg.ProfileNames()
 	want := []string{
-		// favourites first, default backend before other, alphabetical within group
+		// favourites first, then alphabetical-by-server, then by name within group
 		"bravo-fav",
 		"zeta-other-fav",
-		// non-favourites, default backend first then ollama, alphabetical within group
+		// non-favourites, alphabetical-by-server (llamacpp < ollama), then by name
 		"alpha-default",
 		"zeta-default",
 		"alpha-other",
@@ -447,6 +447,92 @@ profiles:
 	}
 	if cfg.Defaults.Server == nil || *cfg.Defaults.Server != "llamacpp" {
 		t.Errorf("Defaults.Server = %v, want llamacpp", cfg.Defaults.Server)
+	}
+}
+
+func TestValidate_DefaultsServerFallbackWarning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+servers:
+  llamacpp: true
+  ollama: true
+defaults:
+  server: llamacpp
+profiles:
+  no-server:
+    model: test.gguf
+  has-server:
+    server: ollama
+    model: llama3.1:8b
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly one", cfg.Warnings)
+	}
+	if !strings.Contains(cfg.Warnings[0], `"no-server"`) {
+		t.Errorf("warning = %q, want it to name profile 'no-server'", cfg.Warnings[0])
+	}
+	if !strings.Contains(cfg.Warnings[0], "defaults.server") {
+		t.Errorf("warning = %q, want it to mention defaults.server", cfg.Warnings[0])
+	}
+}
+
+func TestValidate_NoFallbackWarning_SingleServer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+servers:
+  llamacpp: true
+profiles:
+  no-server:
+    model: test.gguf
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Warnings) != 0 {
+		t.Errorf("expected no warnings with single enabled server, got: %v", cfg.Warnings)
+	}
+}
+
+func TestValidateAll_DefaultsServerFallbackWarning(t *testing.T) {
+	t.Parallel()
+
+	server := "llamacpp"
+	cfg := &Config{
+		Servers:  map[string]bool{"llamacpp": true, "ollama": true},
+		Defaults: ProfileParams{Server: &server},
+		Profiles: map[string]Profile{
+			"no-server": {Model: "test.gguf"},
+		},
+	}
+
+	problems := cfg.validateAll()
+	found := false
+	for _, p := range problems {
+		if strings.Contains(p, "defaults.server") && strings.Contains(p, `"no-server"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected defaults.server deprecation warning in validateAll problems, got: %v", problems)
 	}
 }
 
