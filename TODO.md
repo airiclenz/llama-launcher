@@ -3,7 +3,7 @@
 
 ## Architecture refactor (ADRs 0001–0007)
 
-- [ ] Implement the fit-gap from [docs/handoffs/20260526-fit-gap-adrs-vs-code.md](docs/handoffs/20260526-fit-gap-adrs-vs-code.md)
+- [ ] Implement the fit-gap from [docs/handoffs/archive/2026-05-26 - 00 - fit-gap-adrs-vs-code.md](docs/handoffs/archive/2026-05-26 - 00 - fit-gap-adrs-vs-code.md)
   - [x] Phase 1: documentation alignment (TDD, README, CHANGELOG)
   - [x] Phase 2: cross-server `auto_unload` (ADR-0004)
   - [x] Phase 3: `defaults.server` soft-deprecation (ADR-0005)
