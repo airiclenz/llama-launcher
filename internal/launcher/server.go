@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -185,20 +186,50 @@ func StopInstance(addr string, progress ProgressFunc) (*ServerState, error) {
 
 func stopInstance(state *ServerState, progress ProgressFunc) (*ServerState, error) {
 	if state.PID > 0 && IsProcessAlive(state.PID) {
-		signalAndWait(state, progress)
+		terminatePID(state.PID, progress)
 	}
-
-	if b, err := GetBackend(state.Backend); err == nil {
-		reportStep(progress, "Disconnecting")
-		b.TryStop(state.Addr())
-	}
-
+	_ = EnsureStopped(state.Backend, state.Addr(), progress)
 	removeInstanceState(state)
 	return state, nil
 }
 
+// EnsureStopped terminates whatever process is listening at addr. It first
+// asks the backend's CLI stop hook (a no-op for backends without one), and if
+// the address is still reachable it locates the listening PID via lsof and
+// signals it directly. Returns nil when the address is no longer healthy.
+func EnsureStopped(backend, addr string, progress ProgressFunc) error {
+	b, err := GetBackend(backend)
+	if err != nil {
+		return err
+	}
+
+	reportStep(progress, "Disconnecting")
+	b.TryStop(addr)
+	if b.HealthCheck(addr) != nil {
+		return nil
+	}
+
+	pid, perr := findListeningPID(addr)
+	if perr != nil || pid <= 0 {
+		return fmt.Errorf("server at %s is still reachable and its PID could not be determined: %v", addr, perr)
+	}
+
+	terminatePID(pid, progress)
+	if b.HealthCheck(addr) == nil {
+		return fmt.Errorf("server at %s is still reachable after signalling PID %d", addr, pid)
+	}
+	return nil
+}
+
 func signalAndWait(state *ServerState, progress ProgressFunc) {
-	proc, err := os.FindProcess(state.PID)
+	terminatePID(state.PID, progress)
+}
+
+func terminatePID(pid int, progress ProgressFunc) {
+	if pid <= 0 {
+		return
+	}
+	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return
 	}
@@ -208,28 +239,59 @@ func signalAndWait(state *ServerState, progress ProgressFunc) {
 		return
 	}
 	// Also signal the process group (Setsid gives the child PGID=PID).
-	_ = syscall.Kill(-state.PID, syscall.SIGTERM)
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
 
 	reportStep(progress, "Waiting for shutdown")
 	deadline := time.Now().Add(sigtermTimeout)
 	for time.Now().Before(deadline) {
-		if !IsProcessAlive(state.PID) {
+		if !IsProcessAlive(pid) {
 			return
 		}
 		time.Sleep(stopPollInterval)
 	}
 
 	_ = proc.Signal(syscall.SIGKILL)
-	_ = syscall.Kill(-state.PID, syscall.SIGKILL)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if !IsProcessAlive(state.PID) {
+		if !IsProcessAlive(pid) {
 			break
 		}
 		time.Sleep(stopPollInterval)
 	}
 	time.Sleep(startupGracePeriod)
+}
+
+// findListeningPID returns the PID of the process listening at host:port,
+// using lsof. Tries the host-specific filter first, then falls back to a
+// port-only filter so we still find servers bound to 0.0.0.0 or another
+// interface.
+func findListeningPID(addr string) (int, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, err
+	}
+	attempts := [][]string{
+		{"-nP", "-iTCP@" + host + ":" + port, "-sTCP:LISTEN", "-t"},
+		{"-nP", "-iTCP:" + port, "-sTCP:LISTEN", "-t"},
+	}
+	for _, args := range attempts {
+		out, err := exec.Command("lsof", args...).Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if pid, err := strconv.Atoi(line); err == nil && pid > 0 {
+				return pid, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("no process listening on %s (is lsof installed?)", addr)
 }
 
 // EnsureServer returns the running server state, starting one if needed.

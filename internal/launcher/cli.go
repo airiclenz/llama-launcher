@@ -325,37 +325,112 @@ func resolveStopTarget(target string) (*ServerState, error) {
 }
 
 func cmdStop(cfg *Config, args []string) int {
-	_ = cfg
 	target := ""
 	if len(args) > 0 {
 		target = args[0]
 	}
 
 	state, err := resolveStopTarget(target)
-	if err != nil {
-		if errors.Is(err, ErrNotRunning) {
+	if err == nil {
+		progress := newCLIProgress("Stopping server")
+		stopped, serr := StopInstance(state.Addr(), progress)
+		if serr != nil {
+			if errors.Is(serr, ErrNotRunning) {
+				fmt.Println("No server running.")
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "Error: %v\n", serr)
+			return 3
+		}
+		if stopped.PID > 0 {
+			fmt.Printf("Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
+		} else {
+			fmt.Printf("Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
+		}
+		return 0
+	}
+	if !errors.Is(err, ErrNotRunning) {
+		return 2
+	}
+
+	backend, addr, ferr := resolveUntrackedStopTarget(cfg, target)
+	if ferr != nil {
+		if errors.Is(ferr, ErrNotRunning) {
 			fmt.Println("No server running.")
 			return 1
 		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", ferr)
 		return 2
 	}
 
 	progress := newCLIProgress("Stopping server")
-	stopped, err := StopInstance(state.Addr(), progress)
-	if err != nil {
-		if errors.Is(err, ErrNotRunning) {
-			fmt.Println("No server running.")
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if serr := EnsureStopped(backend, addr, progress); serr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", serr)
 		return 3
 	}
-	if stopped.PID > 0 {
-		fmt.Printf("Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
-	} else {
-		fmt.Printf("Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
-	}
+	fmt.Printf("Stopped %s at %s\n", backendDisplayName(backend), addr)
 	return 0
+}
+
+// resolveUntrackedStopTarget locates a reachable server that has no state
+// file — e.g. one started outside the launcher, or whose state was wiped by
+// the legacy-state migration. Mirrors resolveStopTarget's selection rules
+// but probes cfg.ConfiguredBackendAddr instead of reading state files.
+func resolveUntrackedStopTarget(cfg *Config, target string) (string, string, error) {
+	type candidate struct {
+		backend string
+		addr    string
+	}
+	var reachable []candidate
+
+	probe := func(name string) {
+		addr := cfg.ConfiguredBackendAddr(name)
+		b, err := GetBackend(name)
+		if err != nil {
+			return
+		}
+		if b.HealthCheck(addr) == nil {
+			reachable = append(reachable, candidate{backend: name, addr: addr})
+		}
+	}
+
+	if target != "" && strings.Contains(target, ":") {
+		for name := range cfg.Servers {
+			if !cfg.IsServerEnabled(name) {
+				continue
+			}
+			if cfg.ConfiguredBackendAddr(name) != target {
+				continue
+			}
+			probe(name)
+		}
+		if len(reachable) == 0 {
+			return "", "", fmt.Errorf("no server reachable at %s", target)
+		}
+		return reachable[0].backend, reachable[0].addr, nil
+	}
+
+	for name := range cfg.Servers {
+		if !cfg.IsServerEnabled(name) {
+			continue
+		}
+		if target != "" && name != target {
+			continue
+		}
+		probe(name)
+	}
+
+	if len(reachable) == 0 {
+		return "", "", ErrNotRunning
+	}
+	if len(reachable) > 1 {
+		fmt.Fprintln(os.Stderr, "Multiple servers reachable — specify which to stop:")
+		for _, c := range reachable {
+			fmt.Fprintf(os.Stderr, "  %s at %s\n", backendDisplayName(c.backend), c.addr)
+		}
+		return "", "", fmt.Errorf("ambiguous target")
+	}
+	return reachable[0].backend, reachable[0].addr, nil
 }
 
 func cmdStatus(cfg *Config) int {

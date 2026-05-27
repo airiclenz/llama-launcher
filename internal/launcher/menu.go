@@ -271,42 +271,67 @@ type runningServer struct {
 }
 
 func detectRunningServers(cfg *Config) []runningServer {
-	_ = cfg
 	states, _ := ReadAllStates()
+	knownAddrs := make(map[string]map[string]bool)
+	for _, s := range states {
+		if knownAddrs[s.Backend] == nil {
+			knownAddrs[s.Backend] = make(map[string]bool)
+		}
+		knownAddrs[s.Backend][s.Addr()] = true
+	}
+
+	type probe struct {
+		backend string
+		addr    string
+	}
+	var probes []probe
+	for _, s := range states {
+		probes = append(probes, probe{backend: s.Backend, addr: s.Addr()})
+	}
+	for name := range cfg.Servers {
+		if !cfg.IsServerEnabled(name) {
+			continue
+		}
+		addr := cfg.ConfiguredBackendAddr(name)
+		if knownAddrs[name][addr] {
+			continue
+		}
+		probes = append(probes, probe{backend: name, addr: addr})
+	}
 
 	type result struct {
-		state *ServerState
-		ok    bool
+		idx int
+		ok  bool
 	}
-	ch := make(chan result, len(states))
-	for _, s := range states {
-		go func(s *ServerState) {
-			b, err := GetBackend(s.Backend)
+	ch := make(chan result, len(probes))
+	for i, p := range probes {
+		go func(i int, p probe) {
+			b, err := GetBackend(p.backend)
 			if err != nil {
-				ch <- result{state: s}
+				ch <- result{idx: i}
 				return
 			}
-			ch <- result{state: s, ok: b.HealthCheck(s.Addr()) == nil}
-		}(s)
+			ch <- result{idx: i, ok: b.HealthCheck(p.addr) == nil}
+		}(i, p)
 	}
-
-	results := make([]result, 0, len(states))
-	for range states {
-		results = append(results, <-ch)
+	healthy := make([]bool, len(probes))
+	for range probes {
+		r := <-ch
+		healthy[r.idx] = r.ok
 	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].state.Backend != results[j].state.Backend {
-			return results[i].state.Backend < results[j].state.Backend
-		}
-		return results[i].state.Addr() < results[j].state.Addr()
-	})
 
 	var running []runningServer
-	for _, r := range results {
-		if r.ok {
-			running = append(running, runningServer{backend: r.state.Backend, addr: r.state.Addr()})
+	for i, p := range probes {
+		if healthy[i] {
+			running = append(running, runningServer{backend: p.backend, addr: p.addr})
 		}
 	}
+	sort.Slice(running, func(i, j int) bool {
+		if running[i].backend != running[j].backend {
+			return running[i].backend < running[j].backend
+		}
+		return running[i].addr < running[j].addr
+	})
 	return running
 }
 
@@ -352,11 +377,9 @@ func doStopServer(cfg *Config, state *ServerState) error {
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
-			b, berr := GetBackend(target.backend)
-			if berr != nil {
-				return berr
+			if serr := EnsureStopped(target.backend, target.addr, progress); serr != nil {
+				return serr
 			}
-			b.TryStop(target.addr)
 			fmt.Printf("  Stopped %s at %s\n", backendDisplayName(target.backend), target.addr)
 			return nil
 		}
