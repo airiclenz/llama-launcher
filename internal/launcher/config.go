@@ -170,7 +170,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: no servers defined")
 	}
 	for name := range c.Servers {
-		if _, err := GetBackend(name); err != nil {
+		if _, err := GetLLMServer(name); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
 	}
@@ -246,7 +246,7 @@ func (c *Config) validateAll() []string {
 		problems = append(problems, "no servers defined")
 	} else {
 		for name := range c.Servers {
-			if _, err := GetBackend(name); err != nil {
+			if _, err := GetLLMServer(name); err != nil {
 				problems = append(problems, fmt.Sprintf("unknown server %q in servers section", name))
 			}
 		}
@@ -292,7 +292,7 @@ func (c *Config) validateAll() []string {
 }
 
 func (c *Config) backendAddr(backendName string) string {
-	b, err := GetBackend(backendName)
+	b, err := GetLLMServer(backendName)
 	if err != nil {
 		return ""
 	}
@@ -303,7 +303,7 @@ func (c *Config) backendAddr(backendName string) string {
 // config defaults and backend fallbacks. This is the address the launcher
 // would use when connecting to the backend without a profile-specific override.
 func (c *Config) ConfiguredBackendAddr(backendName string) string {
-	b, err := GetBackend(backendName)
+	b, err := GetLLMServer(backendName)
 	if err != nil {
 		return ""
 	}
@@ -336,7 +336,7 @@ func (c *Config) ResolveProfile(name string) (*ResolvedProfile, error) {
 		return nil, fmt.Errorf("profile %q: server %q is disabled", name, backendName)
 	}
 
-	b, err := GetBackend(backendName)
+	b, err := GetLLMServer(backendName)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", name, err)
 	}
@@ -421,7 +421,7 @@ func applyFallbacks(p *ProfileParams) {
 	}
 }
 
-func applyBackendFallbacks(p *ProfileParams, cfg *Config, backendName string, b Backend) {
+func applyBackendFallbacks(p *ProfileParams, cfg *Config, backendName string, b LLMServer) {
 	if p.Host != nil && p.Port != nil {
 		return
 	}

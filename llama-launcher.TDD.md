@@ -13,7 +13,7 @@ This document explains how those decisions are realised in code. Where this docu
 
 `llama-launcher` is a *process manager*, not a request router (see [ADR-0002](docs/adr/0002-not-a-router.md)). It does not expose any HTTP endpoint of its own and does not proxy client traffic. Clients connect to LLM Servers directly using each server's native address.
 
-The architecture is server-agnostic: a `Backend` interface (provisional name; see [§5.3](#53-backend-interface)) abstracts server-specific logic, making it straightforward to add support for other LLM Servers (LM Studio, Ollama, etc.) alongside the initial llama.cpp implementation.
+The architecture is server-agnostic: an `LLMServer` interface (see [§5.3](#53-llmserver-interface)) abstracts server-specific logic, making it straightforward to add support for other LLM Servers (LM Studio, Ollama, etc.) alongside the initial llama.cpp implementation.
 
 Target platform: macOS (Apple Silicon). The compiled binary is the only artifact — no runtime dependencies.
 
@@ -261,7 +261,7 @@ Parameters are resolved in order of precedence (highest first):
 
 1. Profile-level value (including `server`)
 2. `defaults` block value (`defaults.server` is honoured but emits a deprecation warning when used — see [ADR-0005](docs/adr/0005-profile-server-is-identity.md))
-3. Server-specific fallback from `servers` map address or `Backend.DefaultAddr()` (e.g. Ollama defaults to `localhost:11434`, LM Studio to `localhost:1234`)
+3. Server-specific fallback from `servers` map address or `LLMServer.DefaultAddr()` (e.g. Ollama defaults to `localhost:11434`, LM Studio to `localhost:1234`)
 4. Built-in fallback (only for `host: 127.0.0.1` and `port: 8080`)
 
 All numeric and boolean parameters use pointer types internally to distinguish "not set" from zero/false. A nil pointer means "inherit from the next level."
@@ -275,7 +275,7 @@ The `model` field in a Profile is resolved as follows:
 3. `models_dir` itself supports `~` expansion.
 4. Validate that the resolved path exists and is a regular file before loading.
 
-Model path resolution is delegated to the backend via `Backend.ResolveModel()`. llama.cpp validates that the file exists on disk. Ollama and LM Studio accept opaque Model identifiers (e.g. `llama3.1:8b`, `lmstudio-community/meta-llama-3.1-8b-instruct`) without file validation.
+Model path resolution is delegated to the backend via `LLMServer.ResolveModel()`. llama.cpp validates that the file exists on disk. Ollama and LM Studio accept opaque Model identifiers (e.g. `llama3.1:8b`, `lmstudio-community/meta-llama-3.1-8b-instruct`) without file validation.
 
 ### 4.5 Extra Arguments
 
@@ -307,7 +307,7 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 │  (menu.go)   │     └──────────────┘     └──────┬───────┘
 │  (ui.go)     │                                 │
 └──────────────┘     ┌──────────────┐            │ start / stop
-                     │   Backend    │◀───────────┤ load / unload
+                     │  LLMServer   │◀───────────┤ load / unload
                      │ (backend.go) │            │
                      └──────┬───────┘     ┌──────┴────────────────┐
                             │             │  Per-instance state    │
@@ -328,7 +328,7 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 | `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `Reload` for in-place re-read, `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems including non-fatal warnings such as `defaults.server` fallback usage), example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
 | `defaults/config.yaml` | Example config template, embedded at compile time via `go:embed`. |
 | `defaults/embed.go` | Embeds `config.yaml` and exports it as `defaults.ExampleConfig`. |
-| `backend.go` | `Backend` interface definitions (provisional name; see [§5.3](#53-backend-interface) — renames to `LLMServer` are deferred until the address-keyed refactor lands), `ResolvedProfile` struct, backend registry (register/get). |
+| `backend.go` | `LLMServer` and `ManagedLLMServer` interface definitions (see [§5.3](#53-llmserver-interface)), `ResolvedProfile` struct, LLM Server registry (register/get). |
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
 | `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
@@ -341,16 +341,16 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, Model resolution, and httptest-based health check. |
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
 | `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, and `extractLMStudioError`. |
-| `backend_test.go` | Tests for `GetBackend` with known and unknown backends. |
+| `backend_test.go` | Tests for `GetLLMServer` with known and unknown LLM Server names. |
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, instance state path construction, `ServerState` methods, state migration, and state file permissions. |
 | `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting. |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
 
-### 5.3 Backend Interface
+### 5.3 LLMServer Interface
 
 ```go
-type Backend interface {
+type LLMServer interface {
     Name() string
     DisplayName() string
     DefaultAddr() string
@@ -362,8 +362,8 @@ type Backend interface {
     TryStop(addr string) error
 }
 
-type ManagedBackend interface {
-    Backend
+type ManagedLLMServer interface {
+    LLMServer
     ServerBinary(cfg *Config) string
     BuildServerArgs(cfg *Config, profile *ResolvedProfile) []string
     BuildServerEnv(cfg *Config, profile *ResolvedProfile) []string
@@ -379,20 +379,20 @@ type ModelLister interface {
 }
 ```
 
-The interface names `Backend` and `ManagedBackend` are provisional. The domain language ([CONTEXT.md](CONTEXT.md)) settles on **LLM Server**; renaming `Backend` → `LLMServer` and finding a less load-bearing name for `ManagedBackend` are deferred to a mechanical-rename pass after the per-instance refactor lands. Until then, treat the Go names as code-level aliases.
+The interface name `LLMServer` matches the domain language in [CONTEXT.md](CONTEXT.md). String fields on persisted records (`ServerState.Backend`, `Profile.Backend` in the legacy-config detector) keep their existing names so on-disk state files and YAML migration paths stay compatible.
 
-The `Backend.TryStart` / `Backend.TryStop` pair drives the unified lifecycle: each LLM Server type encapsulates its own start mechanism (fork-and-detach for llamacpp; `ollama serve` for Ollama; `lms server start` for LM Studio) and stop mechanism (signal-to-PID, `ollama stop`, `lms server stop`). The launcher does not branch on "did we start this?" — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
+The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle: each LLM Server type encapsulates its own start mechanism (fork-and-detach for llamacpp; `ollama serve` for Ollama; `lms server start` for LM Studio) and stop mechanism (signal-to-PID, `ollama stop`, `lms server stop`). The launcher does not branch on "did we start this?" — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
 
-`ManagedBackend` extends `Backend` for LLM Server types where the launcher knows how to fork the server process directly (currently only llamacpp). The server lifecycle code uses `if mb, ok := b.(ManagedBackend)` to decide whether to assemble argv and fork, or to call `Backend.TryStart`.
+`ManagedLLMServer` extends `LLMServer` for LLM Server types where the launcher knows how to fork the server process directly (currently only llamacpp). The server lifecycle code uses `if mb, ok := b.(ManagedLLMServer)` to decide whether to assemble argv and fork, or to call `LLMServer.TryStart`.
 
-`PIDTracker` is implemented by backends that auto-start a server process and can report the resulting PID (Ollama). The launcher records the PID and log file on the per-instance state record; PID is informational (used for `status` display and log file association) and is **not** used to decide whether `stop` should kill the process.
+`PIDTracker` is implemented by LLM Servers that auto-start a server process and can report the resulting PID (Ollama). The launcher records the PID and log file on the per-instance state record; PID is informational (used for `status` display and log file association) and is **not** used to decide whether `stop` should kill the process.
 
-`ModelLister` is implemented by backends that can enumerate loaded Models (Ollama via `/api/ps`), used by the status display.
+`ModelLister` is implemented by LLM Servers that can enumerate loaded Models (Ollama via `/api/ps`), used by the status display.
 
-Adding a new backend requires:
-1. Create `backend_<name>.go` implementing `Backend` (and optionally `ManagedBackend`).
-2. Register via `init()` calling `RegisterBackend()`.
-3. Add the backend name to `servers:` in the config YAML.
+Adding a new LLM Server requires:
+1. Create `backend_<name>.go` implementing `LLMServer` (and optionally `ManagedLLMServer`).
+2. Register via `init()` calling `RegisterLLMServer()`.
+3. Add the LLM Server name to `servers:` in the config YAML.
 4. Set `server:` on relevant Profiles.
 
 #### Health Check Discrimination
@@ -462,12 +462,12 @@ The launcher operates on **LLM Server instances**, each identified by its `host:
 
 ### 6.2 Starting an LLM Server
 
-The path forks on whether the backend implements `ManagedBackend`:
+The path forks on whether the backend implements `ManagedLLMServer`:
 
-**`ManagedBackend` (llama.cpp):**
+**`ManagedLLMServer` (llama.cpp):**
 
 1. Resolve the backend; verify binary exists via `exec.LookPath`.
-2. Build server arguments via `ManagedBackend.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `-m`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
+2. Build server arguments via `ManagedLLMServer.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `-m`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
 3. Open the log file for stdout/stderr redirection.
 4. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
 5. Call `cmd.Start()` (non-blocking).
@@ -477,27 +477,27 @@ The path forks on whether the backend implements `ManagedBackend`:
 9. Write Model fields and resolved-params snapshot to the state file only after the health check succeeds.
 10. Print confirmation.
 
-**Plain `Backend` (Ollama, LM Studio):**
+**Plain `LLMServer` (Ollama, LM Studio):**
 
-1. Resolve the address from `servers` map (if host:port value) or `Backend.DefaultAddr()`.
-2. Call `Backend.HealthCheck(addr)` to verify server is reachable.
-3. If not reachable, call `Backend.TryStart()` (e.g. `lms server start`, `ollama serve`).
+1. Resolve the address from `servers` map (if host:port value) or `LLMServer.DefaultAddr()`.
+2. Call `LLMServer.HealthCheck(addr)` to verify server is reachable.
+3. If not reachable, call `LLMServer.TryStart()` (e.g. `lms server start`, `ollama serve`).
 4. Poll health check until successful (up to 15 seconds) or fail with a user-friendly message.
 5. Write the per-instance state file. If the backend implements `PIDTracker` and reported a PID, record it; otherwise PID is 0. PID is informational only.
 6. Print confirmation.
 
 ### 6.3 Loading a Model
 
-**For `ManagedBackend` (llama.cpp):** Loading is fused with server start — the Model is in the start arguments and there is no separate API call. If a different Profile is already active at the target address, that instance is stopped first (the stop is unconditional — [ADR-0001](docs/adr/0001-stop-is-unconditional.md)) and a new server is started with the new Model. `Backend.LoadModel`/`UnloadModel` are no-ops on llamacpp.
+**For `ManagedLLMServer` (llama.cpp):** Loading is fused with server start — the Model is in the start arguments and there is no separate API call. If a different Profile is already active at the target address, that instance is stopped first (the stop is unconditional — [ADR-0001](docs/adr/0001-stop-is-unconditional.md)) and a new server is started with the new Model. `LLMServer.LoadModel`/`UnloadModel` are no-ops on llamacpp.
 
-**For plain `Backend` (Ollama, LM Studio):** Call `Backend.LoadModel(addr, resolvedProfile)`. This is an HTTP request to the server's load endpoint. Update Model fields in the per-instance state file only after `LoadModel` returns success.
+**For plain `LLMServer` (Ollama, LM Studio):** Call `LLMServer.LoadModel(addr, resolvedProfile)`. This is an HTTP request to the server's load endpoint. Update Model fields in the per-instance state file only after `LoadModel` returns success.
 
 ### 6.4 Unloading a Model
 
 `unload [profile]` always means "the Model is no longer loaded after this returns successfully."
 
 - **llamacpp:** stops the server (the Model is part of the server's args — there is no API-level unload).
-- **Ollama / LM Studio:** calls `Backend.UnloadModel` via HTTP. The server stays running with no Model loaded; the per-instance state file's `active_profile` and `active_model` are cleared.
+- **Ollama / LM Studio:** calls `LLMServer.UnloadModel` via HTTP. The server stays running with no Model loaded; the per-instance state file's `active_profile` and `active_model` are cleared.
 
 The `auto_unload` flag governs whether an unload is *implicit* during a Profile activation (§6.1 step 5); the user-invoked `unload` subcommand is always explicit.
 
@@ -508,7 +508,7 @@ The `auto_unload` flag governs whether an unload is *implicit* during a Profile 
 The launcher attempts both available mechanisms, in order:
 
 1. If a PID is recorded and alive, send `SIGTERM` to the process and its process group (`kill(-pid, SIGTERM)`). Poll for exit (100ms intervals, up to 15 seconds). If still alive, send `SIGKILL`, then wait up to 5 seconds for the process to die, then 500ms for the OS to release the TCP port.
-2. Call `Backend.TryStop(addr)` so the backend can run its native shutdown command (`ollama stop`, `lms server stop`). This is best-effort and idempotent — errors are reported but do not block.
+2. Call `LLMServer.TryStop(addr)` so the backend can run its native shutdown command (`ollama stop`, `lms server stop`). This is best-effort and idempotent — errors are reported but do not block.
 
 Then remove the per-instance state file and print confirmation.
 
@@ -540,7 +540,7 @@ These two flags determine what happens to *other* running instances when a Profi
 | `auto_stop_server` | `auto_unload` | Behaviour for instances *other than* the activation target |
 |---|---|---|
 | `true` (default) | (any) | All other instances are stopped. |
-| `false` | `true` (default) | Other instances stay running. Any Model loaded on them is unloaded (`Backend.UnloadModel`) — same rule for same-server swap and cross-server case ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). |
+| `false` | `true` (default) | Other instances stay running. Any Model loaded on them is unloaded (`LLMServer.UnloadModel`) — same rule for same-server swap and cross-server case ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). |
 | `false` | `false` | Other instances stay running with their Models intact. |
 
 For llamacpp, `auto_unload` is silently ignored on llamacpp instances (Model swap requires a server restart — [ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
@@ -591,7 +591,7 @@ state-llamacpp-192.168.1.50-8080.json
 }
 ```
 
-There is no `managed` field — `stop` is unconditional ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). PID is recorded when the launcher has it (always for llamacpp; for Ollama when the launcher auto-started via `ollama serve` and the backend implements `PIDTracker`; otherwise 0) and is used for `status` display and to associate log files with instances. Liveness is decided by `Backend.HealthCheck`, not by PID.
+There is no `managed` field — `stop` is unconditional ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). PID is recorded when the launcher has it (always for llamacpp; for Ollama when the launcher auto-started via `ollama serve` and the backend implements `PIDTracker`; otherwise 0) and is used for `status` display and to associate log files with instances. Liveness is decided by `LLMServer.HealthCheck`, not by PID.
 
 `active_profile` and `active_model` are empty strings when the server is running but no Model is loaded. `resolved_params` is the snapshot of the Profile's resolved parameters at activation time; the drift check in §6.1 step 4 compares this snapshot against the freshly resolved Profile to decide whether to print a drift notice ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)). `log_file` is omitted for instances the launcher did not start.
 
@@ -623,7 +623,7 @@ The launcher builds the `llama-server` command line from the merged default para
 
 Boolean flags are only appended when the resolved value is `true`. Numeric flags are only appended when explicitly set (not nil after merge).
 
-Argument assembly is delegated to the backend via `ManagedBackend.BuildServerArgs()`, allowing each `ManagedBackend` to map config fields to its own CLI flags.
+Argument assembly is delegated to the backend via `ManagedLLMServer.BuildServerArgs()`, allowing each `ManagedLLMServer` to map config fields to its own CLI flags.
 
 ## 9. Log Management
 
@@ -673,11 +673,10 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 - **Per-instance log file naming**: `{backend}-{port}-{timestamp}.log` rather than `{backend}-{timestamp}.log`. Today multiple instances of the same backend coexist because timestamps differ at second resolution; revisit only if collisions become real.
 - **Shell completions**: Generate bash/zsh/fish completions for subcommands and Profile names.
 - **Config reload subcommand**: A `reload` subcommand that restarts the matching instance with the same Profile using updated config values. (Note: automatic config reload in the interactive menu is already implemented — this item covers the CLI subcommand.)
-- **Additional backends**: vLLM and other backends — each as a new `backend_<name>.go` file implementing the `Backend` interface.
+- **Additional LLM Servers**: vLLM and others — each as a new `backend_<name>.go` file implementing the `LLMServer` interface.
 - **Homebrew formula**: Package for `brew install llama-launcher`.
 - **Launchd integration**: Generate a launchd plist for auto-start on login.
-- **Health-based Model status**: Query each backend's "list loaded models" endpoint to verify actual loaded state rather than relying solely on state file.
-- **`Backend` → `LLMServer` rename**: Mechanical rename to align Go code with the domain language in [CONTEXT.md](CONTEXT.md). Deferred until the per-instance refactor lands so the rename is not a moving target.
+- **Health-based Model status**: Query each LLM Server's "list loaded models" endpoint to verify actual loaded state rather than relying solely on state file.
 
 ## 12. Testing
 
@@ -705,7 +704,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestReadLastLines` | More lines than requested; fewer lines; nonexistent file. |
 | `TestInstanceStatePath` | Loopback-host omission, non-loopback inclusion, filename format. |
 | `TestServerState_Addr` / `_Uptime` | State helper methods. |
-| `TestGetBackend` | Known backends return correct instance; unknown returns error. |
+| `TestGetLLMServer` | Known LLM Server names return correct instance; unknown returns error. |
 | `TestExpandTilde` | `~/path`, bare `~`, `~username` (unchanged), absolute path, empty. |
 | `TestLoadConfig` | Missing file, valid config, no-profiles validation. |
 | `TestValidate_*` | Deprecated fields, no servers enabled, auto-assign default server, `defaults.server` deprecation warning. |

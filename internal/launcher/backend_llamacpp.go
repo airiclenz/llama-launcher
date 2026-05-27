@@ -10,11 +10,11 @@ import (
 	"strconv"
 )
 
-// LlamaCpp implements Backend for llama.cpp's llama-server.
+// LlamaCpp implements LLMServer for llama.cpp's llama-server.
 type LlamaCpp struct{}
 
 func init() {
-	RegisterBackend(&LlamaCpp{})
+	RegisterLLMServer(&LlamaCpp{})
 }
 
 func (b *LlamaCpp) Name() string        { return "llamacpp" }

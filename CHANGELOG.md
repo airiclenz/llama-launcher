@@ -19,6 +19,7 @@
 
 ### Architecture
 
+- **`Backend` → `LLMServer` Go rename** — the central interface is now `LLMServer` (was `Backend`); `ManagedBackend` is now `ManagedLLMServer`; registry functions are `RegisterLLMServer` / `GetLLMServer`. Matches the domain term pinned in [CONTEXT.md](CONTEXT.md). No on-disk or YAML schema change: `ServerState.Backend` (JSON field `backend`) and the legacy `backend:` YAML migration check keep their existing names so persisted state and config-migration paths stay compatible.
 - **Documented architectural decisions in ADRs** — the design intent behind `llama-launcher` is now recorded as numbered Architectural Decision Records under [`docs/adr/`](docs/adr/):
   - [ADR-0001](docs/adr/0001-stop-is-unconditional.md) — `stop` is unconditional; the `managed` distinction is removed.
   - [ADR-0002](docs/adr/0002-not-a-router.md) — `llama-launcher` is a process manager, not a request router.

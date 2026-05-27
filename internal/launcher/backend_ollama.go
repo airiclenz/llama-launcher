@@ -20,7 +20,7 @@ type Ollama struct {
 }
 
 func init() {
-	RegisterBackend(&Ollama{})
+	RegisterLLMServer(&Ollama{})
 }
 
 func (b *Ollama) Name() string        { return "ollama" }

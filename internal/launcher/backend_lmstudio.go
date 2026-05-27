@@ -15,7 +15,7 @@ import (
 type LMStudio struct{}
 
 func init() {
-	RegisterBackend(&LMStudio{})
+	RegisterLLMServer(&LMStudio{})
 }
 
 func (b *LMStudio) Name() string        { return "lmstudio" }

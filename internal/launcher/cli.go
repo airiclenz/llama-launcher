@@ -181,14 +181,14 @@ func cmdUnload(cfg *Config, args []string) int {
 		target = loaded[0]
 	}
 
-	b, err := GetBackend(target.Backend)
+	b, err := GetLLMServer(target.Backend)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}
 
 	progress := newCLIProgress("Unloading model")
-	if _, ok := b.(ManagedBackend); ok {
+	if _, ok := b.(ManagedLLMServer); ok {
 		state, err := StopInstance(target.Addr(), progress)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -231,7 +231,7 @@ func cmdStart(cfg *Config, args []string) int {
 		return 2
 	}
 	serverName := *cfg.Defaults.Server
-	b, err := GetBackend(serverName)
+	b, err := GetLLMServer(serverName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 2
@@ -385,7 +385,7 @@ func resolveUntrackedStopTarget(cfg *Config, target string) (string, string, err
 
 	probe := func(name string) {
 		addr := cfg.ConfiguredBackendAddr(name)
-		b, err := GetBackend(name)
+		b, err := GetLLMServer(name)
 		if err != nil {
 			return
 		}
@@ -444,7 +444,7 @@ func cmdStatus(cfg *Config) int {
 	results := make(chan probeResult, len(states))
 	for _, s := range states {
 		go func(s *ServerState) {
-			b, err := GetBackend(s.Backend)
+			b, err := GetLLMServer(s.Backend)
 			if err != nil {
 				results <- probeResult{state: s}
 				return
@@ -484,7 +484,7 @@ func cmdStatus(cfg *Config) int {
 
 	for _, p := range probes {
 		s := p.state
-		b, err := GetBackend(s.Backend)
+		b, err := GetLLMServer(s.Backend)
 		if err != nil {
 			continue
 		}

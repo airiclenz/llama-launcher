@@ -306,7 +306,7 @@ func detectRunningServers(cfg *Config) []runningServer {
 	ch := make(chan result, len(probes))
 	for i, p := range probes {
 		go func(i int, p probe) {
-			b, err := GetBackend(p.backend)
+			b, err := GetLLMServer(p.backend)
 			if err != nil {
 				ch <- result{idx: i}
 				return
@@ -430,7 +430,7 @@ func doUnloadModel(cfg *Config) error {
 		target = loaded[idx]
 	}
 
-	b, err := GetBackend(target.Backend)
+	b, err := GetLLMServer(target.Backend)
 	if err != nil {
 		return err
 	}
@@ -444,7 +444,7 @@ func doUnloadModel(cfg *Config) error {
 		progress = newCLIProgress(fmt.Sprintf("Unloading %s", displayName))
 	}
 
-	if _, ok := b.(ManagedBackend); ok {
+	if _, ok := b.(ManagedLLMServer); ok {
 		st, err := StopInstance(target.Addr(), progress)
 		fmt.Print(escClear + escCursorShow)
 		if err != nil {
@@ -683,7 +683,7 @@ func hasMultipleBackends(cfg *Config) bool {
 }
 
 func backendDisplayName(backendName string) string {
-	b, err := GetBackend(backendName)
+	b, err := GetLLMServer(backendName)
 	if err != nil {
 		return backendName
 	}
@@ -738,7 +738,7 @@ func serverStatusLines(cfg *Config) []string {
 	}
 	ch := make(chan result, total)
 	for _, name := range names {
-		b, err := GetBackend(name)
+		b, err := GetLLMServer(name)
 		if err != nil {
 			for i := range probesByBackend[name] {
 				ch <- result{name: name, idx: i}
@@ -746,7 +746,7 @@ func serverStatusLines(cfg *Config) []string {
 			continue
 		}
 		for i, p := range probesByBackend[name] {
-			go func(name string, i int, addr string, b Backend) {
+			go func(name string, i int, addr string, b LLMServer) {
 				healthy := b.HealthCheck(addr) == nil
 				var models []RunningModelInfo
 				if healthy {
@@ -774,7 +774,7 @@ func serverStatusLines(cfg *Config) []string {
 
 	var lines []string
 	for _, name := range names {
-		b, err := GetBackend(name)
+		b, err := GetLLMServer(name)
 		if err != nil {
 			continue
 		}

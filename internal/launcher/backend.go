@@ -11,8 +11,9 @@ const (
 	modelLoadTimeout   = 5 * time.Minute
 )
 
-// Backend abstracts an LLM server implementation.
-type Backend interface {
+// LLMServer abstracts an LLM-serving software implementation (llama.cpp,
+// Ollama, LM Studio, ...). See CONTEXT.md for the domain term.
+type LLMServer interface {
 	Name() string
 	DisplayName() string
 	DefaultAddr() string
@@ -24,23 +25,23 @@ type Backend interface {
 	TryStop(addr string) error
 }
 
-// ManagedBackend is implemented by backends where the launcher forks and owns
-// the server process (e.g. llama.cpp, optionally Ollama).
-type ManagedBackend interface {
-	Backend
+// ManagedLLMServer is implemented by LLM Servers where the launcher forks and
+// owns the server process (e.g. llama.cpp).
+type ManagedLLMServer interface {
+	LLMServer
 	ServerBinary(cfg *Config) string
 	BuildServerArgs(cfg *Config, profile *ResolvedProfile) []string
 	BuildServerEnv(cfg *Config, profile *ResolvedProfile) []string
 }
 
-// PIDTracker is implemented by external backends that track the PID of a
-// server process they auto-started via TryStart.
+// PIDTracker is implemented by LLM Servers that track the PID of a server
+// process they auto-started via TryStart.
 type PIDTracker interface {
 	LastStartedPID() int
 	LastStartedLogFile() string
 }
 
-// ModelLister is implemented by backends that can list currently loaded models.
+// ModelLister is implemented by LLM Servers that can list currently loaded models.
 type ModelLister interface {
 	ListRunningModels(addr string) ([]RunningModelInfo, error)
 }
@@ -61,27 +62,27 @@ type ResolvedProfile struct {
 	ProfileParams
 }
 
-var backends = map[string]Backend{}
+var llmServers = map[string]LLMServer{}
 
-// RegisterBackend adds a backend to the global registry. Panics on duplicate names.
-func RegisterBackend(b Backend) {
+// RegisterLLMServer adds an LLM Server to the global registry. Panics on duplicate names.
+func RegisterLLMServer(b LLMServer) {
 	name := b.Name()
-	if _, exists := backends[name]; exists {
-		panic("duplicate backend: " + name)
+	if _, exists := llmServers[name]; exists {
+		panic("duplicate LLM server: " + name)
 	}
-	backends[name] = b
+	llmServers[name] = b
 }
 
-// GetBackend returns the backend registered under the given name.
-func GetBackend(name string) (Backend, error) {
-	b, ok := backends[name]
+// GetLLMServer returns the LLM Server registered under the given name.
+func GetLLMServer(name string) (LLMServer, error) {
+	b, ok := llmServers[name]
 	if !ok {
-		names := make([]string, 0, len(backends))
-		for k := range backends {
+		names := make([]string, 0, len(llmServers))
+		for k := range llmServers {
 			names = append(names, k)
 		}
 		sort.Strings(names)
-		return nil, fmt.Errorf("unknown backend %q (available: %v)", name, names)
+		return nil, fmt.Errorf("unknown LLM server %q (available: %v)", name, names)
 	}
 	return b, nil
 }

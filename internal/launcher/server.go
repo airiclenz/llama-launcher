@@ -52,7 +52,7 @@ func (s *ServerState) Addr() string {
 // IsServerAlive checks whether the recorded server is reachable. Liveness is
 // decided by the backend's health check, not by PID (see ADR-0001).
 func IsServerAlive(state *ServerState) bool {
-	b, err := GetBackend(state.Backend)
+	b, err := GetLLMServer(state.Backend)
 	if err != nil {
 		return false
 	}
@@ -61,18 +61,18 @@ func IsServerAlive(state *ServerState) bool {
 
 // StartServer launches a managed server or connects to an external one.
 func StartServer(cfg *Config, profile *ResolvedProfile) (*ServerState, error) {
-	b, err := GetBackend(profile.Backend)
+	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return nil, err
 	}
 
-	if mb, ok := b.(ManagedBackend); ok {
+	if mb, ok := b.(ManagedLLMServer); ok {
 		return startManagedServer(cfg, profile, mb)
 	}
 	return connectExternalServer(cfg, profile, b)
 }
 
-func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend) (*ServerState, error) {
+func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServer) (*ServerState, error) {
 	binary := mb.ServerBinary(cfg)
 	if _, err := exec.LookPath(binary); err != nil {
 		return nil, fmt.Errorf("server binary not found: %s", binary)
@@ -127,7 +127,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedBackend
 	return state, nil
 }
 
-func connectExternalServer(cfg *Config, profile *ResolvedProfile, b Backend) (*ServerState, error) {
+func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (*ServerState, error) {
 	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 
 	launcherStarted := false
@@ -198,7 +198,7 @@ func stopInstance(state *ServerState, progress ProgressFunc) (*ServerState, erro
 // the address is still reachable it locates the listening PID via lsof and
 // signals it directly. Returns nil when the address is no longer healthy.
 func EnsureStopped(backend, addr string, progress ProgressFunc) error {
-	b, err := GetBackend(backend)
+	b, err := GetLLMServer(backend)
 	if err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, er
 		removeInstanceState(state)
 	}
 
-	b, err := GetBackend(profile.Backend)
+	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return nil, false, err
 	}
@@ -316,7 +316,7 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, er
 		return nil, false, err
 	}
 
-	if _, ok := b.(ManagedBackend); ok {
+	if _, ok := b.(ManagedLLMServer); ok {
 		if err := WaitForHealth(b, state.Addr(), 15*time.Second); err != nil {
 			return nil, false, err
 		}
@@ -335,7 +335,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 	state, _ := ReadInstanceState(targetAddr)
 
-	b, err := GetBackend(profile.Backend)
+	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return nil, false, err
 	}
@@ -384,7 +384,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 		}
 	}
 
-	if _, ok := b.(ManagedBackend); ok {
+	if _, ok := b.(ManagedLLMServer); ok {
 		return loadProfileManaged(cfg, profile, state, b, progress)
 	}
 	return loadProfileExternal(cfg, profile, b, state, progress)
@@ -480,15 +480,15 @@ func shouldCrossServerUnload(s *ServerState, targetBackend string) bool {
 	if s == nil || s.Backend == targetBackend || s.ActiveModel == "" {
 		return false
 	}
-	b, err := GetBackend(s.Backend)
+	b, err := GetLLMServer(s.Backend)
 	if err != nil {
 		return false
 	}
-	_, isManaged := b.(ManagedBackend)
+	_, isManaged := b.(ManagedLLMServer)
 	return !isManaged
 }
 
-func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b Backend, progress ProgressFunc) (*ServerState, bool, error) {
+func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b LLMServer, progress ProgressFunc) (*ServerState, bool, error) {
 	if state != nil && IsServerAlive(state) {
 		reportStep(progress, "Stopping current server")
 		if _, err := StopInstance(state.Addr(), nil); err != nil {
@@ -525,7 +525,7 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerStat
 	return state, true, nil
 }
 
-func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state *ServerState, progress ProgressFunc) (*ServerState, bool, error) {
+func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, state *ServerState, progress ProgressFunc) (*ServerState, bool, error) {
 	if state != nil && IsServerAlive(state) {
 		if state.ActiveModel != "" && cfg.ShouldAutoUnload() {
 			reportStep(progress, "Unloading current model")
@@ -564,7 +564,7 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b Backend, state
 }
 
 // WaitForHealth polls the backend's health check until it succeeds or times out.
-func WaitForHealth(b Backend, addr string, timeout time.Duration) error {
+func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if b.HealthCheck(addr) == nil {
@@ -589,7 +589,7 @@ func UnloadInstanceModel(addr string, progress ProgressFunc) (*ServerState, erro
 		return state, nil
 	}
 
-	b, err := GetBackend(state.Backend)
+	b, err := GetLLMServer(state.Backend)
 	if err != nil {
 		return nil, err
 	}

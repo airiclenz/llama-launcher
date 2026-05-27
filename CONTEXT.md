@@ -29,5 +29,5 @@ Bringing the LLM Server's process up or down. The mechanism is internal to each 
 
 ## Flagged ambiguities
 
-- The Go interface is currently named `Backend`; the config key is `servers:`. The domain language above resolves to **LLM Server**, so `Backend` is a code-level alias awaiting rename.
+- The Go interface is `LLMServer` (renamed from `Backend` in 1.3.0) and the config key is `servers:`, both aligned with the domain term **LLM Server**. The persisted state-file schema retains `backend` as a JSON field name on `ServerState` for backwards compatibility with on-disk state from earlier versions.
 - There is no global "active" or "current" Profile or LLM Server. Each running LLM Server has its own active Profile/Model (recorded in its per-server state file), but the system never picks one as canonical. When an action could apply to several running LLM Servers, the user selects which one — in the CLI via an optional argument (`llml stop [server]`, `llml unload [profile]`), in the TUI via a sub-list. When only one is a valid target, selection collapses to a single auto-resolved option. Avoid "active server," "primary server," "current server" as cross-cutting terms.
