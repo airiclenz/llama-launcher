@@ -24,7 +24,7 @@
   - Tab-complete subcommand names
   - Data is already available from config; generate completion scripts via a `completions` subcommand
 
-- [ ] `status --json` and `list --json` output
+- [x] `status --json` and `list --json` output
   - Structured JSON output for scripting and integration with tools like `jq`
   - `status --json`: backend name, running state, address, active profile/model, PID, uptime
   - `list --json`: profile name, description, backend, model path, key parameters

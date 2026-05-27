@@ -2,6 +2,10 @@
 
 ## 1.3.0
 
+### Added
+
+- **`--json` flag on `status` and `list`** — both subcommands accept `--json` for structured output. `status --json` prints a JSON array with one element per enabled configured backend (`backend`, `running`, `address`, `active_profile`, `active_model`, `pid`, `uptime_seconds`); exit code parity with the human path (0 if any backend is running, 1 if all are stopped). `list --json` prints a JSON array with one element per profile (`name`, `description`, `backend`, `model`, plus `gpu_layers` and `context_size` when set). Default human-readable output is unchanged.
+
 ### Fixed
 
 - **`stop` works for untracked / externally-started servers** — `stop` (both the TUI "Stop server" item and the CLI `llama-launcher stop`) now terminates servers that have no per-instance state file. The "Stop server" item appears whenever any enabled server is reachable at its configured address (mirroring the status-header probe strategy: state-file instances plus a fallback probe at `cfg.ConfiguredBackendAddr(name)`). When the backend's CLI stop hook is a no-op (notably llama.cpp, which has no stop command), the launcher discovers the listening PID via `lsof -nP -iTCP@host:port -sTCP:LISTEN -t` and signals it directly (SIGTERM, then SIGKILL after the existing 15s grace period). Recovers gracefully from the destructive legacy-state migration: an external `llama-server` that lost its state record can still be reaped through the menu or CLI. Requires `lsof` on PATH.

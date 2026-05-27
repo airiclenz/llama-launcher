@@ -138,8 +138,8 @@ llama-launcher load <profile> [--restart]   # Activate a profile (no-op if alrea
 llama-launcher unload [profile]             # Unload model from the matching instance
 llama-launcher start [--profile p]          # Start server (optionally with a profile)
 llama-launcher stop [target]                # Stop a server (target = host:port or backend name)
-llama-launcher status                       # Show all running instances
-llama-launcher list                         # List available profiles
+llama-launcher status [--json]              # Show all running instances (--json for structured output)
+llama-launcher list [--json]                # List available profiles (--json for structured output)
 llama-launcher logs [target] [-f]           # Tail an instance's log
 llama-launcher logs clean [--days N|--all]  # Remove old log files
 ```

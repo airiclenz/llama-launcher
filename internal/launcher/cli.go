@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -80,9 +81,9 @@ func Run(args []string) int {
 	case "stop":
 		return cmdStop(cfg, args[1:])
 	case "status":
-		return cmdStatus(cfg)
+		return cmdStatus(cfg, args[1:])
 	case "list":
-		return cmdList(cfg)
+		return cmdList(cfg, args[1:])
 	case "logs":
 		return cmdLogs(cfg, args[1:])
 	default:
@@ -433,7 +434,21 @@ func resolveUntrackedStopTarget(cfg *Config, target string) (string, string, err
 	return reachable[0].backend, reachable[0].addr, nil
 }
 
-func cmdStatus(cfg *Config) int {
+func cmdStatus(cfg *Config, args []string) int {
+	jsonOutput := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOutput = true
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+			return 2
+		}
+	}
+	if jsonOutput {
+		return cmdStatusJSON(cfg)
+	}
+
 	states, _ := ReadAllStates()
 
 	type probeResult struct {
@@ -532,7 +547,21 @@ func cmdStatus(cfg *Config) int {
 	return 0
 }
 
-func cmdList(cfg *Config) int {
+func cmdList(cfg *Config, args []string) int {
+	jsonOutput := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOutput = true
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+			return 2
+		}
+	}
+	if jsonOutput {
+		return cmdListJSON(cfg)
+	}
+
 	names := cfg.ProfileNames()
 	anyFav := anyProfileFavourite(cfg, names)
 
@@ -575,6 +604,109 @@ func cmdList(cfg *Config) int {
 		}
 		fmt.Printf("  %-*s  [%-*s] %s%s\n", maxNameLen, name, maxTagLen, backendDisplayName(server), desc, suffix)
 	}
+	return 0
+}
+
+// cmdStatusJSON prints one JSON entry per enabled configured backend. For each
+// backend, the first healthy state-file instance supplies the running fields;
+// when no healthy instance exists the entry is emitted with running=false and
+// zero/empty fields. Exit code matches the human path: 0 if any backend is
+// running, 1 if all are stopped.
+func cmdStatusJSON(cfg *Config) int {
+	type entry struct {
+		Backend       string `json:"backend"`
+		Running       bool   `json:"running"`
+		Address       string `json:"address"`
+		ActiveProfile string `json:"active_profile"`
+		ActiveModel   string `json:"active_model"`
+		PID           int    `json:"pid"`
+		UptimeSeconds int64  `json:"uptime_seconds"`
+	}
+
+	var backends []string
+	for name := range cfg.Servers {
+		if cfg.IsServerEnabled(name) {
+			backends = append(backends, name)
+		}
+	}
+	sort.Strings(backends)
+
+	states, _ := ReadAllStates()
+
+	output := make([]entry, 0, len(backends))
+	anyRunning := false
+	for _, name := range backends {
+		var found *ServerState
+		for _, s := range states {
+			if s.Backend == name && IsServerAlive(s) {
+				found = s
+				break
+			}
+		}
+		if found != nil {
+			anyRunning = true
+			output = append(output, entry{
+				Backend:       name,
+				Running:       true,
+				Address:       found.Addr(),
+				ActiveProfile: found.ActiveProfile,
+				ActiveModel:   found.ActiveModel,
+				PID:           found.PID,
+				UptimeSeconds: int64(found.Uptime().Seconds()),
+			})
+		} else {
+			output = append(output, entry{Backend: name})
+		}
+	}
+
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+	fmt.Println(string(data))
+
+	if !anyRunning {
+		return 1
+	}
+	return 0
+}
+
+// cmdListJSON prints a JSON array of configured profiles. Pointer fields on
+// ProfileParams are dereferenced into local fields with omitempty so unset
+// parameters are absent rather than serialised as null.
+func cmdListJSON(cfg *Config) int {
+	type entry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Backend     string `json:"backend"`
+		Model       string `json:"model"`
+		GPULayers   *int   `json:"gpu_layers,omitempty"`
+		ContextSize *int   `json:"context_size,omitempty"`
+	}
+
+	names := cfg.ProfileNames()
+	output := make([]entry, 0, len(names))
+	for _, name := range names {
+		p := cfg.Profiles[name]
+		server := resolveProfileServer(cfg, &p)
+		merged := mergeParams(cfg.Defaults, p.ProfileParams)
+		output = append(output, entry{
+			Name:        name,
+			Description: p.Description,
+			Backend:     server,
+			Model:       p.Model,
+			GPULayers:   merged.GPULayers,
+			ContextSize: merged.ContextSize,
+		})
+	}
+
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+	fmt.Println(string(data))
 	return 0
 }
 
@@ -789,8 +921,8 @@ Commands:
   unload [profile]      Unload model (for managed backends: stops server)
   start [--profile p]   Start server (optionally with a profile)
   stop [target]         Stop a server (target = host:port or backend name)
-  status                Show server and model status
-  list                  List available profiles
+  status [--json]       Show server and model status
+  list [--json]         List available profiles
   logs [target] [-f]           Tail an instance's log
   logs clean [--days N|--all]  Remove old log files
   config validate       Check config file for errors

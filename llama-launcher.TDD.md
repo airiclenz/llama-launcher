@@ -132,8 +132,8 @@ For scripting, automation, and quick access:
 | `llama-launcher unload [profile]` | Unload the Model from the matching running instance. For LLM Servers with a load/unload API (Ollama, LM Studio), this is an HTTP call; for llamacpp, it stops the server (Model is part of the server's args). Optional Profile argument disambiguates when multiple Models are loaded; auto-detects when only one is. |
 | `llama-launcher start [--profile p]` | Start the LLM Server without loading a Model. With `--profile` (or `-p`), resolve the named Profile and activate it — equivalent to `load <profile>`. |
 | `llama-launcher stop [target]` | Stop a running LLM Server instance. `[target]` may be an `host:port` (preferred when multiple instances of the same backend run) or a backend name; auto-detects when only one instance is running. Stop is unconditional (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)) regardless of whether the launcher started the process. |
-| `llama-launcher status` | Print one row per running LLM Server instance (address, backend, active Profile/Model, PID if known, uptime). Exit code 0 if any running, 1 if all stopped. |
-| `llama-launcher list` | Print all configured Profiles with descriptions and target LLM Server. |
+| `llama-launcher status [--json]` | Print one row per running LLM Server instance (address, backend, active Profile/Model, PID if known, uptime). Exit code 0 if any running, 1 if all stopped. With `--json`, emits a JSON array with one entry per enabled configured backend (`backend`, `running`, `address`, `active_profile`, `active_model`, `pid`, `uptime_seconds`); same exit code semantics. |
+| `llama-launcher list [--json]` | Print all configured Profiles with descriptions and target LLM Server. With `--json`, emits a JSON array with one entry per Profile (`name`, `description`, `backend`, `model`, plus `gpu_layers` and `context_size` when set). |
 | `llama-launcher logs [target] [--follow]` | Tail an instance's log file. `[target]` is an `host:port` or backend name; auto-detects the active instance when only one applies. With `--follow`, behaves like `tail -f`. This is the one subcommand that remains running until interrupted. |
 | `llama-launcher logs clean [--days N\|--all]` | Delete old log files. Default threshold is 7 days; `--days N` overrides. `--all` removes everything. Always skips logs belonging to running servers. Reports files removed and space freed. |
 | `llama-launcher config validate` | Parse config and report all validation problems at once (deprecated fields, unknown/disabled servers, missing models, Profiles missing `server:` with no defensible fallback). Uses `parseConfig` + `validateAll` to collect errors without stopping at the first. Exit 0 if valid, 2 if invalid. |
@@ -324,7 +324,7 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 
 | File | Responsibility |
 |---|---|
-| `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. |
+| `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. `status` and `list` accept `--json` for structured output (local marshalling structs in `cli.go`). |
 | `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `Reload` for in-place re-read, `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems including non-fatal warnings such as `defaults.server` fallback usage), example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
 | `defaults/config.yaml` | Example config template, embedded at compile time via `go:embed`. |
 | `defaults/embed.go` | Embeds `config.yaml` and exports it as `defaults.ExampleConfig`. |
