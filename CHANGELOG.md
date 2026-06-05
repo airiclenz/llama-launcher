@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **State files are gone** — `~/.config/llama-launcher/state-*.json` is no longer written or read. Every command now derives the running set from live probes of the addresses in `config.yaml` plus the LLM Server's own API (`/v1/models`, `/api/ps`, `/props`). A one-shot cleanup deletes any leftover `state-*.json` on first run. Eliminates a class of "the tool says X but the truth is Y" bugs: a crashed server no longer leaves stale state behind, and models loaded externally on Ollama / LM Studio now show up in `status` and the menu without re-activation.
+
+### Changed
+
+- **`load` drift detection is now live** — ADR-0007's "the params have drifted since you activated this profile" notice is computed by querying the running llama-server (`GET /props`) and diffing against the freshly resolved Profile, instead of comparing against a persisted snapshot. Coverage narrows on Ollama and LM Studio (no equivalent endpoint) — there, model-name match alone is enough for the idempotency no-op and no per-parameter drift notice is emitted.
+- **`llml logs` covers launcher-managed servers only** — log paths are resolved by globbing `{log_dir}/{backend}-*.log` and picking the most recent. Servers started outside the launcher log to wherever they were started; `llml logs` prints a clear message in that case rather than guessing.
+- **`stop` discovers via `lsof`, always** — the PID-from-state shortcut is gone. Every stop probes the address, then asks `lsof` for the listening PID before signalling. Same behaviour as before for users; one fewer source of stale data.
+
 ## 1.3.0
 
 ### Added

@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -27,40 +26,22 @@ const (
 
 var ErrNotRunning = errors.New("no server running")
 
-type ServerState struct {
-	PID            int           `json:"pid"`
-	Backend        string        `json:"backend"`
-	Host           string        `json:"host"`
-	Port           int           `json:"port"`
-	StartedAt      time.Time     `json:"started_at"`
-	LogFile        string        `json:"log_file,omitempty"`
-	ActiveProfile  string        `json:"active_profile,omitempty"`
-	ActiveModel    string        `json:"active_model,omitempty"`
-	ContextSize    int           `json:"context_size,omitempty"`
-	GPULayers      int           `json:"gpu_layers,omitempty"`
-	ResolvedParams ProfileParams `json:"resolved_params,omitempty"`
-}
-
-func (s *ServerState) Uptime() time.Duration {
-	return time.Since(s.StartedAt).Truncate(time.Second)
-}
-
-func (s *ServerState) Addr() string {
-	return fmt.Sprintf("%s:%d", s.Host, s.Port)
-}
-
-// IsServerAlive checks whether the recorded server is reachable. Liveness is
-// decided by the backend's health check, not by PID (see ADR-0001).
-func IsServerAlive(state *ServerState) bool {
-	b, err := GetLLMServer(state.Backend)
+// IsServerAlive returns true when the backend's health check succeeds at the
+// instance's address (see ADR-0001: liveness is decided by health check, not
+// by PID).
+func IsServerAlive(inst *RunningInstance) bool {
+	if inst == nil {
+		return false
+	}
+	b, err := GetLLMServer(inst.Backend)
 	if err != nil {
 		return false
 	}
-	return b.HealthCheck(state.Addr()) == nil
+	return b.HealthCheck(inst.Addr()) == nil
 }
 
 // StartServer launches a managed server or connects to an external one.
-func StartServer(cfg *Config, profile *ResolvedProfile) (*ServerState, error) {
+func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
 	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return nil, err
@@ -72,7 +53,7 @@ func StartServer(cfg *Config, profile *ResolvedProfile) (*ServerState, error) {
 	return connectExternalServer(cfg, profile, b)
 }
 
-func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServer) (*ServerState, error) {
+func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServer) (*RunningInstance, error) {
 	binary := mb.ServerBinary(cfg)
 	if _, err := exec.LookPath(binary); err != nil {
 		return nil, fmt.Errorf("server binary not found: %s", binary)
@@ -104,7 +85,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	}
 	logFile.Close()
 
-	state := &ServerState{
+	inst := &RunningInstance{
 		PID:       cmd.Process.Pid,
 		Backend:   profile.Backend,
 		Host:      *profile.Host,
@@ -113,21 +94,16 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 		LogFile:   logPath,
 	}
 
-	if err := writeInstanceState(state); err != nil {
-		return nil, fmt.Errorf("writing state: %w", err)
-	}
-
 	time.Sleep(startupGracePeriod)
-	if !IsProcessAlive(state.PID) {
-		removeInstanceState(state)
+	if !IsProcessAlive(inst.PID) {
 		tail := readLastLines(logPath, crashLogTailLines)
 		return nil, fmt.Errorf("server exited immediately after start\nLog tail:\n%s", tail)
 	}
 
-	return state, nil
+	return inst, nil
 }
 
-func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (*ServerState, error) {
+func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (*RunningInstance, error) {
 	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 
 	launcherStarted := false
@@ -151,46 +127,55 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (
 		}
 	}
 
-	state := &ServerState{
+	return &RunningInstance{
 		PID:       pid,
 		Backend:   profile.Backend,
 		Host:      *profile.Host,
 		Port:      *profile.Port,
 		StartedAt: time.Now(),
 		LogFile:   logFile,
-	}
-
-	if err := writeInstanceState(state); err != nil {
-		return nil, fmt.Errorf("writing state: %w", err)
-	}
-
-	return state, nil
+	}, nil
 }
 
-// StopInstance stops the LLM Server instance at the given address. Stop is
-// unconditional (ADR-0001): the launcher does not distinguish servers it
-// started from servers that were already running. If a PID is recorded and
-// alive, the process is signalled; the backend's TryStop is also called so
-// each backend's native shutdown command runs (`ollama stop`, `lms server
-// stop`). The per-instance state file is removed in either case.
-func StopInstance(addr string, progress ProgressFunc) (*ServerState, error) {
-	state, err := ReadInstanceState(addr)
+// StopInstance stops whatever LLM-server instance is listening at addr. Stop
+// is unconditional (ADR-0001): the launcher does not distinguish servers it
+// started from servers that were already running. The backend's TryStop is
+// called first; if the address remains reachable, the listening PID is
+// discovered via lsof and signalled directly.
+func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	host, port, ok := splitHostPort(addr)
+	if !ok {
+		return nil, fmt.Errorf("invalid address: %s", addr)
+	}
+	backend, err := identifyBackend(addr)
 	if err != nil {
 		return nil, err
 	}
-	if state == nil {
-		return nil, ErrNotRunning
+	pid, _ := findListeningPID(addr)
+	if pid > 0 && IsProcessAlive(pid) {
+		terminatePID(pid, progress)
 	}
-	return stopInstance(state, progress)
+	if err := EnsureStopped(backend, addr, progress); err != nil {
+		return nil, err
+	}
+	return &RunningInstance{
+		Backend: backend,
+		Host:    host,
+		Port:    port,
+		PID:     pid,
+	}, nil
 }
 
-func stopInstance(state *ServerState, progress ProgressFunc) (*ServerState, error) {
-	if state.PID > 0 && IsProcessAlive(state.PID) {
-		terminatePID(state.PID, progress)
+// identifyBackend asks each registered backend whether it owns the server
+// reachable at addr. Used by stop paths that have an address but no caller-
+// supplied backend name. Returns ErrNotRunning when nothing is reachable.
+func identifyBackend(addr string) (string, error) {
+	for name, b := range llmServers {
+		if b.HealthCheck(addr) == nil {
+			return name, nil
+		}
 	}
-	_ = EnsureStopped(state.Backend, state.Addr(), progress)
-	removeInstanceState(state)
-	return state, nil
+	return "", ErrNotRunning
 }
 
 // EnsureStopped terminates whatever process is listening at addr. It first
@@ -219,10 +204,6 @@ func EnsureStopped(backend, addr string, progress ProgressFunc) error {
 		return fmt.Errorf("server at %s is still reachable after signalling PID %d", addr, pid)
 	}
 	return nil
-}
-
-func signalAndWait(state *ServerState, progress ProgressFunc) {
-	terminatePID(state.PID, progress)
 }
 
 func terminatePID(pid int, progress ProgressFunc) {
@@ -294,108 +275,146 @@ func findListeningPID(addr string) (int, error) {
 	return 0, fmt.Errorf("no process listening on %s (is lsof installed?)", addr)
 }
 
-// EnsureServer returns the running server state, starting one if needed.
-func EnsureServer(cfg *Config, profile *ResolvedProfile) (*ServerState, bool, error) {
+// EnsureServer returns the running server instance, starting one if needed.
+func EnsureServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, bool, error) {
 	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
-	state, _ := ReadInstanceState(addr)
-
-	if state != nil && IsServerAlive(state) {
-		return state, false, nil
-	}
-	if state != nil {
-		removeInstanceState(state)
-	}
 
 	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return nil, false, err
 	}
 
-	state, err = StartServer(cfg, profile)
+	if b.HealthCheck(addr) == nil {
+		host, port, _ := splitHostPort(addr)
+		return &RunningInstance{
+			Backend: profile.Backend,
+			Host:    host,
+			Port:    port,
+		}, false, nil
+	}
+
+	inst, err := StartServer(cfg, profile)
 	if err != nil {
 		return nil, false, err
 	}
 
 	if _, ok := b.(ManagedLLMServer); ok {
-		if err := WaitForHealth(b, state.Addr(), 15*time.Second); err != nil {
+		if err := WaitForHealth(b, inst.Addr(), 15*time.Second); err != nil {
 			return nil, false, err
 		}
 	}
 
-	return state, true, nil
+	return inst, true, nil
 }
 
-// LoadProfile stops any existing server and starts a new one with the given
-// profile's model. When the same profile is already active at the target
-// address, the call is a no-op (see ADR-0007): if the recorded resolved
-// parameters match the freshly resolved profile the call exits silently,
-// otherwise a drift notice is printed to stderr naming the divergent fields.
-// Pass restart=true to bypass the idempotency check and force re-activation.
-func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*ServerState, bool, error) {
+// LoadProfile activates a profile at its target address. When a server is
+// already reachable and serving the requested model, the call is idempotent
+// (ADR-0007): if the live server's parameters match the freshly resolved
+// profile, nothing happens; if they differ, a drift notice is printed and
+// the caller is pointed at --restart. Drift detection is now live — the
+// launcher queries the running server (llama-server /props) instead of
+// reading a persisted snapshot. For backends that do not expose their
+// parameters (Ollama, LM Studio), model-name match alone is enough for the
+// idempotency no-op. Pass restart=true to force re-activation.
+func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
 	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
-	state, _ := ReadInstanceState(targetAddr)
 
 	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return nil, false, err
 	}
 
-	if !restart && state != nil && state.ActiveProfile == profile.Name && IsServerAlive(state) {
-		drifts := paramDrift(state.ResolvedParams, profile.ProfileParams)
-		if state.ActiveModel != "" && profile.ModelPath != "" && state.ActiveModel != profile.ModelPath {
-			drifts = append(drifts, fmt.Sprintf("model: %s → %s", state.ActiveModel, profile.ModelPath))
+	healthy := b.HealthCheck(targetAddr) == nil
+
+	if !restart && healthy {
+		liveModel := liveLoadedModel(b, targetAddr)
+		if liveModel != "" && profile.ModelPath != "" && liveModel == profile.ModelPath {
+			drifts := liveParamDrift(b, targetAddr, profile.ProfileParams)
+			if len(drifts) > 0 {
+				printDriftNotice(profile.Name, targetAddr, drifts)
+			}
+			host, port, _ := splitHostPort(targetAddr)
+			return &RunningInstance{
+				Backend:       profile.Backend,
+				Host:          host,
+				Port:          port,
+				ActiveProfile: profile.Name,
+				ActiveModel:   liveModel,
+			}, false, nil
 		}
-		if len(drifts) > 0 {
-			printDriftNotice(profile.Name, targetAddr, drifts)
-		}
-		return state, false, nil
 	}
 
 	if cfg.ShouldAutoStopServer() {
-		allStates, _ := ReadAllStates()
-		for _, s := range allStates {
-			if s.Addr() == targetAddr {
+		instances := DiscoverRunningInstances(cfg)
+		for _, inst := range instances {
+			if inst.Addr() == targetAddr {
 				continue
 			}
-			if !IsServerAlive(s) {
-				continue
-			}
-			reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(s.Backend)))
-			if _, err := StopInstance(s.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
-				return nil, false, fmt.Errorf("auto-stopping %s: %w", s.Backend, err)
+			reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(inst.Backend)))
+			if _, err := StopInstance(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
+				return nil, false, fmt.Errorf("auto-stopping %s: %w", inst.Backend, err)
 			}
 		}
 	} else if cfg.ShouldAutoUnload() {
-		allStates, _ := ReadAllStates()
-		for _, s := range allStates {
-			if s.Addr() == targetAddr {
+		instances := DiscoverRunningInstances(cfg)
+		for _, inst := range instances {
+			if inst.Addr() == targetAddr {
 				continue
 			}
-			if !shouldCrossServerUnload(s, profile.Backend) {
+			if !shouldCrossServerUnload(inst, profile.Backend) {
 				continue
 			}
-			if !IsServerAlive(s) {
-				continue
-			}
-			reportStep(progress, fmt.Sprintf("Unloading model on %s", backendDisplayName(s.Backend)))
-			if _, err := UnloadInstanceModel(s.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
-				return nil, false, fmt.Errorf("auto-unloading %s: %w", s.Backend, err)
+			reportStep(progress, fmt.Sprintf("Unloading model on %s", backendDisplayName(inst.Backend)))
+			if _, err := UnloadInstanceModel(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
+				return nil, false, fmt.Errorf("auto-unloading %s: %w", inst.Backend, err)
 			}
 		}
 	}
 
 	if _, ok := b.(ManagedLLMServer); ok {
-		return loadProfileManaged(cfg, profile, state, b, progress)
+		return loadProfileManaged(cfg, profile, healthy, b, progress)
 	}
-	return loadProfileExternal(cfg, profile, b, state, progress)
+	return loadProfileExternal(cfg, profile, b, healthy, progress)
 }
 
-// paramDrift returns a human-readable list of fields that differ between the
-// stored snapshot of a profile's resolved parameters and a freshly resolved
-// set. Slot-identity fields (Server, Host, Port) are intentionally skipped:
-// drift in those puts the activation in a different address slot, which the
-// idempotency check up the stack would not have matched in the first place.
-// Each returned string has the form "field: old → new".
+// liveLoadedModel returns the name (or path) of the model currently loaded
+// at addr, as reported by the backend. Empty string means "nothing loaded"
+// or "backend does not expose a model list".
+func liveLoadedModel(b LLMServer, addr string) string {
+	ml, ok := b.(ModelLister)
+	if !ok {
+		return ""
+	}
+	models, err := ml.ListRunningModels(addr)
+	if err != nil || len(models) == 0 {
+		return ""
+	}
+	return models[0].Name
+}
+
+// liveParamDrift returns the drift list between a backend's live parameters
+// and the freshly resolved profile. Backends that do not implement
+// LiveParamsQuerier (Ollama, LM Studio) contribute no drift — model-name
+// match is the only idempotency signal there. See ADR-0007.
+func liveParamDrift(b LLMServer, addr string, fresh ProfileParams) []string {
+	lp, ok := b.(LiveParamsQuerier)
+	if !ok {
+		return nil
+	}
+	live, err := lp.QueryLiveParams(addr)
+	if err != nil || live == nil {
+		return nil
+	}
+	return paramDrift(*live, fresh)
+}
+
+// paramDrift returns a human-readable list of fields that differ between
+// two resolved-parameter sets. Slot-identity fields (Server, Host, Port)
+// are intentionally skipped: drift in those puts the activation in a
+// different address slot, which the idempotency check up the stack would
+// not have matched in the first place. Each returned string has the form
+// "field: old → new". Nil values on either side are treated as "unset" and
+// only produce drift when the other side has a value.
 func paramDrift(stored, fresh ProfileParams) []string {
 	var drifts []string
 	addInt := func(name string, a, b *int) {
@@ -476,11 +495,11 @@ func printDriftNotice(profileName, addr string, drifts []string) {
 // for cross-server auto_unload when activating a profile on targetBackend.
 // Managed backends are skipped: an unload without a stop is not possible for
 // them (see ADR-0004), so auto_unload is silently ignored on those instances.
-func shouldCrossServerUnload(s *ServerState, targetBackend string) bool {
-	if s == nil || s.Backend == targetBackend || s.ActiveModel == "" {
+func shouldCrossServerUnload(inst *RunningInstance, targetBackend string) bool {
+	if inst == nil || inst.Backend == targetBackend || inst.ActiveModel == "" {
 		return false
 	}
-	b, err := GetLLMServer(s.Backend)
+	b, err := GetLLMServer(inst.Backend)
 	if err != nil {
 		return false
 	}
@@ -488,79 +507,68 @@ func shouldCrossServerUnload(s *ServerState, targetBackend string) bool {
 	return !isManaged
 }
 
-func loadProfileManaged(cfg *Config, profile *ResolvedProfile, state *ServerState, b LLMServer, progress ProgressFunc) (*ServerState, bool, error) {
-	if state != nil && IsServerAlive(state) {
+func loadProfileManaged(cfg *Config, profile *ResolvedProfile, healthy bool, b LLMServer, progress ProgressFunc) (*RunningInstance, bool, error) {
+	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	if healthy {
 		reportStep(progress, "Stopping current server")
-		if _, err := StopInstance(state.Addr(), nil); err != nil {
+		if _, err := StopInstance(targetAddr, nil); err != nil && !errors.Is(err, ErrNotRunning) {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
 		}
-	} else if state != nil {
-		removeInstanceState(state)
 	}
 
 	reportStep(progress, "Starting server")
-	state, err := StartServer(cfg, profile)
+	inst, err := StartServer(cfg, profile)
 	if err != nil {
 		return nil, false, err
 	}
 
 	reportStep(progress, "Waiting for server")
-	if err := WaitForHealth(b, state.Addr(), 30*time.Second); err != nil {
+	if err := WaitForHealth(b, inst.Addr(), 30*time.Second); err != nil {
 		return nil, false, err
 	}
 
-	state.ActiveProfile = profile.Name
-	state.ActiveModel = profile.ModelPath
-	if profile.ContextSize != nil {
-		state.ContextSize = *profile.ContextSize
-	}
-	if profile.GPULayers != nil {
-		state.GPULayers = *profile.GPULayers
-	}
-	state.ResolvedParams = profile.ProfileParams
-	if err := writeInstanceState(state); err != nil {
-		return nil, false, fmt.Errorf("writing state: %w", err)
-	}
+	inst.ActiveProfile = profile.Name
+	inst.ActiveModel = profile.ModelPath
+	inst.ResolvedParams = profile.ProfileParams
 
-	return state, true, nil
+	return inst, true, nil
 }
 
-func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, state *ServerState, progress ProgressFunc) (*ServerState, bool, error) {
-	if state != nil && IsServerAlive(state) {
-		if state.ActiveModel != "" && cfg.ShouldAutoUnload() {
-			reportStep(progress, "Unloading current model")
-			if err := b.UnloadModel(state.Addr(), state.ActiveModel); err != nil {
-				return nil, false, fmt.Errorf("unloading current model: %w", err)
+func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, healthy bool, progress ProgressFunc) (*RunningInstance, bool, error) {
+	var inst *RunningInstance
+	if healthy {
+		if cfg.ShouldAutoUnload() {
+			if liveModel := liveLoadedModel(b, fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)); liveModel != "" {
+				reportStep(progress, "Unloading current model")
+				if err := b.UnloadModel(fmt.Sprintf("%s:%d", *profile.Host, *profile.Port), liveModel); err != nil {
+					return nil, false, fmt.Errorf("unloading current model: %w", err)
+				}
 			}
 		}
-	} else {
-		if state != nil {
-			removeInstanceState(state)
+		inst = &RunningInstance{
+			Backend: profile.Backend,
+			Host:    *profile.Host,
+			Port:    *profile.Port,
 		}
+	} else {
 		reportStep(progress, "Connecting to server")
-		newState, err := connectExternalServer(cfg, profile, b)
+		newInst, err := connectExternalServer(cfg, profile, b)
 		if err != nil {
 			return nil, false, err
 		}
-		state = newState
+		inst = newInst
 	}
 
 	reportStep(progress, "Loading model")
-	if err := b.LoadModel(state.Addr(), profile); err != nil {
+	if err := b.LoadModel(inst.Addr(), profile); err != nil {
 		return nil, false, fmt.Errorf("loading model: %w", err)
 	}
 
-	state.ActiveProfile = profile.Name
-	state.ActiveModel = profile.ModelPath
-	if profile.ContextSize != nil {
-		state.ContextSize = *profile.ContextSize
-	}
-	state.ResolvedParams = profile.ProfileParams
-	if err := writeInstanceState(state); err != nil {
-		return nil, false, fmt.Errorf("writing state: %w", err)
-	}
+	inst.ActiveProfile = profile.Name
+	inst.ActiveModel = profile.ModelPath
+	inst.ResolvedParams = profile.ProfileParams
 
-	return state, true, nil
+	return inst, true, nil
 }
 
 // WaitForHealth polls the backend's health check until it succeeds or times out.
@@ -577,167 +585,50 @@ func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 
 // UnloadInstanceModel unloads the active model for the instance at the given
 // address without stopping the server.
-func UnloadInstanceModel(addr string, progress ProgressFunc) (*ServerState, error) {
-	state, err := ReadInstanceState(addr)
+func UnloadInstanceModel(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	host, port, ok := splitHostPort(addr)
+	if !ok {
+		return nil, fmt.Errorf("invalid address: %s", addr)
+	}
+	backend, err := identifyBackend(addr)
 	if err != nil {
 		return nil, err
 	}
-	if state == nil {
-		return nil, ErrNotRunning
-	}
-	if state.ActiveModel == "" {
-		return state, nil
-	}
-
-	b, err := GetLLMServer(state.Backend)
+	b, err := GetLLMServer(backend)
 	if err != nil {
 		return nil, err
+	}
+	liveModel := liveLoadedModel(b, addr)
+	if liveModel == "" {
+		return &RunningInstance{Backend: backend, Host: host, Port: port}, nil
 	}
 
 	reportStep(progress, "Unloading model")
-	if err := b.UnloadModel(state.Addr(), state.ActiveModel); err != nil {
+	if err := b.UnloadModel(addr, liveModel); err != nil {
 		return nil, fmt.Errorf("unloading model: %w", err)
 	}
 
-	state.ActiveProfile = ""
-	state.ActiveModel = ""
-	state.ContextSize = 0
-	state.ResolvedParams = ProfileParams{}
-	if err := writeInstanceState(state); err != nil {
-		return nil, fmt.Errorf("writing state: %w", err)
-	}
-
-	return state, nil
+	return &RunningInstance{Backend: backend, Host: host, Port: port}, nil
 }
 
-// instanceStatePath returns the state-file path for an instance. The host is
-// omitted when loopback (127.0.0.1) and included otherwise. See ADR-0006.
-func instanceStatePath(backend, host string, port int) string {
-	var name string
-	if host == "" || host == loopbackHost {
-		name = fmt.Sprintf("state-%s-%d.json", backend, port)
-	} else {
-		name = fmt.Sprintf("state-%s-%s-%d.json", backend, host, port)
-	}
-	return filepath.Join(DefaultConfigDir(), name)
-}
+// cleanupLegacyStateFiles deletes state-*.json files left over from earlier
+// versions of the launcher that persisted server state to disk. Runs once
+// per process. Silent on failure — these files are best-effort cleanup, not
+// load-bearing.
+var legacyStateCleanupOnce sync.Once
 
-// ReadInstanceState returns the state record for the instance bound to addr,
-// or nil if no record exists. Scans state files because the backend type is
-// not known from the address alone (any backend could in principle bind a
-// given port).
-func ReadInstanceState(addr string) (*ServerState, error) {
-	states, err := ReadAllStates()
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range states {
-		if s.Addr() == addr {
-			return s, nil
-		}
-	}
-	return nil, nil
-}
-
-// ReadInstancesForBackend returns all instance state records whose backend
-// matches the given name.
-func ReadInstancesForBackend(backend string) ([]*ServerState, error) {
-	states, err := ReadAllStates()
-	if err != nil {
-		return nil, err
-	}
-	var matches []*ServerState
-	for _, s := range states {
-		if s.Backend == backend {
-			matches = append(matches, s)
-		}
-	}
-	return matches, nil
-}
-
-func ReadAllStates() ([]*ServerState, error) {
-	migrateOldState()
-
-	pattern := filepath.Join(DefaultConfigDir(), "state-*.json")
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	var states []*ServerState
-	for _, path := range matches {
-		if strings.HasSuffix(path, ".tmp") {
-			continue
-		}
-		data, err := os.ReadFile(path)
+func CleanupLegacyStateFiles() {
+	legacyStateCleanupOnce.Do(func() {
+		dir := DefaultConfigDir()
+		os.Remove(filepath.Join(dir, "state.json"))
+		matches, err := filepath.Glob(filepath.Join(dir, "state-*.json"))
 		if err != nil {
-			continue
+			return
 		}
-		var state ServerState
-		if err := json.Unmarshal(data, &state); err != nil {
-			continue
-		}
-		states = append(states, &state)
-	}
-	return states, nil
-}
-
-func writeInstanceState(state *ServerState) error {
-	dir := DefaultConfigDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("creating state directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling state: %w", err)
-	}
-
-	path := instanceStatePath(state.Backend, state.Host, state.Port)
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp state: %w", err)
-	}
-
-	return os.Rename(tmpPath, path)
-}
-
-func removeInstanceState(state *ServerState) {
-	os.Remove(instanceStatePath(state.Backend, state.Host, state.Port))
-}
-
-var migrateOnce sync.Once
-
-// migrateOldState removes legacy state files. The pre-ADR-0006 schemes
-// (`state.json` and per-backend `state-{backend}.json`) are no longer
-// readable — the per-instance API keys by address. Legacy records are
-// treated as stale and deleted; if the recorded process is still alive,
-// the user re-activates the relevant Profile to recreate the per-instance
-// state record. See ADR-0006.
-func migrateOldState() {
-	migrateOnce.Do(func() {
-		removeLegacyStateFiles(DefaultConfigDir())
-	})
-}
-
-func removeLegacyStateFiles(dir string) {
-	// Remove the original single-file state.
-	os.Remove(filepath.Join(dir, "state.json"))
-
-	// Remove legacy per-backend files of the form state-{backend}.json
-	// (exactly one dash-separated segment after "state"). New per-instance
-	// files always include a port and so have two or more segments.
-	matches, err := filepath.Glob(filepath.Join(dir, "state-*.json"))
-	if err != nil {
-		return
-	}
-	for _, path := range matches {
-		base := filepath.Base(path)
-		name := strings.TrimSuffix(strings.TrimPrefix(base, "state-"), ".json")
-		if !strings.Contains(name, "-") {
+		for _, path := range matches {
 			os.Remove(path)
 		}
-	}
+	})
 }
 
 func IsProcessAlive(pid int) bool {

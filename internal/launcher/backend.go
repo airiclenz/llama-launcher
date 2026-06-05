@@ -51,6 +51,14 @@ type RunningModelInfo struct {
 	Size int64
 }
 
+// LiveParamsQuerier is implemented by LLM Servers that can report their
+// currently active parameters at runtime. Used by ADR-0007 drift detection
+// (LoadProfile compares the live params against the freshly resolved profile).
+// Returning (nil, nil) means the server is reachable but exposes no params.
+type LiveParamsQuerier interface {
+	QueryLiveParams(addr string) (*ProfileParams, error)
+}
+
 // ResolvedProfile holds a fully merged profile ready for use by a backend.
 type ResolvedProfile struct {
 	Name        string

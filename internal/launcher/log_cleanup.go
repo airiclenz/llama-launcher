@@ -15,7 +15,7 @@ type CleanupResult struct {
 	Freed   int64
 }
 
-func cleanupLogs(logDir string, maxAge time.Duration, deleteAll bool) (CleanupResult, error) {
+func cleanupLogs(cfg *Config, logDir string, maxAge time.Duration, deleteAll bool) (CleanupResult, error) {
 	entries, err := os.ReadDir(logDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -24,7 +24,7 @@ func cleanupLogs(logDir string, maxAge time.Duration, deleteAll bool) (CleanupRe
 		return CleanupResult{}, fmt.Errorf("reading log directory: %w", err)
 	}
 
-	active := activeLogFiles()
+	active := activeLogFiles(cfg)
 	now := time.Now()
 	var result CleanupResult
 
@@ -99,12 +99,20 @@ func formatBytes(b int64) string {
 	}
 }
 
-func activeLogFiles() map[string]bool {
+// activeLogFiles maps the current log-file path for each running instance.
+// Discovered via live probing, then resolved to a path via the deterministic
+// log-naming convention. Used by cleanupLogs to skip files in active use.
+// Returns an empty map when no config is provided (the autoCleanupLogs
+// fast-path on log creation has no cfg to share).
+func activeLogFiles(cfg *Config) map[string]bool {
 	active := make(map[string]bool)
-	states, _ := ReadAllStates()
-	for _, s := range states {
-		if s.LogFile != "" && IsServerAlive(s) {
-			active[s.LogFile] = true
+	if cfg == nil {
+		return active
+	}
+	for _, inst := range DiscoverRunningInstances(cfg) {
+		fillRuntimeDetails(cfg, inst)
+		if inst.LogFile != "" {
+			active[inst.LogFile] = true
 		}
 	}
 	return active
@@ -112,5 +120,5 @@ func activeLogFiles() map[string]bool {
 
 func autoCleanupLogs(logDir string, retentionDays int) {
 	maxAge := time.Duration(retentionDays) * 24 * time.Hour
-	cleanupLogs(logDir, maxAge, false)
+	cleanupLogs(nil, logDir, maxAge, false)
 }

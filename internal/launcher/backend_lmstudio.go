@@ -159,6 +159,36 @@ func (b *LMStudio) TryStart(_ *Config, addr string) error {
 	return nil
 }
 
+// ListRunningModels reports models LM Studio currently has loaded by reading
+// the OpenAI-compatible /v1/models endpoint. LM Studio omits unloaded models
+// from this list (in contrast to its /api/v0/models, which also lists them).
+func (b *LMStudio) ListRunningModels(addr string) ([]RunningModelInfo, error) {
+	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("/v1/models returned status %d", resp.StatusCode)
+	}
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
+	}
+	models := make([]RunningModelInfo, 0, len(result.Data))
+	for _, m := range result.Data {
+		if m.ID == "" {
+			continue
+		}
+		models = append(models, RunningModelInfo{Name: m.ID})
+	}
+	return models, nil
+}
+
 func (b *LMStudio) TryStop(addr string) error {
 	if _, err := exec.LookPath("lms"); err != nil {
 		return nil

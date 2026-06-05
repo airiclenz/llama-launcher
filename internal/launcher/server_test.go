@@ -1,75 +1,37 @@
 package launcher
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestWriteAndReadInstanceState(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	backend := "testbackend"
-
-	state := &ServerState{
-		PID:           12345,
-		Backend:       backend,
-		Host:          "127.0.0.1",
-		Port:          8080,
-		StartedAt:     time.Now().Truncate(time.Second),
-		ActiveProfile: "test-profile",
-		ActiveModel:   "/path/to/model.gguf",
-		ContextSize:   4096,
-	}
-
-	statePath := filepath.Join(dir, "state-testbackend-8080.json")
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		t.Fatalf("marshaling state: %v", err)
-	}
-	if err := os.WriteFile(statePath, data, 0o600); err != nil {
-		t.Fatalf("writing state: %v", err)
-	}
-
-	readData, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("reading state file: %v", err)
-	}
-
-	var readState ServerState
-	if err := json.Unmarshal(readData, &readState); err != nil {
-		t.Fatalf("unmarshaling state: %v", err)
-	}
-
-	if readState.PID != state.PID {
-		t.Errorf("PID = %d, want %d", readState.PID, state.PID)
-	}
-	if readState.Backend != state.Backend {
-		t.Errorf("Backend = %q, want %q", readState.Backend, state.Backend)
-	}
-	if readState.ActiveProfile != state.ActiveProfile {
-		t.Errorf("ActiveProfile = %q, want %q", readState.ActiveProfile, state.ActiveProfile)
-	}
-}
-
-func TestServerState_Addr(t *testing.T) {
+func TestRunningInstance_Addr(t *testing.T) {
 	t.Parallel()
 
-	state := &ServerState{Host: "127.0.0.1", Port: 8080}
-	if got := state.Addr(); got != "127.0.0.1:8080" {
+	inst := &RunningInstance{Host: "127.0.0.1", Port: 8080}
+	if got := inst.Addr(); got != "127.0.0.1:8080" {
 		t.Errorf("Addr() = %q, want %q", got, "127.0.0.1:8080")
 	}
 }
 
-func TestServerState_Uptime(t *testing.T) {
+func TestRunningInstance_Uptime(t *testing.T) {
 	t.Parallel()
 
-	state := &ServerState{StartedAt: time.Now().Add(-5 * time.Second)}
-	uptime := state.Uptime()
+	inst := &RunningInstance{StartedAt: time.Now().Add(-5 * time.Second)}
+	uptime := inst.Uptime()
 	if uptime < 4*time.Second || uptime > 6*time.Second {
 		t.Errorf("Uptime() = %v, want ~5s", uptime)
+	}
+}
+
+func TestRunningInstance_Uptime_ZeroStart(t *testing.T) {
+	t.Parallel()
+
+	inst := &RunningInstance{}
+	if uptime := inst.Uptime(); uptime != 0 {
+		t.Errorf("Uptime() = %v, want 0 when StartedAt is zero", uptime)
 	}
 }
 
@@ -149,96 +111,48 @@ func TestReadLastLines(t *testing.T) {
 	})
 }
 
-func TestInstanceStatePath(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		backend  string
-		host     string
-		port     int
-		wantBase string
-	}{
-		{
-			name:     "loopback host is omitted",
-			backend:  "llamacpp",
-			host:     "127.0.0.1",
-			port:     8080,
-			wantBase: "state-llamacpp-8080.json",
-		},
-		{
-			name:     "empty host treated as loopback",
-			backend:  "ollama",
-			host:     "",
-			port:     11434,
-			wantBase: "state-ollama-11434.json",
-		},
-		{
-			name:     "non-loopback host included",
-			backend:  "llamacpp",
-			host:     "192.168.1.50",
-			port:     8080,
-			wantBase: "state-llamacpp-192.168.1.50-8080.json",
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := instanceStatePath(tc.backend, tc.host, tc.port)
-			if !filepath.IsAbs(path) {
-				t.Errorf("instanceStatePath returned relative path: %q", path)
-			}
-			if base := filepath.Base(path); base != tc.wantBase {
-				t.Errorf("base = %q, want %q", base, tc.wantBase)
-			}
-		})
-	}
-}
-
 func TestShouldCrossServerUnload(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		state          *ServerState
-		targetBackend  string
-		want           bool
+		name          string
+		inst          *RunningInstance
+		targetBackend string
+		want          bool
 	}{
 		{
-			name:          "nil state",
-			state:         nil,
+			name:          "nil instance",
+			inst:          nil,
 			targetBackend: "ollama",
 			want:          false,
 		},
 		{
 			name:          "same backend as target",
-			state:         &ServerState{Backend: "ollama", ActiveModel: "llama3.1:8b"},
+			inst:          &RunningInstance{Backend: "ollama", ActiveModel: "llama3.1:8b"},
 			targetBackend: "ollama",
 			want:          false,
 		},
 		{
 			name:          "no model loaded",
-			state:         &ServerState{Backend: "ollama", ActiveModel: ""},
+			inst:          &RunningInstance{Backend: "ollama", ActiveModel: ""},
 			targetBackend: "lmstudio",
 			want:          false,
 		},
 		{
 			name:          "managed backend is skipped",
-			state:         &ServerState{Backend: "llamacpp", ActiveModel: "/models/foo.gguf"},
+			inst:          &RunningInstance{Backend: "llamacpp", ActiveModel: "/models/foo.gguf"},
 			targetBackend: "ollama",
 			want:          false,
 		},
 		{
 			name:          "external backend with model loaded",
-			state:         &ServerState{Backend: "ollama", ActiveModel: "llama3.1:8b"},
+			inst:          &RunningInstance{Backend: "ollama", ActiveModel: "llama3.1:8b"},
 			targetBackend: "lmstudio",
 			want:          true,
 		},
 		{
 			name:          "unknown backend",
-			state:         &ServerState{Backend: "doesnotexist", ActiveModel: "x"},
+			inst:          &RunningInstance{Backend: "doesnotexist", ActiveModel: "x"},
 			targetBackend: "ollama",
 			want:          false,
 		},
@@ -248,51 +162,10 @@ func TestShouldCrossServerUnload(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := shouldCrossServerUnload(tc.state, tc.targetBackend); got != tc.want {
+			if got := shouldCrossServerUnload(tc.inst, tc.targetBackend); got != tc.want {
 				t.Errorf("shouldCrossServerUnload = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestStateMigration(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Legacy files that should be removed.
-	legacy := []string{
-		"state.json",
-		"state-llamacpp.json",
-		"state-ollama.json",
-	}
-	for _, name := range legacy {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Per-instance files that must be preserved.
-	keep := []string{
-		"state-llamacpp-8080.json",
-		"state-llamacpp-192.168.1.50-8081.json",
-	}
-	for _, name := range keep {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	removeLegacyStateFiles(dir)
-
-	for _, name := range legacy {
-		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
-			t.Errorf("legacy file %s should be removed", name)
-		}
-	}
-	for _, name := range keep {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Errorf("per-instance file %s should be preserved: %v", name, err)
-		}
 	}
 }
 
@@ -364,38 +237,4 @@ func TestParamDrift(t *testing.T) {
 			t.Errorf("slot identity should not produce drift, got %v", d)
 		}
 	})
-}
-
-func TestWriteBackendState_Permissions(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	stateDir := filepath.Join(dir, "state-test")
-	statePath := filepath.Join(stateDir, "state-testbackend.json")
-
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	state := &ServerState{
-		Backend: "testbackend",
-		Host:    "127.0.0.1",
-		Port:    8080,
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(statePath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := os.Stat(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	perm := info.Mode().Perm()
-	if perm != 0o600 {
-		t.Errorf("file permissions = %o, want 600", perm)
-	}
 }

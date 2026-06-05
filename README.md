@@ -171,8 +171,9 @@ Key paths:
 | Path | Purpose |
 |------|---------|
 | `~/.config/llama-launcher/config.yaml` | Configuration |
-| `~/.config/llama-launcher/state-{backend}-{port}.json` | Per-instance runtime state (PID, active profile/model, resolved-params snapshot) |
-| `~/.config/llama-launcher/logs/` | Server log files |
+| `~/.config/llama-launcher/logs/` | Server log files for instances the launcher started |
+
+The launcher does not persist runtime state. Each command rediscovers running servers by probing the addresses in your config and asking each LLM Server's own API which model is loaded. `llama-launcher logs` covers launcher-managed servers only; servers started outside the launcher log wherever you started them.
 
 ## License
 

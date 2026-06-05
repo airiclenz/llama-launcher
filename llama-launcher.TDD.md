@@ -9,7 +9,7 @@ This document explains how those decisions are realised in code. Where this docu
 
 ## 1. Overview
 
-`llama-launcher` is a lightweight Go CLI tool for managing LLM Servers through named configuration Profiles. It starts an LLM Server as a detached background process (or connects to one already running), asks it to load a Model, persists per-instance state, and exits — consuming zero resident memory while the server runs. Subsequent invocations read the state files to find running instances and operate on them.
+`llama-launcher` is a lightweight Go CLI tool for managing LLM Servers through named configuration Profiles. It starts an LLM Server as a detached background process (or connects to one already running), asks it to load a Model, and exits — consuming zero resident memory while the server runs. Subsequent invocations rediscover running instances by probing the addresses in `config.yaml` (no persisted state files); each command queries the live LLM Server's own API for the currently loaded Model and parameters.
 
 `llama-launcher` is a *process manager*, not a request router (see [ADR-0002](docs/adr/0002-not-a-router.md)). It does not expose any HTTP endpoint of its own and does not proxy client traffic. Clients connect to LLM Servers directly using each server's native address.
 
@@ -309,10 +309,10 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 └──────────────┘     ┌──────────────┐            │ start / stop
                      │  LLMServer   │◀───────────┤ load / unload
                      │ (backend.go) │            │
-                     └──────┬───────┘     ┌──────┴────────────────┐
-                            │             │  Per-instance state    │
-              ┌─────────────┼──────────┐  │ state-{backend}-       │
-              │             │          │  │   {port}.json          │
+                     └──────┬───────┘     ┌──────┴─────────────────┐
+                            │             │   Runtime discovery     │
+              ┌─────────────┼──────────┐  │ (discovery.go) — probe │
+              │             │          │  │  addrs + query APIs    │
        ┌──────┴───────┐ ┌───┴───┐ ┌────┴─────┐  └────────────────┘
        │  LlamaCpp    │ │Ollama │ │ LMStudio │
        │ (backend_    │ │       │ │          │
@@ -332,7 +332,8 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
 | `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
-| `server.go` | LLM Server lifecycle. Unified start path (fork-and-detach for llamacpp; backend-supplied `TryStart` for Ollama/LM Studio), unified stop path that always tries to stop the process whether or not the launcher started it ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). `LoadProfile` orchestration with idempotency check + drift notice ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)) and unified `auto_unload` rule across same-server and cross-server cases ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). Per-instance state files keyed by `host:port` ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). `createLogPath` triggers automatic cleanup when `log_retention` is set. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
+| `server.go` | LLM Server lifecycle. Unified start path (fork-and-detach for llamacpp; backend-supplied `TryStart` for Ollama/LM Studio), unified stop path that always tries to stop the process whether or not the launcher started it ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). `LoadProfile` orchestration with live idempotency check + drift notice from `GET /props` ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)) and unified `auto_unload` rule across same-server and cross-server cases ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). Instances are keyed by `host:port` and rediscovered live each invocation ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). `createLogPath` triggers automatic cleanup when `log_retention` is set. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
+| `discovery.go` | `RunningInstance` type and `DiscoverRunningInstances(cfg)` — probes every (backend, address) pair derivable from the config in parallel, returns the reachable set with the loaded Model and (for llamacpp) the live parameters from `/props`. Optional runtime details (PID via `lsof`, start time via `ps -o lstart=`, log path via the deterministic naming convention) are populated lazily by `fillRuntimeDetails`. |
 | `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
@@ -343,7 +344,8 @@ Each Profile may set `is_favourite: true` to pin it to the top of the menu and `
 | `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, and `extractLMStudioError`. |
 | `backend_test.go` | Tests for `GetLLMServer` with known and unknown LLM Server names. |
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
-| `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, instance state path construction, `ServerState` methods, state migration, and state file permissions. |
+| `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, and `shouldCrossServerUnload`. |
+| `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
 | `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting. |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
 
@@ -377,17 +379,23 @@ type PIDTracker interface {
 type ModelLister interface {
     ListRunningModels(addr string) ([]RunningModelInfo, error)
 }
+
+type LiveParamsQuerier interface {
+    QueryLiveParams(addr string) (*ProfileParams, error)
+}
 ```
 
-The interface name `LLMServer` matches the domain language in [CONTEXT.md](CONTEXT.md). String fields on persisted records (`ServerState.Backend`, `Profile.Backend` in the legacy-config detector) keep their existing names so on-disk state files and YAML migration paths stay compatible.
+The interface name `LLMServer` matches the domain language in [CONTEXT.md](CONTEXT.md).
 
 The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle: each LLM Server type encapsulates its own start mechanism (fork-and-detach for llamacpp; `ollama serve` for Ollama; `lms server start` for LM Studio) and stop mechanism (signal-to-PID, `ollama stop`, `lms server stop`). The launcher does not branch on "did we start this?" — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
 
 `ManagedLLMServer` extends `LLMServer` for LLM Server types where the launcher knows how to fork the server process directly (currently only llamacpp). The server lifecycle code uses `if mb, ok := b.(ManagedLLMServer)` to decide whether to assemble argv and fork, or to call `LLMServer.TryStart`.
 
-`PIDTracker` is implemented by LLM Servers that auto-start a server process and can report the resulting PID (Ollama). The launcher records the PID and log file on the per-instance state record; PID is informational (used for `status` display and log file association) and is **not** used to decide whether `stop` should kill the process.
+`PIDTracker` is implemented by LLM Servers that auto-start a server process and can report the resulting PID (Ollama). The launcher uses it for `status` display only; liveness and stop decisions go through `HealthCheck` and `lsof`, not PID.
 
-`ModelLister` is implemented by LLM Servers that can enumerate loaded Models (Ollama via `/api/ps`), used by the status display.
+`ModelLister` is implemented by LLM Servers that report their currently-loaded Models: llamacpp via `/v1/models`, Ollama via `/api/ps`, LM Studio via `/v1/models`. Discovery uses it on every invocation to know what is actually loaded (instead of relying on a persisted snapshot that can drift from reality when a Model is loaded externally).
+
+`LiveParamsQuerier` is implemented by LLM Servers that report their currently-active parameters: llamacpp via `/props` (n_ctx, total_slots, default generation settings). Used by ADR-0007 drift detection — the launcher compares live params against the freshly resolved Profile instead of a persisted snapshot. Ollama and LM Studio do not implement this; on those backends, model-name match alone is the idempotency signal.
 
 Adding a new LLM Server requires:
 1. Create `backend_<name>.go` implementing `LLMServer` (and optionally `ManagedLLMServer`).
@@ -448,17 +456,17 @@ The launcher operates on **LLM Server instances**, each identified by its `host:
 
 1. Resolve the Profile (merge defaults, validate parameters, resolve Model path).
 2. Compute the target address from the resolved Profile.
-3. Look up any existing instance state for that address.
-4. **Idempotency check** ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)): if the same Profile name is already active at that address:
-   - If the recorded resolved parameters match the freshly resolved Profile, exit silently (no-op).
-   - If parameters have drifted, print a notice to stderr naming the divergent fields and pointing the user to `--restart`. Exit silently otherwise (no-op).
+3. Probe the target address (`LLMServer.HealthCheck`).
+4. **Idempotency check** ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)): if the target is healthy, ask the LLM Server which Model is loaded (`ModelLister.ListRunningModels`). If it matches the resolved Profile's Model:
+   - For `llamacpp`, query `LiveParamsQuerier.QueryLiveParams` (`GET /props`) and diff against the freshly resolved Profile.
+   - If no drift (or backend doesn't expose live params), exit silently (no-op).
+   - If drift is detected, print a notice to stderr naming the divergent fields and pointing the user to `--restart`. Exit silently otherwise (no-op).
    - If `--restart` is given, fall through to step 5.
-5. **`auto_stop_server` / `auto_unload`** ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)): iterate every other running instance.
+5. **`auto_stop_server` / `auto_unload`** ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)): discover every other running instance via `DiscoverRunningInstances`.
    - If `auto_stop_server: true` (default), stop instances whose address differs from the target's.
    - If `auto_stop_server: false`, leave them running. Then, regardless of `auto_stop_server`, if `auto_unload: true` (default), unload any Model on any still-running instance that is not the one we are about to load.
 6. Start the LLM Server at the target address if it isn't running (§6.2).
 7. Load the Model (§6.3).
-8. Update the per-instance state file (§7).
 
 ### 6.2 Starting an LLM Server
 
@@ -471,11 +479,9 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 3. Open the log file for stdout/stderr redirection.
 4. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
 5. Call `cmd.Start()` (non-blocking).
-6. Write the per-instance state file with PID, backend, host, port, and timestamp. Model fields (`active_profile`, `active_model`, resolved-params snapshot) are not written yet.
-7. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
-8. Wait for backend health check to succeed (up to 15 seconds).
-9. Write Model fields and resolved-params snapshot to the state file only after the health check succeeds.
-10. Print confirmation.
+6. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
+7. Wait for backend health check to succeed (up to 15 seconds).
+8. Print confirmation. The active Model and parameters are observable on subsequent invocations via the LLM Server's own API.
 
 **Plain `LLMServer` (Ollama, LM Studio):**
 
@@ -483,21 +489,20 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 2. Call `LLMServer.HealthCheck(addr)` to verify server is reachable.
 3. If not reachable, call `LLMServer.TryStart()` (e.g. `lms server start`, `ollama serve`).
 4. Poll health check until successful (up to 15 seconds) or fail with a user-friendly message.
-5. Write the per-instance state file. If the backend implements `PIDTracker` and reported a PID, record it; otherwise PID is 0. PID is informational only.
-6. Print confirmation.
+5. Print confirmation.
 
 ### 6.3 Loading a Model
 
 **For `ManagedLLMServer` (llama.cpp):** Loading is fused with server start — the Model is in the start arguments and there is no separate API call. If a different Profile is already active at the target address, that instance is stopped first (the stop is unconditional — [ADR-0001](docs/adr/0001-stop-is-unconditional.md)) and a new server is started with the new Model. `LLMServer.LoadModel`/`UnloadModel` are no-ops on llamacpp.
 
-**For plain `LLMServer` (Ollama, LM Studio):** Call `LLMServer.LoadModel(addr, resolvedProfile)`. This is an HTTP request to the server's load endpoint. Update Model fields in the per-instance state file only after `LoadModel` returns success.
+**For plain `LLMServer` (Ollama, LM Studio):** Call `LLMServer.LoadModel(addr, resolvedProfile)`. This is an HTTP request to the server's load endpoint. The currently-loaded Model is observable on subsequent invocations via the LLM Server's own API (`/api/ps`, `/v1/models`).
 
 ### 6.4 Unloading a Model
 
 `unload [profile]` always means "the Model is no longer loaded after this returns successfully."
 
 - **llamacpp:** stops the server (the Model is part of the server's args — there is no API-level unload).
-- **Ollama / LM Studio:** calls `LLMServer.UnloadModel` via HTTP. The server stays running with no Model loaded; the per-instance state file's `active_profile` and `active_model` are cleared.
+- **Ollama / LM Studio:** calls `LLMServer.UnloadModel` via HTTP. The server stays running with no Model loaded — visible on the next `status` invocation as a healthy server with no `active_model`.
 
 The `auto_unload` flag governs whether an unload is *implicit* during a Profile activation (§6.1 step 5); the user-invoked `unload` subcommand is always explicit.
 
@@ -507,10 +512,10 @@ The `auto_unload` flag governs whether an unload is *implicit* during a Profile 
 
 The launcher attempts both available mechanisms, in order:
 
-1. If a PID is recorded and alive, send `SIGTERM` to the process and its process group (`kill(-pid, SIGTERM)`). Poll for exit (100ms intervals, up to 15 seconds). If still alive, send `SIGKILL`, then wait up to 5 seconds for the process to die, then 500ms for the OS to release the TCP port.
+1. Discover the listening PID via `lsof -nP -iTCP@host:port -sTCP:LISTEN -t` (host-specific first, then a port-only fallback for servers bound to `0.0.0.0`). If found and alive, send `SIGTERM` to the process and its process group (`kill(-pid, SIGTERM)`). Poll for exit (100ms intervals, up to 15 seconds). If still alive, send `SIGKILL`, then wait up to 5 seconds for the process to die, then 500ms for the OS to release the TCP port.
 2. Call `LLMServer.TryStop(addr)` so the backend can run its native shutdown command (`ollama stop`, `lms server stop`). This is best-effort and idempotent — errors are reported but do not block.
 
-Then remove the per-instance state file and print confirmation.
+Then print confirmation. There is no state file to remove.
 
 **Technical reasoning — process group signals:**
 
@@ -522,16 +527,14 @@ After `SIGKILL`, the stop path must wait for the process to actually die before 
 
 ### 6.6 Status Check
 
-1. Glob the state directory for per-instance state files (§7).
-2. For each, call the backend's `HealthCheck(addr)` to verify the server is alive and is the kind of server we recorded.
-3. Print one row per live instance with: backend, address, active Profile, active Model, PID (if known), uptime, log file (if known).
-4. Stale state files (server gone or different backend on the address) are removed and skipped.
+1. Call `DiscoverRunningInstances(cfg)` — probes every (backend, address) pair derivable from the config and returns the reachable set with the loaded Model and live params for each.
+2. Print one row per live instance with: backend, address, active Profile (matched against config by backend + address + model), active Model. PID, uptime, and log file are populated lazily via `lsof`, `ps -o lstart=`, and a glob of `{log_dir}/{backend}-*.log`.
 
 Exit 0 if any instance is running; exit 1 if all are stopped.
 
 ### 6.7 Stale State Handling
 
-On every operation that reads state, the launcher verifies the recorded server is alive *and* is the right kind of server, via the backend's `HealthCheck`. Health checks are discriminating — each backend identifies its own server and rejects responses from other backends sharing the same address (see [§5.3 Health Check Discrimination](#health-check-discrimination)). If the server is gone or belongs to a different backend, the per-instance state file is removed and the launcher proceeds as if that instance is not running.
+There is no state. Each invocation is a fresh look at the live LLM Servers. Health checks are discriminating — each backend identifies its own server and rejects responses from other backends sharing the same address (see [§5.3 Health Check Discrimination](#health-check-discrimination)). A server that crashed since the last invocation simply isn't in the discovered set; a Model loaded externally on Ollama or LM Studio is.
 
 ### 6.8 `auto_stop_server` and `auto_unload`
 
@@ -545,59 +548,45 @@ These two flags determine what happens to *other* running instances when a Profi
 
 For llamacpp, `auto_unload` is silently ignored on llamacpp instances (Model swap requires a server restart — [ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
 
-## 7. State Files
+## 7. Runtime Discovery
 
-### 7.1 Location and Naming
+The launcher persists nothing between invocations. Every command reconstructs the set of running instances live, by probing the addresses derivable from the user's `config.yaml` and querying each reachable LLM Server's own API. This is what makes the tool resilient to external changes (a crashed server, a Model loaded by `ollama run` outside the launcher, a config edit between invocations) without a cache to drift out of sync.
 
-Per-instance state files live in `~/.config/llama-launcher/`. Each running instance has one file, named after its address ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)):
+### 7.1 The RunningInstance Record
 
-```
-state-{backend}-{port}.json                  # for loopback (host == 127.0.0.1)
-state-{backend}-{host}-{port}.json           # otherwise
-```
-
-Examples:
-
-```
-state-llamacpp-8080.json
-state-llamacpp-8081.json
-state-ollama-11434.json
-state-lmstudio-1234.json
-state-llamacpp-192.168.1.50-8080.json
-```
-
-`ReadInstanceState(addr)` reads the record for a given address; `ReadInstancesForBackend(backend)` returns all instances of a given backend type; `ReadAllStates()` globs `state-*.json` and returns every record.
-
-**Migration:** On first access, legacy `state.json` and legacy per-backend `state-{backend}.json` files are removed. If the recorded process is alive, the user re-activates the relevant Profile to recreate the per-instance state record.
-
-### 7.2 Schema
-
-```json
-{
-  "pid": 41023,
-  "backend": "llamacpp",
-  "host": "127.0.0.1",
-  "port": 8080,
-  "started_at": "2026-05-19T17:12:00+02:00",
-  "log_file": "/Users/airic/.config/llama-launcher/logs/llamacpp-20260519-171200.log",
-  "active_profile": "code-deepseek",
-  "active_model": "/Users/airic/Models/deepseek-coder-v2-lite-instruct-Q4_K_M.gguf",
-  "resolved_params": {
-    "context_size": 8192,
-    "gpu_layers": 99,
-    "threads": 8,
-    "...": "..."
-  }
+```go
+type RunningInstance struct {
+    Backend       string
+    Host          string
+    Port          int
+    PID           int               // optional, via lsof
+    StartedAt     time.Time         // optional, via ps -o lstart=
+    LogFile       string            // optional, via log-dir glob
+    ActiveProfile string            // matched against config
+    ActiveModel   string            // from backend's ModelLister
+    ResolvedParams ProfileParams    // from backend's LiveParamsQuerier
 }
 ```
 
-There is no `managed` field — `stop` is unconditional ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). PID is recorded when the launcher has it (always for llamacpp; for Ollama when the launcher auto-started via `ollama serve` and the backend implements `PIDTracker`; otherwise 0) and is used for `status` display and to associate log files with instances. Liveness is decided by `LLMServer.HealthCheck`, not by PID.
+The struct is transient — built fresh in memory on each invocation, never serialised. `PID`, `StartedAt`, and `LogFile` are best-effort fields populated by `fillRuntimeDetails` only when a command needs them (status display, log tailing).
 
-`active_profile` and `active_model` are empty strings when the server is running but no Model is loaded. `resolved_params` is the snapshot of the Profile's resolved parameters at activation time; the drift check in §6.1 step 4 compares this snapshot against the freshly resolved Profile to decide whether to print a drift notice ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)). `log_file` is omitted for instances the launcher did not start.
+### 7.2 DiscoverRunningInstances
 
-### 7.3 Atomicity
+`DiscoverRunningInstances(cfg)` enumerates every (backend, address) pair derivable from the config:
 
-The state file is written atomically: write to a temporary file in the same directory, then `os.Rename` to the final path. This prevents corruption from a crash or power loss during the write.
+- Each enabled backend's configured address (`cfg.ConfiguredBackendAddr(name)`).
+- Each Profile's resolved address (`host:port` from the merged Profile params), so Profiles that bind a backend to a non-default port are still discovered.
+
+It probes them all in parallel with `LLMServer.HealthCheck`. For every reachable address it then asks the backend:
+
+- `ModelLister.ListRunningModels` → the currently loaded Model (`/v1/models` for llamacpp / LM Studio, `/api/ps` for Ollama).
+- `LiveParamsQuerier.QueryLiveParams` → the active server parameters (llamacpp `/props`; not implemented elsewhere).
+
+The result is matched back to the config by `matchProfileName` — the Profile (if any) whose backend, address, and resolved Model equal the discovered instance is recorded as `ActiveProfile`. When no Profile matches, the field is empty; the launcher still shows the running Model and address.
+
+### 7.3 Legacy Cleanup
+
+On first run after upgrade, `CleanupLegacyStateFiles` (called once at CLI startup, behind `sync.Once`) deletes any leftover `state-*.json` and `state.json` files in `~/.config/llama-launcher/`. The cleanup is silent and best-effort — these files are no longer read or written, so failure to remove them has no functional impact.
 
 ## 8. Server Argument Assembly
 
@@ -635,7 +624,7 @@ Server stdout and stderr are redirected to a log file at:
 
 Example: `~/.config/llama-launcher/logs/llamacpp-20260519-171200.log`
 
-The `logs` subcommand tails the log file of a running instance (path from the per-instance state file). With `--follow`, it uses `tail -f` and is the only mode where the launcher remains running.
+The `logs` subcommand tails the log file of a launcher-managed running instance. The path is reconstructed deterministically by globbing `{log_dir}/{backend}-*.log` and picking the most recent — log filenames embed the start timestamp so lexicographic order is chronological. Externally-started servers log to wherever they were started; `llml logs` prints a clear message in that case rather than guessing. With `--follow`, the launcher uses `tail -f` and is the only mode where it remains running.
 
 ### 9.1 Log Cleanup
 
@@ -644,7 +633,7 @@ Old log files can be cleaned up manually or automatically:
 - **Manual:** `logs clean` deletes files older than 7 days (default). `--days N` overrides the threshold; `--all` removes everything. Reports files removed and space freed.
 - **Automatic:** Setting `log_retention: N` in config causes `createLogPath` to silently delete files older than N days before each new log is created. No output during automatic cleanup.
 
-Both paths use `cleanupLogs()`, which determines file age from the filename timestamp (not mtime) and always skips log files belonging to running servers (checked via `ReadAllStates` + `HealthCheck`).
+Both paths use `cleanupLogs()`, which determines file age from the filename timestamp (not mtime) and always skips log files belonging to running servers (checked via `DiscoverRunningInstances` + `fillRuntimeDetails` so the live log path of each instance is known and protected).
 
 ## 10. Error Handling
 
@@ -663,7 +652,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 | Server health timeout | Print timeout message, exit 3. |
 | Model load/unload API error | Print server response, exit 3. |
 | SIGTERM timeout (on `stop`) | Escalate to SIGKILL, warn, exit 0 (server is stopped). |
-| State file corrupt or unreadable | Delete state file, treat as stopped, warn. |
+| `lsof` not on PATH (stop path) | Print message that the listening PID could not be determined, exit 3. |
 | Port already in use | Detected via early server exit — the launcher checks if the process is still alive ~500 ms after start and reports the log tail if it died. |
 
 ## 11. Future Considerations
@@ -676,7 +665,7 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 - **Additional LLM Servers**: vLLM and others — each as a new `backend_<name>.go` file implementing the `LLMServer` interface.
 - **Homebrew formula**: Package for `brew install llama-launcher`.
 - **Launchd integration**: Generate a launchd plist for auto-start on login.
-- **Health-based Model status**: Query each LLM Server's "list loaded models" endpoint to verify actual loaded state rather than relying solely on state file.
+- **Per-Profile log retention**: Today log retention is global; a per-Profile `log_retention` would let chatty debug Profiles keep more history without inflating storage for everything.
 
 ## 12. Testing
 
@@ -695,6 +684,8 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestOllamaLoadModel` | Success (verifies keep_alive payload), error status. |
 | `TestOllamaUnloadModel` | Success (verifies keep_alive=0), error status. |
 | `TestOllamaListRunningModels` | Success with models, empty list, malformed JSON. |
+| `TestLlamaCppListRunningModels` | `/v1/models` parsing — single-entry `data` array with `id` populated. |
+| `TestLlamaCppQueryLiveParams` | `/props` parsing populates `ContextSize`, `Parallel`, generation settings; `404` returns `(nil, nil)` so paramDrift treats it as "no drift". |
 
 ### 12.2 Server & Config Tests
 
@@ -702,15 +693,17 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 |---|---|
 | `TestIsProcessAlive` | Current PID → true; PID 0 → false; negative PID → false; invalid PID → false. |
 | `TestReadLastLines` | More lines than requested; fewer lines; nonexistent file. |
-| `TestInstanceStatePath` | Loopback-host omission, non-loopback inclusion, filename format. |
-| `TestServerState_Addr` / `_Uptime` | State helper methods. |
+| `TestRunningInstance_Addr` / `_Uptime` / `_Uptime_ZeroStart` | Instance helper methods including the zero-StartedAt fallback. |
+| `TestDiscoverRunningInstances_*` | Discovery returns the empty set when nothing listens; an httptest llama-server stand-in is found with `ActiveModel` and `ResolvedParams.ContextSize` populated from `/v1/models` and `/props`. |
+| `TestFindManagedLogFile` | Most-recent file picked by lexicographic timestamp; filters by backend prefix; returns empty when no matching file exists. |
+| `TestParamDrift` | Identical params, nil-vs-nil, set-vs-unset, bool/float comparisons, slot-identity fields skipped. |
+| `TestShouldCrossServerUnload` | Decides whether to issue an unload on a discovered instance during cross-server `auto_unload`. |
 | `TestGetLLMServer` | Known LLM Server names return correct instance; unknown returns error. |
 | `TestExpandTilde` | `~/path`, bare `~`, `~username` (unchanged), absolute path, empty. |
 | `TestLoadConfig` | Missing file, valid config, no-profiles validation. |
 | `TestValidate_*` | Deprecated fields, no servers enabled, auto-assign default server, `defaults.server` deprecation warning. |
 | `TestShouldAutoClose` / `TestShouldDisplayCentered` | Nil-defaults-to-true/false asymmetry. |
 | `TestConfiguredBackendAddr` | Returns merged address with colon separator. |
-| `TestStateMigration` | Legacy `state.json` and `state-{backend}.json` files are removed on first access. |
 
 ### 12.3 Menu Helper Tests
 

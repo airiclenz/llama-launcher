@@ -98,7 +98,7 @@ func TestFormatBytes(t *testing.T) {
 func TestCleanupLogs_NonexistentDir(t *testing.T) {
 	t.Parallel()
 
-	result, err := cleanupLogs("/nonexistent/path", time.Hour, false)
+	result, err := cleanupLogs(nil, "/nonexistent/path", time.Hour, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestCleanupLogs_EmptyDir(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	result, err := cleanupLogs(dir, time.Hour, false)
+	result, err := cleanupLogs(nil, dir, time.Hour, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestCleanupLogs_OldFilesRemoved(t *testing.T) {
 	os.WriteFile(newFile, []byte("new"), 0o600)
 
 	maxAge := 24 * time.Hour
-	result, err := cleanupLogs(dir, maxAge, false)
+	result, err := cleanupLogs(nil, dir, maxAge, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestCleanupLogs_DeleteAll(t *testing.T) {
 	os.WriteFile(f1, []byte("aaa"), 0o600)
 	os.WriteFile(f2, []byte("bbb"), 0o600)
 
-	result, err := cleanupLogs(dir, 0, true)
+	result, err := cleanupLogs(nil, dir, 0, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestCleanupLogs_SkipsNonLogFiles(t *testing.T) {
 	logFile := filepath.Join(dir, "llamacpp-20200101-000000.log")
 	os.WriteFile(logFile, []byte("old"), 0o600)
 
-	result, err := cleanupLogs(dir, time.Hour, false)
+	result, err := cleanupLogs(nil, dir, time.Hour, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestCleanupLogs_SkipsDirectories(t *testing.T) {
 	subdir := filepath.Join(dir, "subdir.log")
 	os.Mkdir(subdir, 0o700)
 
-	result, err := cleanupLogs(dir, time.Hour, true)
+	result, err := cleanupLogs(nil, dir, time.Hour, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
