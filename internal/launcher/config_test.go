@@ -280,6 +280,135 @@ func TestProfileNames_FavouritesFirst(t *testing.T) {
 	}
 }
 
+func TestProfileNames_ConfigOrder(t *testing.T) {
+	t.Parallel()
+
+	server := "llamacpp"
+	sortFalse := false
+	cfg := &Config{
+		Servers:            map[string]bool{"llamacpp": true},
+		Defaults:           ProfileParams{Server: &server},
+		SortAlphabetically: &sortFalse,
+		Profiles: map[string]Profile{
+			"charlie": {Description: "C"},
+			"alpha":   {Description: "A", IsFavourite: true},
+			"bravo":   {Description: "B"},
+		},
+		profileOrder: []string{"charlie", "alpha", "bravo"},
+	}
+
+	names := cfg.ProfileNames()
+	want := []string{"charlie", "alpha", "bravo"}
+
+	if len(names) != len(want) {
+		t.Fatalf("len = %d, want %d: got %v", len(names), len(want), names)
+	}
+	for i, name := range names {
+		if name != want[i] {
+			t.Errorf("names[%d] = %q, want %q (got %v)", i, name, want[i], names)
+		}
+	}
+}
+
+func TestProfileNames_ConfigOrder_FiltersDisabledServers(t *testing.T) {
+	t.Parallel()
+
+	defaultServer := "llamacpp"
+	otherServer := "ollama"
+	sortFalse := false
+	cfg := &Config{
+		Servers:            map[string]bool{"llamacpp": true, "ollama": false},
+		Defaults:           ProfileParams{Server: &defaultServer},
+		SortAlphabetically: &sortFalse,
+		Profiles: map[string]Profile{
+			"first":  {Description: "first"},
+			"second": {Description: "second", ProfileParams: ProfileParams{Server: &otherServer}},
+			"third":  {Description: "third"},
+		},
+		profileOrder: []string{"first", "second", "third"},
+	}
+
+	names := cfg.ProfileNames()
+	want := []string{"first", "third"}
+
+	if len(names) != len(want) {
+		t.Fatalf("len = %d, want %d: got %v", len(names), len(want), names)
+	}
+	for i, name := range names {
+		if name != want[i] {
+			t.Errorf("names[%d] = %q, want %q", i, name, want[i])
+		}
+	}
+}
+
+func TestProfileNames_DefaultsToAlphabetic(t *testing.T) {
+	t.Parallel()
+
+	server := "llamacpp"
+	cfg := &Config{
+		Servers:  map[string]bool{"llamacpp": true},
+		Defaults: ProfileParams{Server: &server},
+		Profiles: map[string]Profile{
+			"charlie": {Description: "C"},
+			"alpha":   {Description: "A"},
+			"bravo":   {Description: "B"},
+		},
+		profileOrder: []string{"charlie", "alpha", "bravo"},
+	}
+
+	names := cfg.ProfileNames()
+	want := []string{"alpha", "bravo", "charlie"}
+
+	if len(names) != len(want) {
+		t.Fatalf("len = %d, want %d: got %v", len(names), len(want), names)
+	}
+	for i, name := range names {
+		if name != want[i] {
+			t.Errorf("names[%d] = %q, want %q", i, name, want[i])
+		}
+	}
+}
+
+func TestParseConfig_CapturesProfileOrder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	yaml := `
+servers:
+  llamacpp: true
+profiles:
+  zeta:
+    description: "Z"
+    model: z.gguf
+  alpha:
+    description: "A"
+    model: a.gguf
+  mike:
+    description: "M"
+    model: m.gguf
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	cfg, err := parseConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+
+	want := []string{"zeta", "alpha", "mike"}
+	if len(cfg.profileOrder) != len(want) {
+		t.Fatalf("profileOrder = %v, want %v", cfg.profileOrder, want)
+	}
+	for i, name := range cfg.profileOrder {
+		if name != want[i] {
+			t.Errorf("profileOrder[%d] = %q, want %q", i, name, want[i])
+		}
+	}
+}
+
 func TestResolveProfile(t *testing.T) {
 	t.Parallel()
 

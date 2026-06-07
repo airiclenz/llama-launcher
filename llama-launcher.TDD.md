@@ -296,6 +296,8 @@ Each Profile **must** set `server:` explicitly. The launcher tolerates a missing
 
 Each Profile may set `is_favourite: true` to pin it to the top of the menu and `list` output. Profiles are sorted by three keys in order: favourite status first (favourites before non-favourites), then by server (alphabetically), then by Profile name alphabetically. Favourite Profiles display a `★` marker right-aligned at the end of the row, in the same column across the entire list (descriptions are padded so the marker column is consistent). When no Profile in the listing is starred, no marker column is rendered. This ordering and rendering are produced by `Config.ProfileNames()` together with `buildProfileItems`/`buildSimpleProfileLines`/`cmdList`, and apply to every UI surface that lists Profiles (TUI menu, non-terminal fallback, `llama-launcher list`).
 
+The top-level boolean `sort_alphabetically` selects the ordering rule. The default (unset or `true`) is the favourites/server/name sort described above. Setting `sort_alphabetically: false` lists Profiles in the order they appear under `profiles:` in the YAML file; favourite status no longer affects position (the `★` marker still renders unchanged). YAML insertion order is captured by `parseConfig`: after the standard struct decode it re-parses the document into a `yaml.Node` and walks the top-level `profiles:` mapping to record the keys in document order on the unexported `Config.profileOrder` slice. Disabled-server filtering is applied in both modes.
+
 ## 5. Architecture
 
 ### 5.1 Component Overview

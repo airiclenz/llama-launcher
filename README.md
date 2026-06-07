@@ -72,6 +72,9 @@ auto_close: false
 # Center the UI in the terminal (default: false)
 display_centered: true
 
+# sort profiles as listed in the config or alpabetically
+sort_alphabetically: true
+
 defaults:
   gpu_layers: 99
   threads: 8
@@ -99,7 +102,7 @@ profiles:
 
 Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. All numeric and boolean params use pointer types so "not set" is distinct from zero.
 
-Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then alphabetically by server, then alphabetically by name.
+Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then alphabetically by server, then alphabetically by name. Set the top-level `sort_alphabetically: false` to instead list profiles in the order they appear in your config file.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.2
+
+### Added
+
+- **`sort_alphabetically` config option** — top-level boolean (default `true`, preserving the existing favourites/server/name sort). Set to `false` to list profiles in the order they appear in `config.yaml` across every UI surface (TUI menu, non-terminal fallback, `llama-launcher list`). YAML insertion order is captured by re-parsing the document into a `yaml.Node` in `parseConfig` and walking the `profiles:` mapping in document order; disabled-server filtering is applied identically in both modes.
+- **Embedded example config now lists every supported option** — `sort_alphabetically` is shown in the UI behaviour block, and `jinja` is included in the `defaults` block so the generated config exposes the full schema.
+
 ## 1.3.1
 
 ### Removed

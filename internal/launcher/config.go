@@ -26,21 +26,23 @@ var ErrConfigNotFound = errors.New("config file not found")
 
 // Config represents the top-level YAML configuration file.
 type Config struct {
-	Servers         map[string]bool    `yaml:"servers"`
-	DefaultBackend  string             `yaml:"default_backend"` // deprecated: use defaults.server
-	Endpoints       map[string]string  `yaml:"endpoints"`       // deprecated: merge into servers
-	ModelsDir       string             `yaml:"models_dir"`
-	LogDir          string             `yaml:"log_dir"`
-	LogRetention    *int               `yaml:"log_retention"`
-	AutoClose       *bool              `yaml:"auto_close"`
-	AutoStopServer  *bool              `yaml:"auto_stop_server"`
-	AutoUnload      *bool              `yaml:"auto_unload"`
-	DisplayCentered *bool              `yaml:"display_centered"`
-	Defaults        ProfileParams      `yaml:"defaults"`
-	Profiles        map[string]Profile `yaml:"profiles"`
+	Servers            map[string]bool    `yaml:"servers"`
+	DefaultBackend     string             `yaml:"default_backend"` // deprecated: use defaults.server
+	Endpoints          map[string]string  `yaml:"endpoints"`       // deprecated: merge into servers
+	ModelsDir          string             `yaml:"models_dir"`
+	LogDir             string             `yaml:"log_dir"`
+	LogRetention       *int               `yaml:"log_retention"`
+	AutoClose          *bool              `yaml:"auto_close"`
+	AutoStopServer     *bool              `yaml:"auto_stop_server"`
+	AutoUnload         *bool              `yaml:"auto_unload"`
+	DisplayCentered    *bool              `yaml:"display_centered"`
+	SortAlphabetically *bool              `yaml:"sort_alphabetically"`
+	Defaults           ProfileParams      `yaml:"defaults"`
+	Profiles           map[string]Profile `yaml:"profiles"`
 
-	ConfigPath string   `yaml:"-"`
-	Warnings   []string `yaml:"-"`
+	ConfigPath   string   `yaml:"-"`
+	Warnings     []string `yaml:"-"`
+	profileOrder []string `yaml:"-"`
 }
 
 func (c *Config) ShouldAutoClose() bool {
@@ -57,6 +59,10 @@ func (c *Config) ShouldAutoUnload() bool {
 
 func (c *Config) ShouldDisplayCentered() bool {
 	return c.DisplayCentered != nil && *c.DisplayCentered
+}
+
+func (c *Config) ShouldSortAlphabetically() bool {
+	return c.SortAlphabetically == nil || *c.SortAlphabetically
 }
 
 func (c *Config) IsServerEnabled(name string) bool {
@@ -126,11 +132,44 @@ func parseConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err == nil {
+		cfg.profileOrder = extractProfileOrder(&root)
+	}
+
 	cfg.ConfigPath = path
 	cfg.ModelsDir = ExpandTilde(cfg.ModelsDir)
 	cfg.LogDir = ExpandTilde(cfg.LogDir)
 
 	return &cfg, nil
+}
+
+// extractProfileOrder walks the YAML document and returns the keys of the
+// top-level "profiles" mapping in the order they appear in the source file.
+func extractProfileOrder(root *yaml.Node) []string {
+	if root == nil || len(root.Content) == 0 {
+		return nil
+	}
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key := doc.Content[i]
+		if key.Value != "profiles" {
+			continue
+		}
+		val := doc.Content[i+1]
+		if val.Kind != yaml.MappingNode {
+			return nil
+		}
+		names := make([]string, 0, len(val.Content)/2)
+		for j := 0; j+1 < len(val.Content); j += 2 {
+			names = append(names, val.Content[j].Value)
+		}
+		return names
+	}
+	return nil
 }
 
 // LoadConfig reads, parses, and validates the YAML configuration at the given path.
@@ -359,10 +398,29 @@ func (c *Config) ResolveProfile(name string) (*ResolvedProfile, error) {
 	}, nil
 }
 
-// ProfileNames returns profile names sorted by favourite status first
-// (favourites before non-favourites), then by server name alphabetically,
-// then alphabetically within each group.
+// ProfileNames returns profile names in the order they should appear in any
+// listing UI. By default (or when sort_alphabetically is true) profiles are
+// sorted by favourite status first (favourites before non-favourites), then by
+// server name alphabetically, then alphabetically within each group. When
+// sort_alphabetically is false, profiles are returned in the order they appear
+// in the YAML config file. Profiles tied to a disabled server are filtered out
+// in both modes.
 func (c *Config) ProfileNames() []string {
+	if !c.ShouldSortAlphabetically() {
+		var names []string
+		for _, name := range c.profileOrder {
+			p, ok := c.Profiles[name]
+			if !ok {
+				continue
+			}
+			if !c.IsServerEnabled(resolveProfileServer(c, &p)) {
+				continue
+			}
+			names = append(names, name)
+		}
+		return names
+	}
+
 	type entry struct {
 		name   string
 		fav    bool

@@ -63,6 +63,11 @@ display_centered: true
 # Set to false to keep the interactive menu open after each action.
 auto_close: false
 
+# Sort profiles alphabetically (favourites first, then by server, then by name)
+# in menus and `list` output (default: true). Set to false to list profiles in
+# the order they appear under `profiles:` below.
+sort_alphabetically: true
+
 # ──────────────────────────────────────────────────────────────
 # Default parameters
 # ──────────────────────────────────────────────────────────────
@@ -88,7 +93,7 @@ auto_close: false
 #   mlock           yes        -        -
 #   no_mmap         yes        -        -
 #   embedding       yes        -        -
-#   jinja           yes        -        -
+#   jinja           yes        -        -        (enables Jinja chat template)
 #   temperature     yes        -        -
 #   repeat_penalty  yes        -        -
 #   top_k           yes        -        -
@@ -109,6 +114,7 @@ defaults:
   mlock: false
   no_mmap: false
   embedding: false
+  jinja: false
   temperature: 0.7
   repeat_penalty: 1.1
   top_k: 40
