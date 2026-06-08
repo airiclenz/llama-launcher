@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -37,6 +38,9 @@ type Config struct {
 	AutoUnload         *bool              `yaml:"auto_unload"`
 	DisplayCentered    *bool              `yaml:"display_centered"`
 	SortAlphabetically *bool              `yaml:"sort_alphabetically"`
+	ShowMemoryStatus   *bool              `yaml:"show_memory_status"`
+	MemoryStatusFormat *string            `yaml:"memory_status_format"`
+	RefreshDuration    *int               `yaml:"refresh_duration"`
 	Defaults           ProfileParams      `yaml:"defaults"`
 	Profiles           map[string]Profile `yaml:"profiles"`
 
@@ -63,6 +67,31 @@ func (c *Config) ShouldDisplayCentered() bool {
 
 func (c *Config) ShouldSortAlphabetically() bool {
 	return c.SortAlphabetically == nil || *c.SortAlphabetically
+}
+
+func (c *Config) ShouldShowMemoryStatus() bool {
+	return c.ShowMemoryStatus == nil || *c.ShowMemoryStatus
+}
+
+func (c *Config) MemoryStatusTemplate() string {
+	if c.MemoryStatusFormat == nil || *c.MemoryStatusFormat == "" {
+		return DefaultMemoryStatusTemplate
+	}
+	return *c.MemoryStatusFormat
+}
+
+// MenuRefreshInterval returns how often the interactive menu re-renders its
+// header (and re-evaluates idle work like memory readout). The value is
+// clamped to a minimum of 1 second so a misconfigured 0 cannot spin the
+// render loop. Default: 10 seconds.
+func (c *Config) MenuRefreshInterval() time.Duration {
+	if c.RefreshDuration == nil {
+		return 10 * time.Second
+	}
+	if *c.RefreshDuration < 1 {
+		return 1 * time.Second
+	}
+	return time.Duration(*c.RefreshDuration) * time.Second
 }
 
 func (c *Config) IsServerEnabled(name string) bool {

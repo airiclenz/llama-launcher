@@ -80,7 +80,7 @@ func runStoppedMenu(cfg *Config) error {
 	}
 	items = append(items, menuItem{Label: "Edit config"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered())
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
@@ -124,7 +124,7 @@ func runLoadedMenu(cfg *Config, inst *RunningInstance) error {
 	items = append(items, menuItem{Label: "Show model config"})
 	items = append(items, menuItem{Label: "Edit config"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered())
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
@@ -171,7 +171,7 @@ func runIdleMenu(cfg *Config, inst *RunningInstance) error {
 	}
 	items = append(items, menuItem{Label: "Edit config"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered())
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
@@ -215,7 +215,7 @@ func doSwitchModel(cfg *Config, current *RunningInstance) error {
 
 	items := buildProfileItems(cfg, available)
 
-	idx := selectMenu("Switch model", nil, items, "↑↓ select · enter confirm · q cancel", cfg.ShouldDisplayCentered())
+	idx := selectMenu("Switch model", nil, items, "↑↓ select · enter confirm · q cancel", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
 	if idx < 0 || idx >= len(available) {
 		fmt.Print(escClear + escCursorShow)
@@ -283,7 +283,7 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 		headerFn := func() []string {
 			return []string{"Select a server to stop"}
 		}
-		idx := selectMenu(title, headerFn, items, "↑↓ select · enter stop · q cancel", cfg.ShouldDisplayCentered())
+		idx := selectMenu(title, headerFn, items, "↑↓ select · enter stop · q cancel", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 		if idx < 0 {
 			return nil
 		}
@@ -348,7 +348,7 @@ func doUnloadModel(cfg *Config) error {
 		headerFn := func() []string {
 			return []string{"Select a model to unload"}
 		}
-		idx := selectMenu(title, headerFn, items, "↑↓ select · enter unload · q cancel", cfg.ShouldDisplayCentered())
+		idx := selectMenu(title, headerFn, items, "↑↓ select · enter unload · q cancel", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 		if idx < 0 {
 			return nil
 		}
@@ -671,6 +671,13 @@ func serverStatusLines(cfg *Config) []string {
 			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
 		}
 	}
+
+	if cfg.ShouldShowMemoryStatus() {
+		if stats, err := ReadMemStats(); err == nil {
+			lines = append(lines, "", fmt.Sprintf("%s%s%s", cDim, FormatMemoryLine(stats, cfg.MemoryStatusTemplate()), cReset))
+		}
+	}
+
 	return lines
 }
 

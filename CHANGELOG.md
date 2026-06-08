@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`refresh_duration` config option** — top-level integer (seconds, default `10`) controlling how often the interactive menu re-renders idle (memory readout, server status). Values below `1` are clamped to 1 second so a misconfigured `0` cannot spin the render loop. Threaded through `selectMenu` as a `time.Duration` parameter; replaces the previously hardcoded 10-second key-timeout.
+- **Memory + swap readout in the status header** — the interactive menu's status block now shows free unified memory and current swap usage on a dim line beneath the per-server status. Refreshes via the existing 10-second key-timeout tick and on every keystroke, with a 2-second internal cache so the underlying `sysctl` / `vm_stat` shell-outs don't fire on every key. Two new top-level config keys: `show_memory_status` (default `true`; set to `false` to hide the line) and `memory_status_format` (template string with placeholders `{free_ram}`, `{used_ram}`, `{total_ram}`, `{swap_used}`, `{swap_total}`; default `"RAM: {free_ram} free · Swap: {swap_used} used"`). Free RAM follows Activity Monitor's "available" definition (free + inactive + speculative + purgeable pages). macOS-only, like the rest of the launcher.
+
 ## 1.3.2
 
 ### Added

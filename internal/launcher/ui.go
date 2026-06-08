@@ -94,7 +94,7 @@ func readKeyTimeout(timeout time.Duration) keyCode {
 	return readKey()
 }
 
-func selectMenu(title string, headerFn func() []string, items []menuItem, hints string, centered bool) int {
+func selectMenu(title string, headerFn func() []string, items []menuItem, hints string, centered bool, refresh time.Duration) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return -1
@@ -190,7 +190,7 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 
 		os.Stdout.WriteString(buf.String())
 
-		key := readKeyTimeout(10 * time.Second)
+		key := readKeyTimeout(refresh)
 		switch key {
 		case keyUp:
 			for next := selected - 1; next >= 0; next-- {

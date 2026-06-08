@@ -75,6 +75,16 @@ display_centered: true
 # sort profiles as listed in the config or alpabetically
 sort_alphabetically: true
 
+# Idle refresh interval for the interactive menu, in seconds (default: 10)
+# refresh_duration: 5
+
+# Show a memory + swap readout in the status header (default: true)
+# show_memory_status: false
+
+# Template for the memory readout. Placeholders:
+#   {free_ram} {used_ram} {total_ram} {swap_used} {swap_total}
+# memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
 defaults:
   gpu_layers: 99
   threads: 8

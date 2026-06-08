@@ -192,6 +192,29 @@ log_dir: ~/.config/llama-launcher/logs
 # case and the cross-server case. See ADR-0004.
 # auto_unload: true
 
+# How often (seconds) the interactive menu re-renders while idle.
+# Drives the status header refresh, including the memory readout below.
+# Minimum 1 second; values below 1 are clamped. Default: 10.
+# refresh_duration: 10
+
+# Show a memory/swap readout in the status header (default: true).
+# Refreshed by the existing keystroke + idle key-timeout cycle (see
+# `refresh_duration`); the underlying `sysctl` / `vm_stat` shell-outs
+# are cached for 2 seconds.
+# show_memory_status: true
+
+# Template for the memory readout. Placeholders are substituted with
+# humanised byte values (e.g. "12.4 GB"). Unknown placeholders are
+# passed through literally. Default:
+#   "RAM: {free_ram} free · Swap: {swap_used} used"
+# Available placeholders:
+#   {free_ram}   — available memory (free + inactive + speculative + purgeable)
+#   {used_ram}   — total_ram - free_ram
+#   {total_ram}  — physical RAM reported by hw.memsize
+#   {swap_used}  — swap currently in use
+#   {swap_total} — total swap allocated
+# memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
 # Default parameters applied at server start (shared by all models).
 # Note: `defaults.server` is soft-deprecated (see ADR-0005). Each profile
 # should set `server:` explicitly. Auto-detection still applies when only
@@ -339,7 +362,8 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
-| `menu.go` | Interactive menu logic. Enumerates running instances; presents an instance picker for actions that apply to a non-unique target (stop, unload, logs). Config is reloaded at the top of each menu loop iteration and on every 10-second header refresh. |
+| `menu.go` | Interactive menu logic. Enumerates running instances; presents an instance picker for actions that apply to a non-unique target (stop, unload, logs). Config is reloaded at the top of each menu loop iteration and on every 10-second header refresh. `serverStatusLines` appends the optional memory/swap readout (see `sysmem.go`) gated by `show_memory_status`. |
+| `sysmem.go` | macOS unified-memory and swap snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, and `vm_stat`, with a 2-second mutex-guarded cache so per-keystroke re-renders stay cheap. `FormatMemoryLine` substitutes `{free_ram}` / `{used_ram}` / `{total_ram}` / `{swap_used}` / `{swap_total}` placeholders using a binary 1024-based humaniser (`humanBytes`). Free RAM follows the Activity Monitor "available" definition. |
 | `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment, `defaults.server` deprecation warning), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, Model resolution, and httptest-based health check. |
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExpandTilde(t *testing.T) {
@@ -912,3 +913,30 @@ func isConfigNotFoundError(err error) bool {
 	}
 	return false
 }
+
+func TestMenuRefreshInterval(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		val  *int
+		want time.Duration
+	}{
+		{name: "nil defaults to 10s", val: nil, want: 10 * time.Second},
+		{name: "explicit 5", val: ptrInt(5), want: 5 * time.Second},
+		{name: "explicit 1", val: ptrInt(1), want: 1 * time.Second},
+		{name: "zero clamps to 1s", val: ptrInt(0), want: 1 * time.Second},
+		{name: "negative clamps to 1s", val: ptrInt(-7), want: 1 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{RefreshDuration: tc.val}
+			if got := cfg.MenuRefreshInterval(); got != tc.want {
+				t.Errorf("MenuRefreshInterval() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func ptrInt(v int) *int { return &v }
