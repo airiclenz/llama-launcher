@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **GPU placeholders in the memory readout** — `memory_status_format` accepts three new placeholders: `{gpu_util_pct}` (GPU `Device Utilization %`), `{gpu_used_ram}` (unified RAM currently held by the GPU), and `{gpu_alloc_ram}` (unified RAM allocated to the GPU). Values are sourced from the `AGXAccelerator…` entry's `PerformanceStatistics` dict in `ioreg -r -c IOAccelerator`, folded into the existing 2-second `MemStats` cache (one extra subprocess per refresh, not per keystroke). Apple Silicon only; Intel Macs and ioreg failures degrade silently to `0%` / `0B`. No new top-level config keys.
+
+### Changed
+
+- **Tighter humanised byte format.** `humanBytes` and `formatBytes` now render without a space between value and unit (`12.4GB`, `512MB`, `0B`) for a more compact status line. Affects the memory readout placeholders and the log cleanup summary.
+
 ## 1.4.0
 
 ### Added

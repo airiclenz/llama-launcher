@@ -204,7 +204,7 @@ log_dir: ~/.config/llama-launcher/logs
 # show_memory_status: true
 
 # Template for the memory readout. Placeholders are substituted with
-# humanised byte values (e.g. "12.4 GB") or rounded integer percentages
+# humanised byte values (e.g. "12.4GB") or rounded integer percentages
 # (e.g. "38%"). Unknown placeholders are passed through literally. Default:
 #   "RAM: {free_ram} free · Swap: {swap_used} used"
 # Available placeholders:
@@ -219,6 +219,10 @@ log_dir: ~/.config/llama-launcher/logs
 #   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
 #   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
 #                       (0% when swap is disabled)
+#   {gpu_util_pct}    — GPU "Device Utilization %" from ioreg (Apple Silicon only)
+#   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
+#   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
+# GPU values read 0 on Intel Macs or when ioreg is unavailable.
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
 
 # Default parameters applied at server start (shared by all models).
@@ -369,7 +373,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
 | `menu.go` | Interactive menu logic. Enumerates running instances; presents an instance picker for actions that apply to a non-unique target (stop, unload, logs). Config is reloaded at the top of each menu loop iteration and on every 10-second header refresh. `serverStatusLines` appends the optional memory/swap readout (see `sysmem.go`) gated by `show_memory_status`. |
-| `sysmem.go` | macOS unified-memory and swap snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, and `vm_stat`, with a 2-second mutex-guarded cache so per-keystroke re-renders stay cheap. `FormatMemoryLine` substitutes byte placeholders (`{free_ram}`, `{used_ram}`, `{total_ram}`, `{compressed_ram}`, `{swap_used}`, `{swap_total}`, `{free_swap}`) via the 1024-based humaniser (`humanBytes`) and integer-percentage placeholders (`{free_ram_pct}`, `{used_ram_pct}`, `{swap_used_pct}`) via `percentString`, which returns `0%` on a zero denominator. Free RAM follows the Activity Monitor "available" definition; `Compressed` is sourced from `vm_stat`'s "Pages occupied by compressor" line. |
+| `sysmem.go` | macOS unified-memory, swap, and GPU snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, `vm_stat`, and `ioreg -r -c IOAccelerator`, with a 2-second mutex-guarded cache so per-keystroke re-renders stay cheap. `FormatMemoryLine` substitutes byte placeholders (`{free_ram}`, `{used_ram}`, `{total_ram}`, `{compressed_ram}`, `{swap_used}`, `{swap_total}`, `{free_swap}`, `{gpu_used_ram}`, `{gpu_alloc_ram}`) via the 1024-based humaniser (`humanBytes`) and integer-percentage placeholders (`{free_ram_pct}`, `{used_ram_pct}`, `{swap_used_pct}`, `{gpu_util_pct}`); the swap percentage uses `percentString` and returns `0%` on a zero denominator. Free RAM follows the Activity Monitor "available" definition; `Compressed` is sourced from `vm_stat`'s "Pages occupied by compressor" line. GPU fields come from the `AGXAccelerator…` entry's `PerformanceStatistics` dict (`Device Utilization %`, `In use system memory`, `Alloc system memory`) on Apple Silicon and degrade silently to `0` on Intel Macs or ioreg failure — `parseIOAccelerator` returns zero values rather than erroring so the rest of the readout still renders. |
 | `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment, `defaults.server` deprecation warning), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, Model resolution, and httptest-based health check. |
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |

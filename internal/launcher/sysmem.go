@@ -14,11 +14,15 @@ import (
 // MemStats is a snapshot of macOS unified-memory and swap usage in bytes.
 // FreeRAM follows the Activity Monitor "available" definition
 // (free + inactive + speculative + purgeable pages). Compressed is the
-// byte count held by the kernel's memory compressor.
+// byte count held by the kernel's memory compressor. GPU fields are sourced
+// from ioreg's AGXAccelerator entry (Apple Silicon only); they read zero on
+// Intel Macs or when ioreg is unavailable.
 type MemStats struct {
 	TotalRAM, FreeRAM, UsedRAM uint64
 	Compressed                 uint64
 	SwapTotal, SwapUsed        uint64
+	GPUUtilPct                 uint64
+	GPUUsedRAM, GPUAllocRAM    uint64
 }
 
 const memStatsCacheTTL = 2 * time.Second
@@ -86,7 +90,40 @@ func readMemStatsLive() (MemStats, error) {
 	s.SwapTotal = swapTotal
 	s.SwapUsed = swapUsed
 
+	if gpuOut, gerr := exec.Command("ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator").Output(); gerr == nil {
+		util, used, alloc := parseIOAccelerator(string(gpuOut))
+		s.GPUUtilPct = util
+		s.GPUUsedRAM = used
+		s.GPUAllocRAM = alloc
+	}
+
 	return s, nil
+}
+
+var ioregGPURe = map[string]*regexp.Regexp{
+	"util":  regexp.MustCompile(`"Device Utilization %"\s*=\s*(\d+)`),
+	"used":  regexp.MustCompile(`"In use system memory"\s*=\s*(\d+)`),
+	"alloc": regexp.MustCompile(`"Alloc system memory"\s*=\s*(\d+)`),
+}
+
+// parseIOAccelerator extracts GPU utilization (0–100) and unified-memory
+// byte counts from `ioreg -r -c IOAccelerator` output. The relevant fields
+// live in the AGXAccelerator entry's PerformanceStatistics dict on Apple
+// Silicon; missing or unparseable keys return 0 rather than erroring so
+// non-AS hardware degrades silently.
+func parseIOAccelerator(out string) (utilPct, usedBytes, allocBytes uint64) {
+	parse := func(key string) uint64 {
+		m := ioregGPURe[key].FindStringSubmatch(out)
+		if m == nil {
+			return 0
+		}
+		n, err := strconv.ParseUint(m[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	return parse("util"), parse("used"), parse("alloc")
 }
 
 var (
@@ -182,13 +219,13 @@ func suffixMultiplier(suffix string) float64 {
 	}
 }
 
-// humanBytes renders a byte count as a short macOS-style string ("12.4 GB",
-// "512 MB", "0 B"). Units are 1024-based; whole-unit values drop the decimal.
+// humanBytes renders a byte count as a short macOS-style string ("12.4GB",
+// "512MB", "0B"). Units are 1024-based; whole-unit values drop the decimal.
 func humanBytes(b uint64) string {
 	const k = 1024.0
 	switch {
 	case b < k:
-		return fmt.Sprintf("%d B", b)
+		return fmt.Sprintf("%dB", b)
 	case b < k*k:
 		return formatUnit(float64(b)/k, "KB")
 	case b < k*k*k:
@@ -202,9 +239,9 @@ func humanBytes(b uint64) string {
 
 func formatUnit(v float64, unit string) string {
 	if v == float64(uint64(v)) {
-		return fmt.Sprintf("%d %s", uint64(v), unit)
+		return fmt.Sprintf("%d%s", uint64(v), unit)
 	}
-	return fmt.Sprintf("%.1f %s", v, unit)
+	return fmt.Sprintf("%.1f%s", v, unit)
 }
 
 // DefaultMemoryStatusTemplate is the readout shown when memory_status_format
@@ -231,6 +268,9 @@ func FormatMemoryLine(s MemStats, template string) string {
 		"{free_ram_pct}", percentString(s.FreeRAM, s.TotalRAM),
 		"{used_ram_pct}", percentString(s.UsedRAM, s.TotalRAM),
 		"{swap_used_pct}", percentString(s.SwapUsed, s.SwapTotal),
+		"{gpu_util_pct}", fmt.Sprintf("%d%%", s.GPUUtilPct),
+		"{gpu_used_ram}", humanBytes(s.GPUUsedRAM),
+		"{gpu_alloc_ram}", humanBytes(s.GPUAllocRAM),
 	)
 	return r.Replace(template)
 }

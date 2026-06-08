@@ -80,7 +80,7 @@ sort_alphabetically: true
 # show_memory_status: true
 
 # Template for the memory readout. Placeholders are substituted with
-# humanised byte values (e.g. "12.4 GB") or rounded integer percentages
+# humanised byte values (e.g. "12.4GB") or rounded integer percentages
 # (e.g. "38%"). Unknown placeholders are passed through literally.
 # Available placeholders:
 #   {free_ram}        — available memory (free + inactive + speculative + purgeable)
@@ -94,6 +94,10 @@ sort_alphabetically: true
 #   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
 #   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
 #                       (0% when swap is disabled)
+#   {gpu_util_pct}    — GPU "Device Utilization %" from ioreg (Apple Silicon only)
+#   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
+#   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
+# GPU values read 0 on Intel Macs or when ioreg is unavailable.
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
 
 # ──────────────────────────────────────────────────────────────

@@ -133,7 +133,7 @@ sort_alphabetically: true
 # show_memory_status: true
 
 # Template for the memory readout. Placeholders are substituted with
-# humanised byte values (e.g. "12.4 GB") or rounded integer percentages
+# humanised byte values (e.g. "12.4GB") or rounded integer percentages
 # (e.g. "38%"). Unknown placeholders are passed through literally.
 # Available placeholders:
 #   {free_ram}        — available memory (free + inactive + speculative + purgeable)
@@ -147,6 +147,10 @@ sort_alphabetically: true
 #   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
 #   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
 #                       (0% when swap is disabled)
+#   {gpu_util_pct}    — GPU "Device Utilization %" from ioreg (Apple Silicon only)
+#   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
+#   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
+# GPU values read 0 on Intel Macs or when ioreg is unavailable.
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
 
 # ──────────────────────────────────────────────────────────────
@@ -287,8 +291,11 @@ Set `is_favourite: true` on a profile to pin it to the top of menus and `list` o
 | `{free_ram_pct}` | `free_ram / total_ram` as a rounded integer percentage (e.g. `38%`) |
 | `{used_ram_pct}` | `used_ram / total_ram` as a rounded integer percentage (e.g. `63%`) |
 | `{swap_used_pct}` | `swap_used / swap_total` as a rounded integer percentage; `0%` when swap is disabled |
+| `{gpu_util_pct}` | GPU `Device Utilization %` from `ioreg` (Apple Silicon only; reads `0%` on Intel) |
+| `{gpu_used_ram}` | Unified RAM currently held by the GPU, humanised (Apple Silicon only) |
+| `{gpu_alloc_ram}` | Unified RAM allocated to the GPU, humanised (Apple Silicon only) |
 
-Byte values are rendered macOS-style: 1024-based units with one decimal (`12.4 GB`, `512 MB`), whole values drop the decimal (`8 GB`). Unknown placeholders are left in place.
+Byte values are rendered macOS-style: 1024-based units with one decimal (`12.4GB`, `512MB`), whole values drop the decimal (`8GB`). Unknown placeholders are left in place.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 
