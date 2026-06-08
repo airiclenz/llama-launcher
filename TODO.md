@@ -13,7 +13,7 @@
 
 ## Feature ideas
 
-- [ ] Add `sort_alphabetically` to the config (default: `true`).
+- [x] Add `sort_alphabetically` to the config (default: `true`).
   - When `true`, profiles are sorted alphabetically in menus and `list` output (current behaviour).
   - When `false`, profiles appear in the order they are defined in the config file.
   - `is_favourite: true` Profiles always float to the top regardless of this setting (favourite > sort mode).
