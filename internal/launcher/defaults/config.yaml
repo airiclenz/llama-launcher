@@ -68,6 +68,34 @@ auto_close: false
 # the order they appear under `profiles:` below.
 sort_alphabetically: true
 
+# How often (seconds) the interactive menu re-renders while idle.
+# Drives the status header refresh, including the memory readout below.
+# Minimum 1 second; values below 1 are clamped. Default: 10.
+# refresh_duration: 10
+
+# Show a memory + swap readout in the status header (default: true).
+# Refreshed by the existing keystroke + idle key-timeout cycle (see
+# refresh_duration); the underlying sysctl / vm_stat shell-outs are
+# cached for 2 seconds.
+# show_memory_status: true
+
+# Template for the memory readout. Placeholders are substituted with
+# humanised byte values (e.g. "12.4 GB") or rounded integer percentages
+# (e.g. "38%"). Unknown placeholders are passed through literally.
+# Available placeholders:
+#   {free_ram}        — available memory (free + inactive + speculative + purgeable)
+#   {used_ram}        — total_ram - free_ram
+#   {total_ram}       — physical RAM reported by hw.memsize
+#   {compressed_ram}  — bytes held by the kernel's memory compressor
+#   {swap_used}       — swap currently in use
+#   {swap_total}      — total swap allocated
+#   {free_swap}       — swap_total - swap_used
+#   {free_ram_pct}    — free_ram / total_ram as rounded integer percentage
+#   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
+#   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
+#                       (0% when swap is disabled)
+# memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
 # ──────────────────────────────────────────────────────────────
 # Default parameters
 # ──────────────────────────────────────────────────────────────

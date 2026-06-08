@@ -46,73 +46,249 @@ llama-launcher
 
 The config lives at `~/.config/llama-launcher/config.yaml` (override with `--config` or `LLAMA_LAUNCHER_CONFIG`).
 
+### Default config generated on first run
+
+The first time you run `llama-launcher` without an existing config, this file is written verbatim from [`internal/launcher/defaults/config.yaml`](internal/launcher/defaults/config.yaml):
+
 ```yaml
-# Enable the servers available on your system (true/false).
-# Disabled servers are hidden from status and menus.
+# llama-launcher configuration
+#
+# Three server types are supported:
+#
+#   llamacpp   — llama.cpp's llama-server binary. The launcher forks the
+#                process, tracks PID, and restarts to switch models.
+#
+#   ollama     — Ollama. Connects to running instance or auto-starts
+#                "ollama serve". Models loaded/unloaded via HTTP API.
+#
+#   lmstudio   — LM Studio. Connects to running instance or auto-starts
+#                via "lms server start". Models loaded/unloaded via HTTP API.
+
+# ──────────────────────────────────────────────────────────────
+# Servers
+# ──────────────────────────────────────────────────────────────
+#
+# Enable the servers available on your system.
+# Binaries are auto-detected from PATH; default ports are
+# per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234).
+
 servers:
   llamacpp: true
-  ollama:   true
+  ollama: false
   lmstudio: false
 
+# ──────────────────────────────────────────────────────────────
+# Paths
+# ──────────────────────────────────────────────────────────────
+
+# Base directory for model files (llamacpp only - LM-Studio supports
+# re-loating it's models folder so LLaMA.cpp can share it).
+# Profile model paths are resolved relative to this directory
+# unless they are absolute. Supports ~ expansion.
 models_dir: ~/Models
+
+# Directory for server log files.
 log_dir: ~/.config/llama-launcher/logs
 
-# Automatically delete log files older than N days on server start
-# log_retention: 7
+# ──────────────────────────────────────────────────────────────
+# Loader / Launcher behaviour
+# ──────────────────────────────────────────────────────────────
 
-# Keep the interactive menu open after each action (default: close)
-auto_close: false
+# Automatically stop the old server when switching to a different backend (default: true).
+# Set to false to allow multiple servers to run simultaneously.
+auto_stop_server: true
 
-# Allow multiple servers to run simultaneously (default: true = stop old)
-# auto_stop_server: false
+# Automatically unload the current model when loading a different one on the same
+# server (default: true). Set to false to keep multiple models loaded at once.
+auto_unload: true
 
-# Keep multiple models loaded on the same server (default: true = unload old)
-# auto_unload: false
+# Automatically delete log files older than N days on server start.
+log_retention: 7
 
-# Center the UI in the terminal (default: false)
+# ──────────────────────────────────────────────────────────────
+# UI behaviour
+# ──────────────────────────────────────────────────────────────
+
+# Display the llama-launcher UI centered in the terminal (default: false).
 display_centered: true
 
-# sort profiles as listed in the config or alpabetically
+# Close the launcher after selecting a menu action (default: true).
+# Set to false to keep the interactive menu open after each action.
+auto_close: false
+
+# Sort profiles alphabetically (favourites first, then by server, then by name)
+# in menus and `list` output (default: true). Set to false to list profiles in
+# the order they appear under `profiles:` below.
 sort_alphabetically: true
 
-# Idle refresh interval for the interactive menu, in seconds (default: 10)
-# refresh_duration: 5
+# How often (seconds) the interactive menu re-renders while idle.
+# Drives the status header refresh, including the memory readout below.
+# Minimum 1 second; values below 1 are clamped. Default: 10.
+# refresh_duration: 10
 
-# Show a memory + swap readout in the status header (default: true)
-# show_memory_status: false
+# Show a memory + swap readout in the status header (default: true).
+# Refreshed by the existing keystroke + idle key-timeout cycle (see
+# refresh_duration); the underlying sysctl / vm_stat shell-outs are
+# cached for 2 seconds.
+# show_memory_status: true
 
-# Template for the memory readout. Placeholders:
-#   {free_ram} {used_ram} {total_ram} {swap_used} {swap_total}
+# Template for the memory readout. Placeholders are substituted with
+# humanised byte values (e.g. "12.4 GB") or rounded integer percentages
+# (e.g. "38%"). Unknown placeholders are passed through literally.
+# Available placeholders:
+#   {free_ram}        — available memory (free + inactive + speculative + purgeable)
+#   {used_ram}        — total_ram - free_ram
+#   {total_ram}       — physical RAM reported by hw.memsize
+#   {compressed_ram}  — bytes held by the kernel's memory compressor
+#   {swap_used}       — swap currently in use
+#   {swap_total}      — total swap allocated
+#   {free_swap}       — swap_total - swap_used
+#   {free_ram_pct}    — free_ram / total_ram as rounded integer percentage
+#   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
+#   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
+#                       (0% when swap is disabled)
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
+# ──────────────────────────────────────────────────────────────
+# Default parameters
+# ──────────────────────────────────────────────────────────────
+#
+# Shared by all profiles. Per-profile values override these.
+# Each profile should declare `server:` explicitly (see ADR-0005);
+# `defaults.server` is soft-deprecated and only kept as a fallback
+# when more than one server is enabled.
+#
+# Not all parameters apply to all servers:
+#
+#   Parameter       llamacpp   ollama   lmstudio
+#   ─────────────   ────────   ──────   ────────
+#   gpu_layers      yes        -        yes (mapped: 99→"max", 0→"off")
+#   threads         yes        -        -
+#   threads_batch   yes        -        -
+#   batch_size      yes        -        yes (mapped to eval_batch_size)
+#   context_size    yes        -        yes
+#   host / port     yes        yes      yes
+#   flash_attn      yes        -        yes
+#   cont_batching   yes        -        -
+#   parallel        yes        -        -
+#   mlock           yes        -        -
+#   no_mmap         yes        -        -
+#   embedding       yes        -        -
+#   jinja           yes        -        -        (enables Jinja chat template)
+#   temperature     yes        -        -
+#   repeat_penalty  yes        -        -
+#   top_k           yes        -        -
+#   top_p           yes        -        -
+#   min_p           yes        -        -
 
 defaults:
   gpu_layers: 99
   threads: 8
+  threads_batch: 8
+  batch_size: 512
   context_size: 4096
+  host: "127.0.0.1"
+  port: 8080
   flash_attn: true
+  cont_batching: true
+  parallel: 1
+  mlock: false
+  no_mmap: false
+  embedding: false
+  jinja: false
+  temperature: 0.7
+  repeat_penalty: 1.1
+  top_k: 40
+  top_p: 0.95
+  min_p: 0.05
+
+# ──────────────────────────────────────────────────────────────
+# Profiles
+# ──────────────────────────────────────────────────────────────
+#
+# Each profile specifies a model to load. The "server" field
+# selects which server to use and should be set on every profile.
+# Profile parameters override any parameter from the defaults block.
+#
+# Profile fields:
+#   description   Human-readable label shown in the menu
+#   model         Model reference (file path for llamacpp, name for ollama,
+#                 publisher/repo/file for lmstudio)
+#   server        Server to use (llamacpp, ollama, lmstudio)
+#   is_favourite  Pin this profile to the top of the menu (default: false).
+#                 Favourites sort before all other profiles.
+#   extra_args    Additional CLI flags appended verbatim (llamacpp only)
+#   <param>       Any parameter from the defaults block
 
 profiles:
-  qwen-27b:
-    description: "Qwen 3.6 27B MTP Q4-K-S"
+  # ── llama.cpp example ──────────────────────────────────────
+  # Model is a file path, resolved relative to models_dir.
+  example:
+    description: "Example profile"
     server: llamacpp
-    model: qwen-27b.gguf
-    is_favourite: true
+    model: your-model-file.gguf
     context_size: 8192
+    # is_favourite: true
 
-  gemma-4b:
-    description: "Gemma-4 E4B IT-Q4-K-M"
-    server: llamacpp
-    model: gemma-4b.gguf
+  # ── LM Studio examples ────────────────────────────────────
+  # Model is an LM Studio model key (publisher/repo or full path
+  # with quantization). Run "lms ls" to see available models.
+  # Uncomment lmstudio in the servers section above.
+  #
+  # lmstudio-llama:
+  #   description: "Llama 3.1 8B via LM Studio"
+  #   server: lmstudio
+  #   model: lmstudio-community/meta-llama-3.1-8b-instruct
+  #   context_size: 16384
+  #   flash_attn: true
+  #   gpu_layers: 99
+  #   batch_size: 512
+  #
+  # lmstudio-qwen:
+  #   description: "Qwen 2.5 32B via LM Studio"
+  #   server: lmstudio
+  #   model: lmstudio-community/qwen2.5-32b-instruct
+  #   context_size: 8192
+  #   gpu_layers: 99
 
-  llama-8b-ollama:
-    description: "Llama 3.1 8B via Ollama"
-    server: ollama
-    model: llama3.1:8b
+  # ── Ollama examples ────────────────────────────────────────
+  # Model is an Ollama model name (e.g. "llama3.1:8b").
+  # Must be pulled first: ollama pull <model>
+  # Uncomment ollama in the servers section above.
+  #
+  # ollama-llama3:
+  #   description: "Llama 3.1 8B via Ollama"
+  #   server: ollama
+  #   model: llama3.1:8b
+  #
+  # ollama-codellama:
+  #   description: "Code Llama 13B via Ollama"
+  #   server: ollama
+  #   model: codellama:13b
 ```
 
 Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. All numeric and boolean params use pointer types so "not set" is distinct from zero.
 
 Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then alphabetically by server, then alphabetically by name. Set the top-level `sort_alphabetically: false` to instead list profiles in the order they appear in your config file.
+
+### Memory readout placeholders
+
+`memory_status_format` accepts these placeholders:
+
+| Placeholder | Value |
+|-------------|-------|
+| `{free_ram}` | Available RAM (free + inactive + speculative + purgeable pages), humanised |
+| `{used_ram}` | `total_ram - free_ram`, humanised |
+| `{total_ram}` | Total physical RAM, humanised |
+| `{compressed_ram}` | Bytes held by the kernel's memory compressor, humanised |
+| `{swap_used}` | Swap currently in use, humanised |
+| `{swap_total}` | Swap file size, humanised |
+| `{free_swap}` | `swap_total - swap_used`, humanised |
+| `{free_ram_pct}` | `free_ram / total_ram` as a rounded integer percentage (e.g. `38%`) |
+| `{used_ram_pct}` | `used_ram / total_ram` as a rounded integer percentage (e.g. `63%`) |
+| `{swap_used_pct}` | `swap_used / swap_total` as a rounded integer percentage; `0%` when swap is disabled |
+
+Byte values are rendered macOS-style: 1024-based units with one decimal (`12.4 GB`, `512 MB`), whole values drop the decimal (`8 GB`). Unknown placeholders are left in place.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 

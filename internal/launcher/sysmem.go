@@ -13,9 +13,11 @@ import (
 
 // MemStats is a snapshot of macOS unified-memory and swap usage in bytes.
 // FreeRAM follows the Activity Monitor "available" definition
-// (free + inactive + speculative + purgeable pages).
+// (free + inactive + speculative + purgeable pages). Compressed is the
+// byte count held by the kernel's memory compressor.
 type MemStats struct {
 	TotalRAM, FreeRAM, UsedRAM uint64
+	Compressed                 uint64
 	SwapTotal, SwapUsed        uint64
 }
 
@@ -62,7 +64,7 @@ func readMemStatsLive() (MemStats, error) {
 	if err != nil {
 		return s, fmt.Errorf("vm_stat: %w", err)
 	}
-	free, perr := parseVMStat(string(vmOut))
+	free, compressed, perr := parseVMStat(string(vmOut))
 	if perr != nil {
 		return s, perr
 	}
@@ -71,6 +73,7 @@ func readMemStatsLive() (MemStats, error) {
 		s.FreeRAM = s.TotalRAM
 	}
 	s.UsedRAM = s.TotalRAM - s.FreeRAM
+	s.Compressed = compressed
 
 	swapOut, err := exec.Command("sysctl", "-n", "vm.swapusage").Output()
 	if err != nil {
@@ -91,27 +94,30 @@ var (
 	vmStatPageRe     = regexp.MustCompile(`^(.*?):\s+(\d+)\.?\s*$`)
 )
 
-// parseVMStat parses `vm_stat` output and returns the byte count Activity
-// Monitor considers "available" memory: free + inactive + speculative +
-// purgeable pages, times the page size declared in the header.
-func parseVMStat(out string) (uint64, error) {
+// parseVMStat parses `vm_stat` output and returns two byte counts: the
+// "available" memory Activity Monitor reports (free + inactive +
+// speculative + purgeable pages) and the bytes held by the kernel's
+// memory compressor. Both are multiplied by the page size declared in
+// the header.
+func parseVMStat(out string) (free, compressed uint64, err error) {
 	m := vmStatPageSizeRe.FindStringSubmatch(out)
 	if m == nil {
-		return 0, fmt.Errorf("vm_stat: missing page size header")
+		return 0, 0, fmt.Errorf("vm_stat: missing page size header")
 	}
-	pageSize, err := strconv.ParseUint(m[1], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("vm_stat: parse page size: %w", err)
-	}
-
-	wanted := map[string]bool{
-		"Pages free":         true,
-		"Pages inactive":     true,
-		"Pages speculative":  true,
-		"Pages purgeable":    true,
+	pageSize, perr := strconv.ParseUint(m[1], 10, 64)
+	if perr != nil {
+		return 0, 0, fmt.Errorf("vm_stat: parse page size: %w", perr)
 	}
 
-	var pages uint64
+	freeKeys := map[string]bool{
+		"Pages free":        true,
+		"Pages inactive":    true,
+		"Pages speculative": true,
+		"Pages purgeable":   true,
+	}
+	const compressorKey = "Pages occupied by compressor"
+
+	var freePages, compressorPages uint64
 	scanner := bufio.NewScanner(strings.NewReader(out))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -120,16 +126,18 @@ func parseVMStat(out string) (uint64, error) {
 			continue
 		}
 		key := strings.TrimSpace(match[1])
-		if !wanted[key] {
+		n, perr := strconv.ParseUint(match[2], 10, 64)
+		if perr != nil {
 			continue
 		}
-		n, err := strconv.ParseUint(match[2], 10, 64)
-		if err != nil {
-			continue
+		switch {
+		case freeKeys[key]:
+			freePages += n
+		case key == compressorKey:
+			compressorPages = n
 		}
-		pages += n
 	}
-	return pages * pageSize, nil
+	return freePages * pageSize, compressorPages * pageSize, nil
 }
 
 var swapFieldRe = regexp.MustCompile(`(total|used)\s*=\s*([\d.]+)([KMGT]?)`)
@@ -203,16 +211,37 @@ func formatUnit(v float64, unit string) string {
 // is unset in the config.
 const DefaultMemoryStatusTemplate = "RAM: {free_ram} free · Swap: {swap_used} used"
 
-// FormatMemoryLine substitutes {free_ram}, {used_ram}, {total_ram},
-// {swap_used}, {swap_total} placeholders in template with humanized byte
-// values. Unknown placeholders are left in place.
+// FormatMemoryLine substitutes memory readout placeholders in template
+// with humanised byte values (e.g. "12 GB") or integer percentages
+// (e.g. "23%"). Unknown placeholders are left in place. Percentage
+// placeholders return "0%" when the denominator is zero.
 func FormatMemoryLine(s MemStats, template string) string {
+	freeSwap := uint64(0)
+	if s.SwapTotal > s.SwapUsed {
+		freeSwap = s.SwapTotal - s.SwapUsed
+	}
 	r := strings.NewReplacer(
 		"{free_ram}", humanBytes(s.FreeRAM),
 		"{used_ram}", humanBytes(s.UsedRAM),
 		"{total_ram}", humanBytes(s.TotalRAM),
+		"{compressed_ram}", humanBytes(s.Compressed),
 		"{swap_used}", humanBytes(s.SwapUsed),
 		"{swap_total}", humanBytes(s.SwapTotal),
+		"{free_swap}", humanBytes(freeSwap),
+		"{free_ram_pct}", percentString(s.FreeRAM, s.TotalRAM),
+		"{used_ram_pct}", percentString(s.UsedRAM, s.TotalRAM),
+		"{swap_used_pct}", percentString(s.SwapUsed, s.SwapTotal),
 	)
 	return r.Replace(template)
+}
+
+// percentString renders n/d as a rounded integer percentage with a
+// trailing "%". Returns "0%" when d is zero so swap-disabled systems
+// don't show a divide-by-zero.
+func percentString(n, d uint64) string {
+	if d == 0 {
+		return "0%"
+	}
+	p := (n*100 + d/2) / d
+	return fmt.Sprintf("%d%%", p)
 }

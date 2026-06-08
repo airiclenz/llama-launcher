@@ -204,15 +204,21 @@ log_dir: ~/.config/llama-launcher/logs
 # show_memory_status: true
 
 # Template for the memory readout. Placeholders are substituted with
-# humanised byte values (e.g. "12.4 GB"). Unknown placeholders are
-# passed through literally. Default:
+# humanised byte values (e.g. "12.4 GB") or rounded integer percentages
+# (e.g. "38%"). Unknown placeholders are passed through literally. Default:
 #   "RAM: {free_ram} free · Swap: {swap_used} used"
 # Available placeholders:
-#   {free_ram}   — available memory (free + inactive + speculative + purgeable)
-#   {used_ram}   — total_ram - free_ram
-#   {total_ram}  — physical RAM reported by hw.memsize
-#   {swap_used}  — swap currently in use
-#   {swap_total} — total swap allocated
+#   {free_ram}        — available memory (free + inactive + speculative + purgeable)
+#   {used_ram}        — total_ram - free_ram
+#   {total_ram}       — physical RAM reported by hw.memsize
+#   {compressed_ram}  — bytes held by the kernel's memory compressor
+#   {swap_used}       — swap currently in use
+#   {swap_total}      — total swap allocated
+#   {free_swap}       — swap_total - swap_used
+#   {free_ram_pct}    — free_ram / total_ram as rounded integer percentage
+#   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
+#   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
+#                       (0% when swap is disabled)
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
 
 # Default parameters applied at server start (shared by all models).
@@ -363,7 +369,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. |
 | `menu.go` | Interactive menu logic. Enumerates running instances; presents an instance picker for actions that apply to a non-unique target (stop, unload, logs). Config is reloaded at the top of each menu loop iteration and on every 10-second header refresh. `serverStatusLines` appends the optional memory/swap readout (see `sysmem.go`) gated by `show_memory_status`. |
-| `sysmem.go` | macOS unified-memory and swap snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, and `vm_stat`, with a 2-second mutex-guarded cache so per-keystroke re-renders stay cheap. `FormatMemoryLine` substitutes `{free_ram}` / `{used_ram}` / `{total_ram}` / `{swap_used}` / `{swap_total}` placeholders using a binary 1024-based humaniser (`humanBytes`). Free RAM follows the Activity Monitor "available" definition. |
+| `sysmem.go` | macOS unified-memory and swap snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, and `vm_stat`, with a 2-second mutex-guarded cache so per-keystroke re-renders stay cheap. `FormatMemoryLine` substitutes byte placeholders (`{free_ram}`, `{used_ram}`, `{total_ram}`, `{compressed_ram}`, `{swap_used}`, `{swap_total}`, `{free_swap}`) via the 1024-based humaniser (`humanBytes`) and integer-percentage placeholders (`{free_ram_pct}`, `{used_ram_pct}`, `{swap_used_pct}`) via `percentString`, which returns `0%` on a zero denominator. Free RAM follows the Activity Monitor "available" definition; `Compressed` is sourced from `vm_stat`'s "Pages occupied by compressor" line. |
 | `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment, `defaults.server` deprecation warning), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, Model resolution, and httptest-based health check. |
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
