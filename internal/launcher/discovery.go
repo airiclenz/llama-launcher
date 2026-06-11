@@ -142,12 +142,41 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 	return inst
 }
 
+// instancesSignature condenses a discovery result into a comparable string.
+// Two discovery passes produce the same signature exactly when the same
+// backends are reachable at the same addresses with the same models loaded.
+// The interactive menu compares signatures across refresh ticks to notice
+// background changes (e.g. a model loaded via the CLI in another terminal)
+// without any persisted state.
+func instancesSignature(instances []*RunningInstance) string {
+	parts := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		parts = append(parts, fmt.Sprintf("%s|%s|%s", inst.Backend, inst.Addr(), inst.ActiveModel))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\n")
+}
+
+// modelNamesMatch reports whether a profile's resolved model path refers to
+// the model a server reports as loaded. Exact equality wins; otherwise the
+// basenames are compared, because servers started outside the launcher
+// report whatever path or alias they were launched with — llama-server
+// defaults the id to the model file's basename — so the full resolved path
+// rarely equals the reported name.
+func modelNamesMatch(profilePath, liveModel string) bool {
+	if profilePath == liveModel {
+		return true
+	}
+	return filepath.Base(profilePath) == filepath.Base(liveModel)
+}
+
 // matchProfileName returns the name of the profile that best matches a
-// running instance. A profile matches when its backend, address, and (if any
-// model is loaded) model path equal those of the instance. Returns the empty
+// running instance. A profile is a candidate when its backend and address
+// equal those of the instance. Among candidates, an exact model-path match
+// wins over a basename match (see modelNamesMatch). Returns the empty
 // string when no profile matches or several do equally well.
 func matchProfileName(cfg *Config, inst *RunningInstance) string {
-	var matches []string
+	var exact, loose []string
 	for name := range cfg.Profiles {
 		profile, err := cfg.ResolveProfile(name)
 		if err != nil {
@@ -162,13 +191,20 @@ func matchProfileName(cfg *Config, inst *RunningInstance) string {
 		if *profile.Host != inst.Host || *profile.Port != inst.Port {
 			continue
 		}
-		if inst.ActiveModel != "" && profile.ModelPath != "" && profile.ModelPath != inst.ActiveModel {
-			continue
+		switch {
+		case inst.ActiveModel == "" || profile.ModelPath == "":
+			loose = append(loose, name)
+		case profile.ModelPath == inst.ActiveModel:
+			exact = append(exact, name)
+		case modelNamesMatch(profile.ModelPath, inst.ActiveModel):
+			loose = append(loose, name)
 		}
-		matches = append(matches, name)
 	}
-	if len(matches) == 1 {
-		return matches[0]
+	if len(exact) == 1 {
+		return exact[0]
+	}
+	if len(exact) == 0 && len(loose) == 1 {
+		return loose[0]
 	}
 	return ""
 }

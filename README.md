@@ -122,7 +122,9 @@ auto_close: false
 sort_alphabetically: true
 
 # How often (seconds) the interactive menu re-renders while idle.
-# Drives the status header refresh, including the memory readout below.
+# Drives the status header refresh (including the memory readout below)
+# and how quickly the menu picks up background changes — a model loaded
+# or unloaded from another terminal rebuilds the menu on the next tick.
 # Minimum 1 second; values below 1 are clamped. Default: 10.
 # refresh_duration: 10
 

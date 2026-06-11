@@ -94,7 +94,18 @@ func readKeyTimeout(timeout time.Duration) keyCode {
 	return readKey()
 }
 
-func selectMenu(title string, headerFn func() []string, items []menuItem, hints string, centered bool, refresh time.Duration) int {
+// idxMenuStale is returned by selectMenu when headerFn reports that the
+// state the menu was built from no longer holds (e.g. a model was loaded or
+// unloaded in the background); callers rebuild the menu instead of acting on
+// a stale item list.
+const idxMenuStale = -2
+
+// selectMenu renders an interactive item picker and blocks until the user
+// chooses an entry (returns its index), quits (returns -1), or headerFn
+// reports the menu stale (returns idxMenuStale). headerFn runs once per
+// refresh tick and on every keystroke; it returns the header lines plus a
+// flag marking the menu stale.
+func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem, hints string, centered bool, refresh time.Duration) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return -1
@@ -137,7 +148,11 @@ func selectMenu(title string, headerFn func() []string, items []menuItem, hints 
 	var buf strings.Builder
 	for {
 		if headerFn != nil {
-			frame.Header = headerFn()
+			header, stale := headerFn()
+			if stale {
+				return idxMenuStale
+			}
+			frame.Header = header
 		}
 
 		var body []string

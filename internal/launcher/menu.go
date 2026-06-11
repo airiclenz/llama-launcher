@@ -14,6 +14,11 @@ import (
 
 var errUserQuit = errors.New("quit")
 
+// errMenuStale signals that the server state changed underneath an open menu
+// (e.g. a model was loaded via the CLI in another terminal); the menu loop
+// rebuilds instead of keeping the stale item list on screen.
+var errMenuStale = errors.New("menu stale")
+
 // RunInteractiveMenu presents a menu based on current server state.
 // When auto_close is false, the menu re-displays after each action.
 func RunInteractiveMenu(cfg *Config) error {
@@ -39,15 +44,20 @@ func RunInteractiveMenu(cfg *Config) error {
 			fillRuntimeDetails(cfg, primary)
 		}
 
+		stateSig := instancesSignature(instances)
+
 		var err error
 		if !anyServer {
-			err = runStoppedMenu(cfg)
+			err = runStoppedMenu(cfg, stateSig)
 		} else if anyModel {
-			err = runLoadedMenu(cfg, primary)
+			err = runLoadedMenu(cfg, primary, stateSig)
 		} else {
-			err = runIdleMenu(cfg, primary)
+			err = runIdleMenu(cfg, primary, stateSig)
 		}
 
+		if err == errMenuStale {
+			continue
+		}
 		if err == errUserQuit || cfg.ShouldAutoClose() || !isTerminal() {
 			if err == errUserQuit {
 				err = nil
@@ -60,7 +70,7 @@ func RunInteractiveMenu(cfg *Config) error {
 	}
 }
 
-func runStoppedMenu(cfg *Config) error {
+func runStoppedMenu(cfg *Config, stateSig string) error {
 	names := cfg.ProfileNames()
 
 	if !isTerminal() {
@@ -68,10 +78,7 @@ func runStoppedMenu(cfg *Config) error {
 	}
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-	headerFn := func() []string {
-		cfg.Reload()
-		return serverStatusLines(cfg)
-	}
+	headerFn := liveStatusHeaderFn(cfg, stateSig)
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
@@ -82,6 +89,9 @@ func runStoppedMenu(cfg *Config) error {
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
+	if idx == idxMenuStale {
+		return errMenuStale
+	}
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
 		return errUserQuit
@@ -101,16 +111,13 @@ func runStoppedMenu(cfg *Config) error {
 	return nil
 }
 
-func runLoadedMenu(cfg *Config, inst *RunningInstance) error {
+func runLoadedMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 	if !isTerminal() {
 		return runLoadedMenuSimple(cfg, inst)
 	}
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-	headerFn := func() []string {
-		cfg.Reload()
-		return serverStatusLines(cfg)
-	}
+	headerFn := liveStatusHeaderFn(cfg, stateSig)
 
 	items := []menuItem{}
 	if len(cfg.ProfileNames()) > 1 {
@@ -126,6 +133,9 @@ func runLoadedMenu(cfg *Config, inst *RunningInstance) error {
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
+	if idx == idxMenuStale {
+		return errMenuStale
+	}
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
 		return errUserQuit
@@ -150,7 +160,7 @@ func runLoadedMenu(cfg *Config, inst *RunningInstance) error {
 	return errUserQuit
 }
 
-func runIdleMenu(cfg *Config, inst *RunningInstance) error {
+func runIdleMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 	names := cfg.ProfileNames()
 
 	if !isTerminal() {
@@ -158,10 +168,7 @@ func runIdleMenu(cfg *Config, inst *RunningInstance) error {
 	}
 
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-	headerFn := func() []string {
-		cfg.Reload()
-		return serverStatusLines(cfg)
-	}
+	headerFn := liveStatusHeaderFn(cfg, stateSig)
 
 	items := buildProfileItems(cfg, names)
 	items = append(items, menuItem{Separator: true})
@@ -173,6 +180,9 @@ func runIdleMenu(cfg *Config, inst *RunningInstance) error {
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 
+	if idx == idxMenuStale {
+		return errMenuStale
+	}
 	if idx < 0 {
 		fmt.Print(escClear + escCursorShow)
 		return errUserQuit
@@ -280,8 +290,8 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 			}
 		}
 		title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-		headerFn := func() []string {
-			return []string{"Select a server to stop"}
+		headerFn := func() ([]string, bool) {
+			return []string{"Select a server to stop"}, false
 		}
 		idx := selectMenu(title, headerFn, items, "↑↓ select · enter stop · q cancel", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 		if idx < 0 {
@@ -345,8 +355,8 @@ func doUnloadModel(cfg *Config) error {
 			}
 		}
 		title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
-		headerFn := func() []string {
-			return []string{"Select a model to unload"}
+		headerFn := func() ([]string, bool) {
+			return []string{"Select a model to unload"}, false
 		}
 		idx := selectMenu(title, headerFn, items, "↑↓ select · enter unload · q cancel", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
 		if idx < 0 {
@@ -626,8 +636,19 @@ func backendDisplayName(backendName string) string {
 	return b.DisplayName()
 }
 
-func serverStatusLines(cfg *Config) []string {
-	instances := DiscoverRunningInstances(cfg)
+// liveStatusHeaderFn returns a selectMenu header callback that re-probes the
+// backends on every refresh tick and reports the menu stale once the live
+// state no longer matches the signature the menu was built from — so models
+// loaded or unloaded in the background (e.g. via the CLI) trigger a rebuild.
+func liveStatusHeaderFn(cfg *Config, stateSig string) func() ([]string, bool) {
+	return func() ([]string, bool) {
+		cfg.Reload()
+		instances := DiscoverRunningInstances(cfg)
+		return serverStatusLines(cfg, instances), instancesSignature(instances) != stateSig
+	}
+}
+
+func serverStatusLines(cfg *Config, instances []*RunningInstance) []string {
 	instancesByBackend := make(map[string][]*RunningInstance)
 	for _, inst := range instances {
 		instancesByBackend[inst.Backend] = append(instancesByBackend[inst.Backend], inst)

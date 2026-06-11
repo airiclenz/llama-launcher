@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Externally loaded models now match their profile.** `matchProfileName` and the `load` idempotency check (ADR-0007) compared the profile's fully resolved model path against the name the server reports verbatim. Servers started outside the launcher report whatever path or alias they were launched with — llama-server defaults the id to the model file's basename — so the comparison never succeeded: "Show model config" said `No matching profile in config` and `load` would needlessly restart a server already serving the right model. Matching now falls back to basename comparison (`modelNamesMatch`); an exact path match still wins over a basename match, and ambiguity (several profiles sharing a basename) yields no match, as before.
+- **Open menus now react to background state changes.** Loading or unloading a model from another terminal (e.g. via the CLI) while the interactive menu was open only updated the status header — the item list and the menu variant (stopped / idle / loaded) stayed frozen until a keypress, so e.g. "Show model config" never appeared. The header refresh tick (`refresh_duration`, default 10 s) now compares a signature of the live discovery result (backend, address, loaded model per instance) against the one the menu was built from and rebuilds the menu on mismatch. Detection is purely probe-based — no state file, consistent with the 1.3.1 stateless design.
+
 ## 1.4.1
 
 ### Added

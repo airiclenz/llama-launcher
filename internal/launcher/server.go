@@ -328,7 +328,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 
 	if !restart && healthy {
 		liveModel := liveLoadedModel(b, targetAddr)
-		if liveModel != "" && profile.ModelPath != "" && liveModel == profile.ModelPath {
+		if liveModel != "" && profile.ModelPath != "" && modelNamesMatch(profile.ModelPath, liveModel) {
 			drifts := liveParamDrift(b, targetAddr, profile.ProfileParams)
 			if len(drifts) > 0 {
 				printDriftNotice(profile.Name, targetAddr, drifts)

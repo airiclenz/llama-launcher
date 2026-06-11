@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -160,6 +161,89 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 	}
 	if inst.ResolvedParams.ContextSize == nil || *inst.ResolvedParams.ContextSize != 4096 {
 		t.Errorf("ContextSize = %v, want 4096", inst.ResolvedParams.ContextSize)
+	}
+}
+
+func TestMatchProfileName(t *testing.T) {
+	t.Parallel()
+	modelsDir := t.TempDir()
+	modelFile := filepath.Join(modelsDir, "gpt-oss-20b-MXFP4.gguf")
+	if err := writeEmpty(modelFile); err != nil {
+		t.Fatal(err)
+	}
+
+	host := "127.0.0.1"
+	port := 9090
+	cfg := &Config{
+		Servers:   map[string]bool{"llamacpp": true},
+		ModelsDir: modelsDir,
+		Profiles: map[string]Profile{
+			"oss": {Model: "gpt-oss-20b-MXFP4.gguf"},
+		},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("llamacpp"),
+		Host:   &host,
+		Port:   &port,
+	}
+
+	inst := &RunningInstance{Backend: "llamacpp", Host: host, Port: port}
+
+	// A server started outside the launcher reports only the file basename.
+	inst.ActiveModel = "gpt-oss-20b-MXFP4.gguf"
+	if got := matchProfileName(cfg, inst); got != "oss" {
+		t.Errorf("basename match = %q, want oss", got)
+	}
+
+	inst.ActiveModel = modelFile
+	if got := matchProfileName(cfg, inst); got != "oss" {
+		t.Errorf("exact path match = %q, want oss", got)
+	}
+
+	inst.ActiveModel = "other-model.gguf"
+	if got := matchProfileName(cfg, inst); got != "" {
+		t.Errorf("mismatched model = %q, want empty", got)
+	}
+
+	// A second profile whose model shares the basename: the exact path
+	// match must win, while a bare basename becomes ambiguous.
+	altDir := filepath.Join(modelsDir, "alt")
+	if err := os.MkdirAll(altDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEmpty(filepath.Join(altDir, "gpt-oss-20b-MXFP4.gguf")); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Profiles["oss-alt"] = Profile{Model: "alt/gpt-oss-20b-MXFP4.gguf"}
+
+	inst.ActiveModel = modelFile
+	if got := matchProfileName(cfg, inst); got != "oss" {
+		t.Errorf("exact match with loose sibling = %q, want oss", got)
+	}
+
+	inst.ActiveModel = "gpt-oss-20b-MXFP4.gguf"
+	if got := matchProfileName(cfg, inst); got != "" {
+		t.Errorf("ambiguous basename = %q, want empty", got)
+	}
+}
+
+func TestInstancesSignature(t *testing.T) {
+	t.Parallel()
+	idle := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080}}
+	loaded := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "/models/x.gguf"}}
+	loadedAgain := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "/models/x.gguf"}}
+
+	if got := instancesSignature(nil); got != "" {
+		t.Errorf("signature of no instances = %q, want empty", got)
+	}
+	if instancesSignature(idle) == instancesSignature(loaded) {
+		t.Error("loading a model must change the signature")
+	}
+	if instancesSignature(nil) == instancesSignature(idle) {
+		t.Error("a server appearing must change the signature")
+	}
+	if instancesSignature(loaded) != instancesSignature(loadedAgain) {
+		t.Error("identical state must produce identical signatures")
 	}
 }
 
