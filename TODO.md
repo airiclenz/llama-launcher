@@ -1,22 +1,7 @@
 
 # TODO
 
-## Architecture refactor (ADRs 0001–0007)
-
-- [x] Implement the fit-gap from re-design:
-  - [x] Phase 1: documentation alignment (TDD, README, CHANGELOG)
-  - [x] Phase 2: cross-server `auto_unload` (ADR-0004)
-  - [x] Phase 3: `defaults.server` soft-deprecation (ADR-0005)
-  - [x] Phase 4: state schema + multi-instance — combined `Managed`-removal and addr-keyed instances (ADR-0001 + ADR-0006)
-  - [x] Phase 5: idempotency drift notice + `--restart` flag (ADR-0007)
-  - [x] Phase 6: rename `Backend` → `LLMServer` interface
-
 ## Feature ideas
-
-- [x] Add `sort_alphabetically` to the config (default: `true`).
-  - When `true`, profiles are sorted alphabetically in menus and `list` output (current behaviour).
-  - When `false`, profiles appear in the order they are defined in the config file.
-  - `is_favourite: true` Profiles always float to the top regardless of this setting (favourite > sort mode).
 
 - [ ] Shell completions (bash/zsh/fish)
   - Tab-complete profile names for `load`, `unload`, and the new `start --profile`
@@ -24,14 +9,16 @@
   - Tab-complete subcommand names
   - Data is already available from config; generate completion scripts via a `completions` subcommand
 
-- [x] `status --json` and `list --json` output
-  - Structured JSON output for scripting and integration with tools like `jq`
-  - `status --json`: backend name, running state, address, active profile/model, PID, uptime
-  - `list --json`: profile name, description, backend, model path, key parameters
-  - Keeps the default human-readable output unchanged
-
 - [ ] Config diff on profile switch
   - When switching models in the interactive menu, show what parameters will change
   - Display differences between current and target profile (gpu_layers, context_size, backend, etc.)
   - `formatProfileParams` already exists; this is mostly UI wiring to show a side-by-side or delta view
   - Helps users confirm they're switching to the right configuration before waiting for the server restart
+
+- [ ] Show a model description only in Model Config Details pop-up. Use only the profile name in the menu. This needs to demote the profile attribute `description` to optional.
+
+- [ ] Add a second timer for status updates:
+	- Update server running / model loaded polling as it is right now based on the config value `refresh_duration`
+	- Update teh memory status / free mem / GPU utilization / ... each second.
+
+- [ ] Display a GPU%-bar-grapth
