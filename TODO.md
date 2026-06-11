@@ -15,8 +15,4 @@
   - `formatProfileParams` already exists; this is mostly UI wiring to show a side-by-side or delta view
   - Helps users confirm they're switching to the right configuration before waiting for the server restart
 
-- [ ] Add a second timer for status updates:
-	- Update server running / model loaded polling as it is right now based on the config value `refresh_duration`
-	- Update teh memory status / free mem / GPU utilization / ... each second.
-
 - [ ] Display a GPU%-bar-grapth

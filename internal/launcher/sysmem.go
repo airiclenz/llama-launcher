@@ -25,7 +25,10 @@ type MemStats struct {
 	GPUUsedRAM, GPUAllocRAM    uint64
 }
 
-const memStatsCacheTTL = 2 * time.Second
+// memStatsCacheTTL sits just below the menu's 1-second status tick
+// (statusTickInterval) so every tick reads fresh values while keystroke
+// bursts between ticks still hit the cache.
+const memStatsCacheTTL = 900 * time.Millisecond
 
 var (
 	memCacheMu   sync.Mutex

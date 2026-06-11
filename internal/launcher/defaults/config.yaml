@@ -68,17 +68,18 @@ auto_close: false
 # the order they appear under `profiles:` below.
 sort_alphabetically: true
 
-# How often (seconds) the interactive menu re-renders while idle.
-# Drives the status header refresh (including the memory readout below)
-# and how quickly the menu picks up background changes — a model loaded
-# or unloaded from another terminal rebuilds the menu on the next tick.
+# How often (seconds) the interactive menu polls the servers. Drives the
+# server / loaded-model status lines and how quickly the menu picks up
+# background changes — a model loaded or unloaded from another terminal
+# rebuilds the menu on the next tick. The memory readout below refreshes
+# on its own fixed 1-second tick, independent of this value.
 # Minimum 1 second; values below 1 are clamped. Default: 10.
 # refresh_duration: 10
 
 # Show a memory + swap readout in the status header (default: true).
-# Refreshed by the existing keystroke + idle key-timeout cycle (see
-# refresh_duration); the underlying sysctl / vm_stat shell-outs are
-# cached for 2 seconds.
+# Refreshes every second while the menu is open, independent of
+# refresh_duration; the underlying sysctl / vm_stat / ioreg shell-outs
+# are cached just below that tick.
 # show_memory_status: true
 
 # Template for the memory readout. Placeholders are substituted with

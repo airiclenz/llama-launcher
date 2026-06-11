@@ -87,7 +87,7 @@ func runStoppedMenu(cfg *Config, stateSig string) error {
 	}
 	items = append(items, menuItem{Label: "Edit config"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered(), menuTickInterval(cfg))
 
 	if idx == idxMenuStale {
 		return errMenuStale
@@ -131,7 +131,7 @@ func runLoadedMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 	items = append(items, menuItem{Label: "Show model config"})
 	items = append(items, menuItem{Label: "Edit config"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered(), menuTickInterval(cfg))
 
 	if idx == idxMenuStale {
 		return errMenuStale
@@ -178,7 +178,7 @@ func runIdleMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 	}
 	items = append(items, menuItem{Label: "Edit config"})
 
-	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered(), menuTickInterval(cfg))
 
 	if idx == idxMenuStale {
 		return errMenuStale
@@ -628,15 +628,40 @@ func backendDisplayName(backendName string) string {
 	return b.DisplayName()
 }
 
+// statusTickInterval is how often the open menu re-renders its header so the
+// memory/GPU readout stays current. Backend probing is not tied to this tick;
+// it stays throttled to refresh_duration inside liveStatusHeaderFn.
+const statusTickInterval = 1 * time.Second
+
+// menuTickInterval returns the selectMenu key-timeout: one second when the
+// memory readout is shown (it updates every tick), otherwise the configured
+// refresh interval (the header then only changes when servers do).
+func menuTickInterval(cfg *Config) time.Duration {
+	if cfg.ShouldShowMemoryStatus() {
+		return statusTickInterval
+	}
+	return cfg.MenuRefreshInterval()
+}
+
 // liveStatusHeaderFn returns a selectMenu header callback that re-probes the
-// backends on every refresh tick and reports the menu stale once the live
+// backends every refresh_duration and reports the menu stale once the live
 // state no longer matches the signature the menu was built from — so models
 // loaded or unloaded in the background (e.g. via the CLI) trigger a rebuild.
+// Between probes the cached discovery result is reused, so the menu can tick
+// faster (statusTickInterval) for the memory readout without hitting the
+// servers each second.
 func liveStatusHeaderFn(cfg *Config, stateSig string) func() ([]string, bool) {
+	var lastProbe time.Time
+	var instances []*RunningInstance
 	return func() ([]string, bool) {
-		cfg.Reload()
-		instances := DiscoverRunningInstances(cfg)
-		return serverStatusLines(cfg, instances), instancesSignature(instances) != stateSig
+		stale := false
+		if time.Since(lastProbe) >= cfg.MenuRefreshInterval() {
+			cfg.Reload()
+			instances = DiscoverRunningInstances(cfg)
+			lastProbe = time.Now()
+			stale = instancesSignature(instances) != stateSig
+		}
+		return serverStatusLines(cfg, instances), stale
 	}
 }
 

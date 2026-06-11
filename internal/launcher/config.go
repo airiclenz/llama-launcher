@@ -80,10 +80,12 @@ func (c *Config) MemoryStatusTemplate() string {
 	return *c.MemoryStatusFormat
 }
 
-// MenuRefreshInterval returns how often the interactive menu re-renders its
-// header (and re-evaluates idle work like memory readout). The value is
-// clamped to a minimum of 1 second so a misconfigured 0 cannot spin the
-// render loop. Default: 10 seconds.
+// MenuRefreshInterval returns how often the interactive menu re-probes the
+// backends for the status header (server running / loaded model) and for
+// stale-menu detection. The memory readout refreshes on its own fixed
+// 1-second tick (see menuTickInterval). The value is clamped to a minimum
+// of 1 second so a misconfigured 0 cannot spin the render loop.
+// Default: 10 seconds.
 func (c *Config) MenuRefreshInterval() time.Duration {
 	if c.RefreshDuration == nil {
 		return 10 * time.Second

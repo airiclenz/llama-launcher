@@ -8,6 +8,7 @@
 
 ### Changed
 
+- **The memory readout now updates every second.** The open menu runs on two timers: a fixed 1-second render tick refreshes the memory / swap / GPU readout, while server polling (running instances, loaded model, stale-menu detection) stays on `refresh_duration` (default 10 s) — `liveStatusHeaderFn` caches the discovery result between probes, so the faster tick adds no extra server traffic. When `show_memory_status` is `false` the menu keeps ticking at `refresh_duration` as before. The `MemStats` cache TTL drops from 2 s to 0.9 s so each tick reads fresh values; the `sysctl` / `vm_stat` / `ioreg` shell-outs now run once per second while a menu is open.
 - **`description` is demoted to an optional, popup-only field.** Menus and the status header no longer render the description next to the profile name; it now appears only as a `Description` line in the "Show model config" pop-up, when set. The pop-up's frame title is the profile's `title` (or name) instead of the description. In `list --json`, `description` is omitted when empty instead of being emitted as `""`.
 - **Status header no longer repeats the server-reported model name.** When a running instance matches a configured profile, the header shows `address · title-or-name` only; the raw model id from the server is shown only when no profile matches.
 
