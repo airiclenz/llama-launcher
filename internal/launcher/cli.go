@@ -95,7 +95,6 @@ func Run(args []string) int {
 	}
 }
 
-
 func cmdLoad(cfg *Config, args []string) int {
 	restart := false
 	var profileName string

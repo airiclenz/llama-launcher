@@ -15,12 +15,12 @@ const (
 	escCursorHide = "\033[?25l"
 	escCursorShow = "\033[?25h"
 
-	cReset = "\033[0m"
-	cDim   = "\033[2m"
-	cGreen = "\033[32m"
-	cRed   = "\033[31m"
+	cReset         = "\033[0m"
+	cDim           = "\033[2m"
+	cGreen         = "\033[32m"
+	cRed           = "\033[31m"
 	cBoldLightGray = "\033[1;37m"
-	cBoldCyan = "\033[1;36m"
+	cBoldCyan      = "\033[1;36m"
 )
 
 type keyCode int

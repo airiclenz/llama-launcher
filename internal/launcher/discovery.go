@@ -15,14 +15,14 @@ import (
 // DiscoverRunningInstances). Optional fields (PID, StartedAt, LogFile) are
 // filled lazily and may be zero when the launcher has not needed them.
 type RunningInstance struct {
-	Backend       string
-	Host          string
-	Port          int
-	PID           int
-	StartedAt     time.Time
-	LogFile       string
-	ActiveProfile string
-	ActiveModel   string
+	Backend        string
+	Host           string
+	Port           int
+	PID            int
+	StartedAt      time.Time
+	LogFile        string
+	ActiveProfile  string
+	ActiveModel    string
 	ResolvedParams ProfileParams
 }
 
