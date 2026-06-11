@@ -154,7 +154,40 @@ sort_alphabetically: true
 #   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
 #   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
 # GPU values read 0 on Intel Macs or when ioreg is unavailable.
+#
+# Style tags color any span of the line:
+#   {black} {red} {green} {yellow} {blue} {magenta} {cyan} {white} {gray}
+#   {bright-red} {bright-green} {bright-yellow} {bright-blue}
+#   {bright-magenta} {bright-cyan} {bright-white}
+#   {bold} {dim} {reset}
+#   {0} … {255}  — 256-color palette index, e.g. {208}
+#   {#rrggbb}    — exact 24-bit color, e.g. {#7aa2f7} (short {#rgb} works too)
+# Named colors are rendered by your terminal theme, so their exact shade
+# varies between setups; palette-index and hex colors look the same
+# everywhere. A template without style tags or bars keeps the classic dim
+# rendering; as soon as it contains one, you control all styling yourself
+# and {reset} returns to the terminal's default style.
+#
+# Percentage placeholders can render as a value-less bar graph instead:
+#   {used_ram_pct:bar}                    — defaults from memory_status_bar below
+#   {used_ram_pct:bar:WIDTH:COLOR:BG}     — per-bar overrides, trailing parts
+#                                           optional ({swap_used_pct:bar:6:yellow})
+# Bars fill with block glyphs in COLOR on a solid BG background — one
+# continuous strip, no gap; eighth-block glyphs (▏▎▍▌▋▊▉) give 8 fill
+# levels per cell. COLOR and BG accept the same three forms as style tags
+# (name, palette index, #hex). Width is clamped to 1–40.
+# Unknown or malformed tokens are passed through literally.
+# memory_status_format: "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
+#
+# Plain alternative (no styling — rendered all-dim like older versions):
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
+# Default geometry and colors for {..._pct:bar} tokens. Inline parts on a
+# token override these per bar.
+# memory_status_bar:
+#   width: 10        # cells, clamped to 1–40
+#   color: green     # filled portion
+#   background: gray # empty portion
 
 # ──────────────────────────────────────────────────────────────
 # Default parameters
@@ -304,6 +337,40 @@ Set `is_favourite: true` on a profile to pin it to the top of menus and `list` o
 | `{gpu_alloc_ram}` | Unified RAM allocated to the GPU, humanised (Apple Silicon only) |
 
 Byte values are rendered macOS-style: 1024-based units with one decimal (`12.4GB`, `512MB`), whole values drop the decimal (`8GB`). Unknown placeholders are left in place.
+
+#### Style tags
+
+The template can color any span of the line with inline tags:
+
+| Tags | Effect |
+|------|--------|
+| `{black}` `{red}` `{green}` `{yellow}` `{blue}` `{magenta}` `{cyan}` `{white}` `{gray}` | Standard ANSI colors |
+| `{bright-red}` … `{bright-white}` | Bright ANSI variants |
+| `{0}` … `{255}` | 256-color palette index, e.g. `{208}` |
+| `{#rrggbb}` | Exact 24-bit color, e.g. `{#7aa2f7}` (short `{#rgb}` works too) |
+| `{bold}` `{dim}` | Text styles |
+| `{reset}` | Back to the terminal's default style |
+
+Named colors are escape codes resolved by your terminal emulator's theme, so their exact shade varies between setups — `{gray}` occupies the ANSI "bright black" slot, which most themes draw as mid gray. Palette-index and hex colors render the same everywhere.
+
+A template without style tags or bars keeps the classic all-dim rendering. As soon as it contains one, the launcher stops applying its own dim wrap — you control all styling, and `{reset}` returns to the terminal default. Unknown tags are left in place, so typos are visible rather than silently dropped.
+
+#### Bar graphs
+
+Any percentage placeholder can render as a value-less bar graph instead of a number:
+
+```yaml
+memory_status_format: "{dim}RAM{reset} {used_ram_pct:bar} {free_ram} free · {dim}Swap{reset} {swap_used_pct:bar:6:yellow} {swap_used}"
+
+memory_status_bar:    # defaults for every {..._pct:bar} token
+  width: 10           # cells, clamped to 1–40
+  color: green        # filled portion
+  background: gray    # empty portion
+```
+
+The token is `{pct_name:bar[:width[:color[:bgcolor]]]}` — trailing parts are optional and fall back to `memory_status_bar` (which itself defaults to `10` / `green` / `gray`). Empty parts are allowed, so `{used_ram_pct:bar::red}` overrides only the color. Bar colors accept the same three forms as style tags (name, palette index, `#hex`). The filled portion uses full blocks with an eighth-block partial cell (`▏▎▍▌▋▊▉`) for 8 fill levels per cell; the rest of the bar is painted as a solid background in the background color, so the fill meets the background in one continuous strip with no gap. Any nonzero percentage shows at least a sliver; malformed tokens (bad width, unknown color, `:bar` on a non-percentage placeholder) are passed through literally.
+
+To show free memory as the *empty* part of the gauge, bar the complementary percentage: `{used_ram_pct:bar}` fills with used RAM, leaving the empty tail as what's free.
 
 See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 

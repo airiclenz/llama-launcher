@@ -176,9 +176,9 @@ func TestFormatMemoryLine(t *testing.T) {
 		want     string
 	}{
 		{
-			name:     "default template",
+			name:     "plain legacy template",
 			stats:    stats,
-			template: DefaultMemoryStatusTemplate,
+			template: "RAM: {free_ram} free · Swap: {swap_used} used",
 			want:     "RAM: 12GB free · Swap: 1.5GB used",
 		},
 		{

@@ -14,5 +14,3 @@
   - Display differences between current and target profile (gpu_layers, context_size, backend, etc.)
   - `formatProfileParams` already exists; this is mostly UI wiring to show a side-by-side or delta view
   - Helps users confirm they're switching to the right configuration before waiting for the server restart
-
-- [ ] Display a GPU%-bar-grapth

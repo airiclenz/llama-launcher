@@ -19,7 +19,7 @@ const (
 	defaultHost      = "127.0.0.1"
 	defaultPort      = 8080
 	defaultConfigDir = ".config/llama-launcher"
-	configFileName = "config.yaml"
+	configFileName   = "config.yaml"
 )
 
 // ErrConfigNotFound indicates the configuration file does not exist.
@@ -40,13 +40,25 @@ type Config struct {
 	SortAlphabetically *bool              `yaml:"sort_alphabetically"`
 	ShowMemoryStatus   *bool              `yaml:"show_memory_status"`
 	MemoryStatusFormat *string            `yaml:"memory_status_format"`
+	MemoryStatusBar    *MemoryStatusBar   `yaml:"memory_status_bar"`
 	RefreshDuration    *int               `yaml:"refresh_duration"`
 	Defaults           ProfileParams      `yaml:"defaults"`
 	Profiles           map[string]Profile `yaml:"profiles"`
 
-	ConfigPath   string   `yaml:"-"`
-	Warnings     []string `yaml:"-"`
-	profileOrder []string `yaml:"-"`
+	ConfigPath   string          `yaml:"-"`
+	Warnings     []string        `yaml:"-"`
+	profileOrder []string        `yaml:"-"`
+	memTpl       *MemoryTemplate `yaml:"-"`
+	memTplKey    string          `yaml:"-"`
+}
+
+// MemoryStatusBar configures the default geometry and colors for
+// {..._pct:bar} tokens in memory_status_format. Inline token parts
+// override these per bar. All keys are optional.
+type MemoryStatusBar struct {
+	Width      *int    `yaml:"width"`
+	Color      *string `yaml:"color"`
+	Background *string `yaml:"background"`
 }
 
 func (c *Config) ShouldAutoClose() bool {
@@ -78,6 +90,69 @@ func (c *Config) MemoryStatusTemplate() string {
 		return DefaultMemoryStatusTemplate
 	}
 	return *c.MemoryStatusFormat
+}
+
+// memoryBarDefaults resolves the memory_status_bar block against the
+// built-in defaults (width 10, green fill, gray background). Widths are
+// clamped to the valid range; unknown color names fall back to the built-in
+// (validate reports them as warnings).
+func (c *Config) memoryBarDefaults() BarDefaults {
+	d := builtinBarDefaults()
+	b := c.MemoryStatusBar
+	if b == nil {
+		return d
+	}
+	if b.Width != nil {
+		d.Width = clampBarWidth(*b.Width)
+	}
+	if b.Color != nil {
+		if fg, _, ok := memColor(*b.Color); ok {
+			d.Fg = fg
+		}
+	}
+	if b.Background != nil {
+		if _, bg, ok := memColor(*b.Background); ok {
+			d.Bg = bg
+		}
+	}
+	return d
+}
+
+// memoryBarWarnings reports unknown color names in the memory_status_bar
+// block. Cosmetic settings never fail config load; the bar falls back to
+// the built-in colors instead.
+func (c *Config) memoryBarWarnings() []string {
+	b := c.MemoryStatusBar
+	if b == nil {
+		return nil
+	}
+	var warnings []string
+	if b.Color != nil {
+		if _, _, ok := memColor(*b.Color); !ok {
+			warnings = append(warnings, fmt.Sprintf("memory_status_bar: unknown color %q — using the default", *b.Color))
+		}
+	}
+	if b.Background != nil {
+		if _, _, ok := memColor(*b.Background); !ok {
+			warnings = append(warnings, fmt.Sprintf("memory_status_bar: unknown background color %q — using the default", *b.Background))
+		}
+	}
+	return warnings
+}
+
+// CompiledMemoryTemplate returns the compiled memory_status_format,
+// recompiling only when the format string or bar defaults changed —
+// including after Reload, which replaces the struct and clears the cache.
+// The interactive menu probes, reloads, and renders on one goroutine, so
+// the memoization needs no locking.
+func (c *Config) CompiledMemoryTemplate() *MemoryTemplate {
+	bar := c.memoryBarDefaults()
+	key := fmt.Sprintf("%s\x00%d\x00%s\x00%s", c.MemoryStatusTemplate(), bar.Width, bar.Fg, bar.Bg)
+	if c.memTpl == nil || c.memTplKey != key {
+		c.memTpl = CompileMemoryTemplate(c.MemoryStatusTemplate(), bar)
+		c.memTplKey = key
+	}
+	return c.memTpl
 }
 
 // MenuRefreshInterval returns how often the interactive menu re-probes the
@@ -272,6 +347,7 @@ func (c *Config) validate() error {
 		c.Defaults.Server = &enabledServers[0]
 	}
 	c.Warnings = c.defaultsServerFallbackWarnings(enabledServers)
+	c.Warnings = append(c.Warnings, c.memoryBarWarnings()...)
 	return nil
 }
 
@@ -342,6 +418,7 @@ func (c *Config) validateAll() []string {
 	if c.LogDir == "" {
 		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
 	}
+	problems = append(problems, c.memoryBarWarnings()...)
 
 	if len(c.Profiles) == 0 {
 		problems = append(problems, "no profiles defined")

@@ -209,7 +209,7 @@ log_dir: ~/.config/llama-launcher/logs
 # Template for the memory readout. Placeholders are substituted with
 # humanised byte values (e.g. "12.4GB") or rounded integer percentages
 # (e.g. "38%"). Unknown placeholders are passed through literally. Default:
-#   "RAM: {free_ram} free · Swap: {swap_used} used"
+#   "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
 # Available placeholders:
 #   {free_ram}        — available memory (free + inactive + speculative + purgeable)
 #   {used_ram}        — total_ram - free_ram
@@ -226,7 +226,35 @@ log_dir: ~/.config/llama-launcher/logs
 #   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
 #   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
 # GPU values read 0 on Intel Macs or when ioreg is unavailable.
+#
+# Style tags color any span of the line: the 8 standard ANSI color names
+# ({red}, {green}, …), their {bright-*} variants, {gray} (the ANSI
+# bright-black slot), 256-color palette indices ({0}–{255}), exact 24-bit
+# hex colors ({#rrggbb} / {#rgb}), {bold}, {dim}, and {reset}. Named
+# colors are resolved by the terminal theme; palette/hex colors render
+# identically everywhere. A template without style tags or bars keeps the
+# classic dim rendering; one that contains any styling is rendered as-is
+# and {reset} returns to the terminal default.
+#
+# Percentage placeholders can render as value-less bar graphs:
+#   {pct_name:bar[:width[:color[:bgcolor]]]}
+# Trailing parts are optional and fall back to memory_status_bar; empty
+# parts are allowed ({used_ram_pct:bar::red}). The fill uses full blocks
+# plus an eighth-block partial cell (▏▎▍▌▋▊▉ — 8 levels per cell); the
+# background color is painted as an ANSI background behind the partial
+# cell and the empty remainder, one continuous strip. Widths clamp to 1–40;
+# malformed tokens (bad width, unknown color, :bar on a non-percentage
+# placeholder) pass through literally.
+# Plain alternative (no styling — rendered all-dim like older versions):
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
+# Default geometry and colors for {..._pct:bar} tokens; inline token parts
+# override these per bar. Unknown color names fall back to the defaults
+# with a load-time warning — cosmetic settings never fail config load.
+# memory_status_bar:
+#   width: 10        # cells, clamped to 1–40
+#   color: green     # filled portion
+#   background: gray # empty portion
 
 # Default parameters applied at server start (shared by all models).
 # Note: `defaults.server` is soft-deprecated (see ADR-0005). Each profile
@@ -378,9 +406,10 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
 | `ui.go` | Low-level terminal operations: raw mode (via `golang.org/x/term`), ANSI escape codes, key reading, reusable `selectMenu()` component. `selectMenu`'s header callback returns `(lines, stale)`; a stale report makes it return the `idxMenuStale` sentinel so callers rebuild instead of acting on an outdated item list. |
-| `menu.go` | Interactive menu logic. Enumerates running instances; presents an instance picker for actions that apply to a non-unique target (stop, unload, logs). The open menu runs on two timers: the render tick (`menuTickInterval` — 1 second via `statusTickInterval` when the memory readout is shown, otherwise `refresh_duration`) re-renders the header so the memory/GPU readout stays current, while the backend probe inside `liveStatusHeaderFn` is throttled to `refresh_duration` (config reload + `DiscoverRunningInstances`; the cached discovery result is reused between probes). Each probe compares `instancesSignature` against the signature the menu was built from — on mismatch the open menu returns `errMenuStale` and the loop rebuilds, so background changes (a model loaded via the CLI in another terminal, an external stop or unload) surface without user input and without any state file. Config is also reloaded at the top of each menu loop iteration. `serverStatusLines` appends the optional memory/swap readout (see `sysmem.go`) gated by `show_memory_status`. |
-| `sysmem.go` | macOS unified-memory, swap, and GPU snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, `vm_stat`, and `ioreg -r -c IOAccelerator`, with a 0.9-second mutex-guarded cache — just below the menu's 1-second status tick so every tick reads fresh values while per-keystroke re-renders stay cheap. `FormatMemoryLine` substitutes byte placeholders (`{free_ram}`, `{used_ram}`, `{total_ram}`, `{compressed_ram}`, `{swap_used}`, `{swap_total}`, `{free_swap}`, `{gpu_used_ram}`, `{gpu_alloc_ram}`) via the 1024-based humaniser (`humanBytes`) and integer-percentage placeholders (`{free_ram_pct}`, `{used_ram_pct}`, `{swap_used_pct}`, `{gpu_util_pct}`); the swap percentage uses `percentString` and returns `0%` on a zero denominator. Free RAM follows the Activity Monitor "available" definition; `Compressed` is sourced from `vm_stat`'s "Pages occupied by compressor" line. GPU fields come from the `AGXAccelerator…` entry's `PerformanceStatistics` dict (`Device Utilization %`, `In use system memory`, `Alloc system memory`) on Apple Silicon and degrade silently to `0` on Intel Macs or ioreg failure — `parseIOAccelerator` returns zero values rather than erroring so the rest of the readout still renders. |
-| `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment, `defaults.server` deprecation warning), parameter merging, boolean accessors, `ExpandTilde` edge cases, and `ConfiguredBackendAddr`. |
+| `menu.go` | Interactive menu logic. Enumerates running instances; presents an instance picker for actions that apply to a non-unique target (stop, unload, logs). The open menu runs on two timers: the render tick (`menuTickInterval` — 1 second via `statusTickInterval` when the memory readout is shown, otherwise `refresh_duration`) re-renders the header so the memory/GPU readout stays current, while the backend probe inside `liveStatusHeaderFn` is throttled to `refresh_duration` (config reload + `DiscoverRunningInstances`; the cached discovery result is reused between probes). Each probe compares `instancesSignature` against the signature the menu was built from — on mismatch the open menu returns `errMenuStale` and the loop rebuilds, so background changes (a model loaded via the CLI in another terminal, an external stop or unload) surface without user input and without any state file. Config is also reloaded at the top of each menu loop iteration. `serverStatusLines` appends the optional memory/swap readout (see `sysmem.go` / `memformat.go`) gated by `show_memory_status`, rendered via `Config.CompiledMemoryTemplate()`; templates that carry their own styling (`MemoryTemplate.Styled()`) are emitted as-is, plain templates keep the legacy dim wrap. |
+| `sysmem.go` | macOS unified-memory, swap, and GPU snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, `vm_stat`, and `ioreg -r -c IOAccelerator`, with a 0.9-second mutex-guarded cache — just below the menu's 1-second status tick so every tick reads fresh values while per-keystroke re-renders stay cheap. Free RAM follows the Activity Monitor "available" definition; `Compressed` is sourced from `vm_stat`'s "Pages occupied by compressor" line. GPU fields come from the `AGXAccelerator…` entry's `PerformanceStatistics` dict (`Device Utilization %`, `In use system memory`, `Alloc system memory`) on Apple Silicon and degrade silently to `0` on Intel Macs or ioreg failure — `parseIOAccelerator` returns zero values rather than erroring so the rest of the readout still renders. `FormatMemoryLine` is a one-shot convenience wrapper over the compiled-template engine in `memformat.go`; `percentValue`/`percentString` provide the rounded integer percentage (0 on a zero denominator). |
+| `memformat.go` | Compiled-template engine for `memory_status_format`. `CompileMemoryTemplate` scans the template once (hand-rolled `{…}` tokenizer, no regex) into a segment list — literals (including pre-resolved ANSI escapes for style tags), value placeholders, and bar specs — and `MemoryTemplate.Render` walks the segments against a `MemStats` snapshot each tick (~0.3 µs, independent of template complexity). Compilation never fails: unknown or malformed tokens pass through literally. Style tags cover the 16 named ANSI colors ({gray} aliasing {bright-black}), 256-color palette indices ({0}–{255}), and 24-bit hex colors ({#rrggbb} / {#rgb}), plus {bold}/{dim}/{reset}; `memColor` resolves any of the three color forms to its foreground and background escapes (named: SGR fg+10; palette: 38;5→48;5; hex: 38;2→48;2). `MemoryTemplate.Styled()` reports whether the template carries its own styling, which disables the menu's legacy dim wrap. Bars (`{pct_name:bar[:width[:color[:bgcolor]]]}`, colors in any of the three forms) render full blocks plus an eighth-block partial cell (8 levels per cell) in the fill color, with the background color painted as an ANSI background behind the partial cell and the empty remainder so the strip is continuous; any nonzero percentage shows at least a sliver, widths clamp to 1–40. `Config.CompiledMemoryTemplate()` (config.go) memoizes compilation keyed on the format string and resolved `memory_status_bar` defaults, recompiling at most once per config reload. |
+| `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment, `defaults.server` deprecation warning), parameter merging, boolean accessors, `ExpandTilde` edge cases, `ConfiguredBackendAddr`, `memory_status_bar` resolution (partial blocks, clamping, unknown-color warnings), and `CompiledMemoryTemplate` memoization. |
 | `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, Model resolution, and httptest-based health check. |
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
 | `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, and `extractLMStudioError`. |

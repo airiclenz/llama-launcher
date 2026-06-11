@@ -711,7 +711,12 @@ func serverStatusLines(cfg *Config, instances []*RunningInstance) []string {
 
 	if cfg.ShouldShowMemoryStatus() {
 		if stats, err := ReadMemStats(); err == nil {
-			lines = append(lines, "", fmt.Sprintf("%s%s%s", cDim, FormatMemoryLine(stats, cfg.MemoryStatusTemplate()), cReset))
+			tpl := cfg.CompiledMemoryTemplate()
+			line := tpl.Render(stats)
+			if !tpl.Styled() {
+				line = cDim + line + cReset
+			}
+			lines = append(lines, "", line)
 		}
 	}
 

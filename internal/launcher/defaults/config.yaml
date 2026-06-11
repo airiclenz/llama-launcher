@@ -101,7 +101,41 @@ sort_alphabetically: true
 #   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
 #   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
 # GPU values read 0 on Intel Macs or when ioreg is unavailable.
+#
+# Style tags color any span of the line:
+#   {black} {red} {green} {yellow} {blue} {magenta} {cyan} {white} {gray}
+#   {bright-red} {bright-green} {bright-yellow} {bright-blue}
+#   {bright-magenta} {bright-cyan} {bright-white}
+#   {bold} {dim} {reset}
+#   {0} … {255}  — 256-color palette index, e.g. {208}
+#   {#rrggbb}    — exact 24-bit color, e.g. {#7aa2f7} (short {#rgb} works too)
+# Named colors are rendered by your terminal theme, so their exact shade
+# varies between setups; palette-index and hex colors look the same
+# everywhere. A template without style tags or bars keeps the classic dim
+# rendering; as soon as it contains one, you control all styling yourself
+# and {reset} returns to the terminal's default style.
+#
+# Percentage placeholders can render as a value-less bar graph instead:
+#   {used_ram_pct:bar}                    — defaults from memory_status_bar below
+#   {used_ram_pct:bar:WIDTH:COLOR:BG}     — per-bar overrides, trailing parts
+#                                           optional ({swap_used_pct:bar:6:yellow})
+# Bars fill with block glyphs in COLOR on a solid BG background — one
+# continuous strip, no gap; eighth-block glyphs (▏▎▍▌▋▊▉) give 8 fill
+# levels per cell. COLOR and BG accept the same three forms as style tags
+# (name, palette index, #hex). Width is clamped to 1–40.
+# Unknown or malformed tokens are passed through literally.
+# memory_status_format: "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
+#
+# Plain alternative (no styling — rendered all-dim like older versions):
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
+
+# Default geometry and colors for {..._pct:bar} tokens. Inline parts on a
+# token override these per bar. Colors accept a name, a 256-color palette
+# index ("240"), or a hex value ("#7aa2f7").
+# memory_status_bar:
+#   width: 10        # cells, clamped to 1–40
+#   color: green     # filled portion
+#   background: gray # empty portion
 
 # ──────────────────────────────────────────────────────────────
 # Default parameters

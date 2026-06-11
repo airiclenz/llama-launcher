@@ -249,42 +249,30 @@ func formatUnit(v float64, unit string) string {
 
 // DefaultMemoryStatusTemplate is the readout shown when memory_status_format
 // is unset in the config.
-const DefaultMemoryStatusTemplate = "RAM: {free_ram} free · Swap: {swap_used} used"
+const DefaultMemoryStatusTemplate = "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
 
 // FormatMemoryLine substitutes memory readout placeholders in template
 // with humanised byte values (e.g. "12 GB") or integer percentages
 // (e.g. "23%"). Unknown placeholders are left in place. Percentage
-// placeholders return "0%" when the denominator is zero.
+// placeholders return "0%" when the denominator is zero. One-shot
+// convenience over CompileMemoryTemplate; the menu's render loop uses
+// Config.CompiledMemoryTemplate instead to avoid recompiling per tick.
 func FormatMemoryLine(s MemStats, template string) string {
-	freeSwap := uint64(0)
-	if s.SwapTotal > s.SwapUsed {
-		freeSwap = s.SwapTotal - s.SwapUsed
-	}
-	r := strings.NewReplacer(
-		"{free_ram}", humanBytes(s.FreeRAM),
-		"{used_ram}", humanBytes(s.UsedRAM),
-		"{total_ram}", humanBytes(s.TotalRAM),
-		"{compressed_ram}", humanBytes(s.Compressed),
-		"{swap_used}", humanBytes(s.SwapUsed),
-		"{swap_total}", humanBytes(s.SwapTotal),
-		"{free_swap}", humanBytes(freeSwap),
-		"{free_ram_pct}", percentString(s.FreeRAM, s.TotalRAM),
-		"{used_ram_pct}", percentString(s.UsedRAM, s.TotalRAM),
-		"{swap_used_pct}", percentString(s.SwapUsed, s.SwapTotal),
-		"{gpu_util_pct}", fmt.Sprintf("%d%%", s.GPUUtilPct),
-		"{gpu_used_ram}", humanBytes(s.GPUUsedRAM),
-		"{gpu_alloc_ram}", humanBytes(s.GPUAllocRAM),
-	)
-	return r.Replace(template)
+	return CompileMemoryTemplate(template, builtinBarDefaults()).Render(s)
 }
 
 // percentString renders n/d as a rounded integer percentage with a
 // trailing "%". Returns "0%" when d is zero so swap-disabled systems
 // don't show a divide-by-zero.
 func percentString(n, d uint64) string {
+	return fmt.Sprintf("%d%%", percentValue(n, d))
+}
+
+// percentValue computes n/d as a rounded integer percentage. Returns 0
+// when d is zero so swap-disabled systems don't divide by zero.
+func percentValue(n, d uint64) uint64 {
 	if d == 0 {
-		return "0%"
+		return 0
 	}
-	p := (n*100 + d/2) / d
-	return fmt.Sprintf("%d%%", p)
+	return (n*100 + d/2) / d
 }

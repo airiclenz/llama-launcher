@@ -428,9 +428,9 @@ func TestResolveProfile(t *testing.T) {
 
 		strPtr := func(v string) *string { return &v }
 		cfg := &Config{
-			Servers:  map[string]bool{"llamacpp": true},
+			Servers:   map[string]bool{"llamacpp": true},
 			ModelsDir: dir,
-			Defaults: ProfileParams{Server: strPtr("llamacpp")},
+			Defaults:  ProfileParams{Server: strPtr("llamacpp")},
 			Profiles: map[string]Profile{
 				"test": {Description: "test", Model: modelRef},
 			},
@@ -940,3 +940,144 @@ func TestMenuRefreshInterval(t *testing.T) {
 }
 
 func ptrInt(v int) *int { return &v }
+
+func ptrStr(v string) *string { return &v }
+
+func TestMemoryBarDefaults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("absent block uses built-in defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{}
+		if got, want := cfg.memoryBarDefaults(), builtinBarDefaults(); got != want {
+			t.Errorf("memoryBarDefaults = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("partial block overrides only the set keys", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{MemoryStatusBar: &MemoryStatusBar{Width: ptrInt(6)}}
+		got := cfg.memoryBarDefaults()
+		if got.Width != 6 {
+			t.Errorf("Width = %d, want 6", got.Width)
+		}
+		if want := builtinBarDefaults(); got.Fg != want.Fg || got.Bg != want.Bg {
+			t.Errorf("colors = %q/%q, want built-in %q/%q", got.Fg, got.Bg, want.Fg, want.Bg)
+		}
+	})
+
+	t.Run("full block resolves colors and clamps width", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{MemoryStatusBar: &MemoryStatusBar{
+			Width:      ptrInt(99),
+			Color:      ptrStr("yellow"),
+			Background: ptrStr("blue"),
+		}}
+		got := cfg.memoryBarDefaults()
+		if got.Width != maxBarWidth {
+			t.Errorf("Width = %d, want clamped %d", got.Width, maxBarWidth)
+		}
+		if got.Fg != "\033[33m" || got.Bg != "\033[44m" {
+			t.Errorf("colors = %q/%q, want yellow foreground / blue background escapes", got.Fg, got.Bg)
+		}
+	})
+
+	t.Run("256-color and hex values resolve", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{MemoryStatusBar: &MemoryStatusBar{
+			Color:      ptrStr("#7aa2f7"),
+			Background: ptrStr("240"),
+		}}
+		got := cfg.memoryBarDefaults()
+		if got.Fg != "\033[38;2;122;162;247m" || got.Bg != "\033[48;5;240m" {
+			t.Errorf("colors = %q/%q, want hex foreground / 256-palette background escapes", got.Fg, got.Bg)
+		}
+	})
+
+	t.Run("unknown colors fall back and warn", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{MemoryStatusBar: &MemoryStatusBar{
+			Color:      ptrStr("sparkle"),
+			Background: ptrStr("glitter"),
+		}}
+		if got, want := cfg.memoryBarDefaults(), builtinBarDefaults(); got != want {
+			t.Errorf("memoryBarDefaults = %+v, want built-in %+v", got, want)
+		}
+		warnings := cfg.memoryBarWarnings()
+		if len(warnings) != 2 {
+			t.Fatalf("warnings = %v, want 2 entries", warnings)
+		}
+		if !strings.Contains(warnings[0], "sparkle") || !strings.Contains(warnings[1], "glitter") {
+			t.Errorf("warnings = %v, want them to name the bad colors", warnings)
+		}
+	})
+}
+
+func TestLoadConfig_MemoryBarWarning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	yaml := `
+servers:
+  llamacpp: true
+models_dir: /tmp/models
+memory_status_bar:
+  color: sparkle
+profiles:
+  test-profile:
+    model: test.gguf
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	found := false
+	for _, w := range cfg.Warnings {
+		if strings.Contains(w, "memory_status_bar") && strings.Contains(w, "sparkle") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Warnings = %v, want a memory_status_bar warning naming \"sparkle\"", cfg.Warnings)
+	}
+}
+
+func TestCompiledMemoryTemplate_Memoization(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{MemoryStatusFormat: ptrStr("{free_ram} free")}
+
+	first := cfg.CompiledMemoryTemplate()
+	if second := cfg.CompiledMemoryTemplate(); second != first {
+		t.Error("unchanged config should return the cached template")
+	}
+
+	cfg.MemoryStatusFormat = ptrStr("{used_ram_pct:bar}")
+	changed := cfg.CompiledMemoryTemplate()
+	if changed == first {
+		t.Error("changed format string should recompile")
+	}
+	if !changed.Styled() {
+		t.Error("bar template should report Styled")
+	}
+
+	cfg.MemoryStatusBar = &MemoryStatusBar{Width: ptrInt(6)}
+	if rebar := cfg.CompiledMemoryTemplate(); rebar == changed {
+		t.Error("changed bar defaults should recompile")
+	}
+
+	// Reload replaces the struct wholesale, clearing the unexported cache.
+	fresh := &Config{MemoryStatusFormat: ptrStr("{used_ram_pct:bar}")}
+	*cfg = *fresh
+	if cfg.memTpl != nil {
+		t.Error("struct replacement should clear the compiled-template cache")
+	}
+	if cfg.CompiledMemoryTemplate() == nil {
+		t.Error("recompile after replacement should succeed")
+	}
+}
