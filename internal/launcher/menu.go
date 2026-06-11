@@ -605,19 +605,19 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 	return items
 }
 
+// hasMultipleBackends reports whether more than one server is enabled in the
+// config. Profile menus show the [server] tag per row only in that case; with
+// a single enabled server the tag carries no information. Enabled servers
+// count even when no profile currently uses them, so the tag column does not
+// flicker in and out as profiles are edited.
 func hasMultipleBackends(cfg *Config) bool {
-	seen := make(map[string]bool)
-	for _, p := range cfg.Profiles {
-		server := resolveProfileServer(cfg, &p)
-		if !cfg.IsServerEnabled(server) {
-			continue
-		}
-		seen[server] = true
-		if len(seen) > 1 {
-			return true
+	count := 0
+	for _, enabled := range cfg.Servers {
+		if enabled {
+			count++
 		}
 	}
-	return false
+	return count > 1
 }
 
 func backendDisplayName(backendName string) string {

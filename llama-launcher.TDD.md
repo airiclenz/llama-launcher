@@ -62,6 +62,8 @@ Running `llama-launcher` with no arguments enters a one-shot interactive menu wi
 
 Each Profile row shows the Profile's optional `title`, falling back to the Profile name (`reasoning-phi` above) when no title is set. The same rule applies everywhere a Profile is presented: the status header, the Profile lists, and the "Switch model" pop-up.
 
+When more than one LLM Server is enabled in the config, every Profile row additionally carries a column-aligned `[server]` tag (e.g. `[LLaMA.cpp]`, `[LM-Studio]`) showing which server the Profile targets. The tag appears in all Profile lists — server stopped, running with no model, and the "Switch model" pop-up. With a single enabled server the tag is omitted; whether the configured Profiles currently use more than one server does not matter, so the column does not appear and disappear as profiles are edited.
+
 After selecting a Profile, the launcher shows a step-by-step progress popup that updates in place as each lifecycle stage completes, then prints a confirmation and exits:
 
 ```
