@@ -171,8 +171,12 @@ On first run, if no config file exists, the launcher creates a documented exampl
 # Servers available on this system (true = enabled, false = disabled).
 # Disabled servers are hidden from status display and their profiles
 # are excluded from menus and CLI output.
+# Each entry is either a plain bool or a mapping with an optional
+# api_key ("enabled" defaults to true in the mapping form).
 servers:
-  llamacpp: true
+  llamacpp:
+    enabled: true
+    api_key: "secret"
   ollama: false
   lmstudio: false
 
@@ -322,7 +326,15 @@ profiles:
 
 `title` and `description` are both optional. `title` is the label shown wherever a Profile is presented to the user (status header, Profile lists, "Switch model" pop-up); when unset, the Profile name is shown instead. `description` is longer free text displayed only in the "Show model config" pop-up.
 
-The `servers` map lists available LLM Servers. Keys are server names (`llamacpp`, `ollama`, `lmstudio`). Values are booleans: `true` enables the server, `false` disables it. Disabled servers are hidden from status display, and Profiles targeting a disabled server are excluded from menus, CLI output, and Profile resolution. At least one server must be enabled.
+The `servers` map lists available LLM Servers. Keys are server names (`llamacpp`, `ollama`, `lmstudio`). Each value is either a plain boolean (`true` enables the server, `false` disables it) or a mapping with the keys `enabled` (optional, defaults to `true`) and `api_key` (optional). Disabled servers are hidden from status display, and Profiles targeting a disabled server are excluded from menus, CLI output, and Profile resolution. At least one server must be enabled.
+
+`api_key` is stored as plaintext (the config file is created with mode 0600) and is trimmed of surrounding whitespace, with a load-time warning when trimming changed the value. Its meaning is per-backend:
+
+- **llamacpp** — passed as `--api-key` at launch, so llama-server rejects client requests lacking `Authorization: Bearer <key>` (`/health` stays exempt). The key is visible in the process argv (`ps`); llama-server's `LLAMA_ARG_API_KEY` env var would avoid that and is a possible future alternative.
+- **lmstudio** — LM Studio owns its token ("Require API token" in its Server Settings); the configured key is only *sent* by the launcher so its health checks and model load/unload calls keep working when auth is enabled.
+- **ollama** — Ollama has no native auth; a key is only meaningful when the instance sits behind an authenticating reverse proxy. The launcher sends it with its own requests.
+
+Regardless of backend, the launcher attaches the key as a `Bearer` header to every HTTP call it makes to that server (health checks, model load/unload, model listing, live-params queries). The launcher never enforces auth itself — it is not a proxy ([ADR-0002](docs/adr/0002-not-a-router.md)).
 
 ### 4.3 Parameter Resolution
 
@@ -396,10 +408,11 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | File | Responsibility |
 |---|---|
 | `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. `status` and `list` accept `--json` for structured output (local marshalling structs in `cli.go`). |
-| `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `Reload` for in-place re-read, `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems including non-fatal warnings such as `defaults.server` fallback usage), example config generation. Server enable/disable filtering via `IsServerEnabled()`. |
+| `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `Reload` for in-place re-read, `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems including non-fatal warnings such as `defaults.server` fallback usage), example config generation. Server enable/disable filtering via `IsServerEnabled()`. `ServerConfig` (bool-or-mapping YAML form per server entry) with `APIKeyFor()` accessor; `LoadConfig` pushes configured API keys onto the registered backends via `applyAPIKeys`. |
 | `defaults/config.yaml` | Example config template, embedded at compile time via `go:embed`. |
 | `defaults/embed.go` | Embeds `config.yaml` and exports it as `defaults.ExampleConfig`. |
-| `backend.go` | `LLMServer` and `ManagedLLMServer` interface definitions (see [§5.3](#53-llmserver-interface)), `ResolvedProfile` struct, LLM Server registry (register/get). |
+| `backend.go` | `LLMServer` and `ManagedLLMServer` interface definitions (see [§5.3](#53-llmserver-interface)), `ResolvedProfile` struct, LLM Server registry (register/get), `applyAPIKeys` (pushes per-server API keys from the config onto backends implementing the package-private `apiKeyConfigurable`). |
+| `backend_http.go` | Shared HTTP helpers for backend API calls: `authedGet` / `authedPostJSON` attach `Authorization: Bearer <key>` when a per-server API key is configured, `authFailedErr` maps 401/403 to an actionable "check api_key" error, `redactAPIKeyArgs` masks `--api-key` values for display surfaces. |
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
 | `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
@@ -412,10 +425,11 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `sysmem.go` | macOS unified-memory, swap, and GPU snapshot for the status header. `ReadMemStats` shells out to `sysctl -n hw.memsize`, `sysctl -n vm.swapusage`, `vm_stat`, and `ioreg -r -c IOAccelerator`, with a 0.9-second mutex-guarded cache — just below the menu's 1-second status tick so every tick reads fresh values while per-keystroke re-renders stay cheap. Free RAM follows the Activity Monitor "available" definition; `Compressed` is sourced from `vm_stat`'s "Pages occupied by compressor" line. GPU fields come from the `AGXAccelerator…` entry's `PerformanceStatistics` dict (`Device Utilization %`, `In use system memory`, `Alloc system memory`) on Apple Silicon and degrade silently to `0` on Intel Macs or ioreg failure — `parseIOAccelerator` returns zero values rather than erroring so the rest of the readout still renders. `FormatMemoryLine` is a one-shot convenience wrapper over the compiled-template engine in `memformat.go`; `percentValue`/`percentString` provide the rounded integer percentage (0 on a zero denominator). |
 | `memformat.go` | Compiled-template engine for `memory_status_format`. `CompileMemoryTemplate` scans the template once (hand-rolled `{…}` tokenizer, no regex) into a segment list — literals (including pre-resolved ANSI escapes for style tags), value placeholders, and bar specs — and `MemoryTemplate.Render` walks the segments against a `MemStats` snapshot each tick (~0.3 µs, independent of template complexity). Compilation never fails: unknown or malformed tokens pass through literally. Style tags cover the 16 named ANSI colors ({gray} aliasing {bright-black}), 256-color palette indices ({0}–{255}), and 24-bit hex colors ({#rrggbb} / {#rgb}), plus {bold}/{dim}/{reset}; `memColor` resolves any of the three color forms to its foreground and background escapes (named: SGR fg+10; palette: 38;5→48;5; hex: 38;2→48;2). `MemoryTemplate.Styled()` reports whether the template carries its own styling, which disables the menu's legacy dim wrap. Bars (`{pct_name:bar[:width[:color[:bgcolor]]]}`, colors in any of the three forms) render full blocks plus an eighth-block partial cell (8 levels per cell) in the fill color, with the background color painted as an ANSI background behind the partial cell and the empty remainder so the strip is continuous; any nonzero percentage shows at least a sliver, widths clamp to 1–40. `Config.CompiledMemoryTemplate()` (config.go) memoizes compilation keyed on the format string and resolved `memory_status_bar` defaults, recompiling at most once per config reload. |
 | `config_test.go` | Tests for config loading, validation (deprecated fields, server enable/disable, auto-assignment, `defaults.server` deprecation warning), parameter merging, boolean accessors, `ExpandTilde` edge cases, `ConfiguredBackendAddr`, `memory_status_bar` resolution (partial blocks, clamping, unknown-color warnings), and `CompiledMemoryTemplate` memoization. |
-| `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly, Model resolution, and httptest-based health check. |
-| `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, and `ListRunningModels`. |
-| `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, and `extractLMStudioError`. |
+| `backend_llamacpp_test.go` | Tests for llama.cpp arg assembly (including `--api-key` placement), Model resolution, httptest-based health check, and auth header propagation. |
+| `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, `ListRunningModels`, and auth header propagation. |
+| `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, `extractLMStudioError`, and auth header propagation (including the discrimination probes). |
 | `backend_test.go` | Tests for `GetLLMServer` with known and unknown LLM Server names. |
+| `backend_http_test.go` | Tests for `authedGet`/`authedPostJSON` (header present/absent, JSON content type), `authFailedErr`, `redactAPIKeyArgs`, and `applyAPIKeys` (apply and clear on reload). |
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, and `shouldCrossServerUnload`. |
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
@@ -469,6 +483,8 @@ The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle
 `ModelLister` is implemented by LLM Servers that report their currently-loaded Models: llamacpp via `/v1/models`, Ollama via `/api/ps`, LM Studio via `/v1/models`. Discovery uses it on every invocation to know what is actually loaded (instead of relying on a persisted snapshot that can drift from reality when a Model is loaded externally).
 
 `LiveParamsQuerier` is implemented by LLM Servers that report their currently-active parameters: llamacpp via `/props` (n_ctx, total_slots, default generation settings). Used by ADR-0007 drift detection — the launcher compares live params against the freshly resolved Profile instead of a persisted snapshot. Ollama and LM Studio do not implement this; on those backends, model-name match alone is the idempotency signal.
+
+Per-server API keys do not appear in any interface signature: several call paths (`IsServerAlive`, `identifyBackend`, `WaitForHealth`, instance stop/unload) have no `*Config` in scope. Instead each backend struct holds an unexported `apiKey` field, set by `applyAPIKeys` at the end of `LoadConfig` (and thus refreshed on every `Reload`), and attaches it as a `Bearer` header via the helpers in `backend_http.go`. Health-check discrimination is unaffected: a key-protected llama-server still answers its auth-exempt `/health`, and it 401s LM Studio's `/v1/models` probe (a correct rejection); LM Studio's own probes carry the key so they keep working when its token requirement is enabled.
 
 Adding a new LLM Server requires:
 1. Create `backend_<name>.go` implementing `LLMServer` (and optionally `ManagedLLMServer`).

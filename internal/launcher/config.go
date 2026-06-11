@@ -27,29 +27,63 @@ var ErrConfigNotFound = errors.New("config file not found")
 
 // Config represents the top-level YAML configuration file.
 type Config struct {
-	Servers            map[string]bool    `yaml:"servers"`
-	DefaultBackend     string             `yaml:"default_backend"` // deprecated: use defaults.server
-	Endpoints          map[string]string  `yaml:"endpoints"`       // deprecated: merge into servers
-	ModelsDir          string             `yaml:"models_dir"`
-	LogDir             string             `yaml:"log_dir"`
-	LogRetention       *int               `yaml:"log_retention"`
-	AutoClose          *bool              `yaml:"auto_close"`
-	AutoStopServer     *bool              `yaml:"auto_stop_server"`
-	AutoUnload         *bool              `yaml:"auto_unload"`
-	DisplayCentered    *bool              `yaml:"display_centered"`
-	SortAlphabetically *bool              `yaml:"sort_alphabetically"`
-	ShowMemoryStatus   *bool              `yaml:"show_memory_status"`
-	MemoryStatusFormat *string            `yaml:"memory_status_format"`
-	MemoryStatusBar    *MemoryStatusBar   `yaml:"memory_status_bar"`
-	RefreshDuration    *int               `yaml:"refresh_duration"`
-	Defaults           ProfileParams      `yaml:"defaults"`
-	Profiles           map[string]Profile `yaml:"profiles"`
+	Servers            map[string]ServerConfig `yaml:"servers"`
+	DefaultBackend     string                  `yaml:"default_backend"` // deprecated: use defaults.server
+	Endpoints          map[string]string       `yaml:"endpoints"`       // deprecated: merge into servers
+	ModelsDir          string                  `yaml:"models_dir"`
+	LogDir             string                  `yaml:"log_dir"`
+	LogRetention       *int                    `yaml:"log_retention"`
+	AutoClose          *bool                   `yaml:"auto_close"`
+	AutoStopServer     *bool                   `yaml:"auto_stop_server"`
+	AutoUnload         *bool                   `yaml:"auto_unload"`
+	DisplayCentered    *bool                   `yaml:"display_centered"`
+	SortAlphabetically *bool                   `yaml:"sort_alphabetically"`
+	ShowMemoryStatus   *bool                   `yaml:"show_memory_status"`
+	MemoryStatusFormat *string                 `yaml:"memory_status_format"`
+	MemoryStatusBar    *MemoryStatusBar        `yaml:"memory_status_bar"`
+	RefreshDuration    *int                    `yaml:"refresh_duration"`
+	Defaults           ProfileParams           `yaml:"defaults"`
+	Profiles           map[string]Profile      `yaml:"profiles"`
 
 	ConfigPath   string          `yaml:"-"`
 	Warnings     []string        `yaml:"-"`
 	profileOrder []string        `yaml:"-"`
 	memTpl       *MemoryTemplate `yaml:"-"`
 	memTplKey    string          `yaml:"-"`
+}
+
+// ServerConfig holds the per-server settings from the servers section.
+type ServerConfig struct {
+	Enabled bool
+	APIKey  string
+}
+
+// UnmarshalYAML accepts both forms of a servers entry: the plain bool form
+// ("llamacpp: true") and the mapping form ("llamacpp: {enabled: true,
+// api_key: ...}"). In the mapping form, enabled defaults to true.
+func (s *ServerConfig) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var enabled bool
+		if err := node.Decode(&enabled); err != nil {
+			return fmt.Errorf("server entry must be a bool or a mapping: %w", err)
+		}
+		*s = ServerConfig{Enabled: enabled}
+		return nil
+	case yaml.MappingNode:
+		var raw struct {
+			Enabled *bool  `yaml:"enabled"`
+			APIKey  string `yaml:"api_key"`
+		}
+		if err := node.Decode(&raw); err != nil {
+			return fmt.Errorf("server entry: %w", err)
+		}
+		s.Enabled = raw.Enabled == nil || *raw.Enabled
+		s.APIKey = raw.APIKey
+		return nil
+	default:
+		return fmt.Errorf("server entry must be a bool or a mapping")
+	}
 }
 
 // MemoryStatusBar configures the default geometry and colors for
@@ -172,7 +206,13 @@ func (c *Config) MenuRefreshInterval() time.Duration {
 }
 
 func (c *Config) IsServerEnabled(name string) bool {
-	return c.Servers[name]
+	return c.Servers[name].Enabled
+}
+
+// APIKeyFor returns the configured API key for the named server with
+// surrounding whitespace trimmed, or "" when no key is set.
+func (c *Config) APIKeyFor(name string) string {
+	return strings.TrimSpace(c.Servers[name].APIKey)
 }
 
 // Profile represents a named model configuration within the YAML config.
@@ -289,6 +329,7 @@ func LoadConfig(path string) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	applyAPIKeys(cfg)
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
@@ -335,8 +376,8 @@ func (c *Config) validate() error {
 		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
 	}
 	var enabledServers []string
-	for name, enabled := range c.Servers {
-		if enabled {
+	for name, sc := range c.Servers {
+		if sc.Enabled {
 			enabledServers = append(enabledServers, name)
 		}
 	}
@@ -347,8 +388,27 @@ func (c *Config) validate() error {
 		c.Defaults.Server = &enabledServers[0]
 	}
 	c.Warnings = c.defaultsServerFallbackWarnings(enabledServers)
+	c.Warnings = append(c.Warnings, c.apiKeyWarnings()...)
 	c.Warnings = append(c.Warnings, c.memoryBarWarnings()...)
 	return nil
+}
+
+// apiKeyWarnings reports api_key values carrying leading or trailing
+// whitespace; APIKeyFor uses the trimmed value.
+func (c *Config) apiKeyWarnings() []string {
+	var names []string
+	for name, sc := range c.Servers {
+		if sc.APIKey != strings.TrimSpace(sc.APIKey) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	warnings := make([]string, 0, len(names))
+	for _, name := range names {
+		warnings = append(warnings, fmt.Sprintf(
+			"servers.%s: api_key has leading/trailing whitespace — using the trimmed value", name))
+	}
+	return warnings
 }
 
 // defaultsServerFallbackWarnings returns one deprecation warning per profile
@@ -398,8 +458,8 @@ func (c *Config) validateAll() []string {
 			}
 		}
 		var enabledServers []string
-		for name, enabled := range c.Servers {
-			if enabled {
+		for name, sc := range c.Servers {
+			if sc.Enabled {
 				enabledServers = append(enabledServers, name)
 			}
 		}
@@ -410,6 +470,7 @@ func (c *Config) validateAll() []string {
 			c.Defaults.Server = &enabledServers[0]
 		}
 		problems = append(problems, c.defaultsServerFallbackWarnings(enabledServers)...)
+		problems = append(problems, c.apiKeyWarnings()...)
 	}
 
 	if c.LogRetention != nil && *c.LogRetention < 0 {
@@ -476,11 +537,11 @@ func (c *Config) ResolveProfile(name string) (*ResolvedProfile, error) {
 	if backendName == "" {
 		return nil, fmt.Errorf("profile %q: no server specified (set server in defaults or profile)", name)
 	}
-	enabled, listed := c.Servers[backendName]
+	sc, listed := c.Servers[backendName]
 	if !listed {
 		return nil, fmt.Errorf("profile %q: server %q not listed in servers section", name, backendName)
 	}
-	if !enabled {
+	if !sc.Enabled {
 		return nil, fmt.Errorf("profile %q: server %q is disabled", name, backendName)
 	}
 

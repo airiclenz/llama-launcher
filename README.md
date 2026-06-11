@@ -71,6 +71,24 @@ The first time you run `llama-launcher` without an existing config, this file is
 # Enable the servers available on your system.
 # Binaries are auto-detected from PATH; default ports are
 # per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234).
+#
+# Each entry is either a plain bool or a mapping with an optional API key:
+#
+#   llamacpp:
+#     enabled: true        # optional in the mapping form, defaults to true
+#     api_key: "secret"    # optional
+#
+# What api_key does depends on the server:
+#
+#   llamacpp   — passed as --api-key at launch; llama-server then rejects
+#                client requests without "Authorization: Bearer <key>".
+#                Note: the key is visible in the process arguments (ps).
+#   lmstudio   — LM Studio manages its own key: enable "Require API token"
+#                in its Server Settings and paste the generated token here
+#                so the launcher's health checks and model loads still work.
+#   ollama     — Ollama has no native auth; set a key only when the
+#                instance sits behind an authenticating reverse proxy.
+#                The launcher then sends the key with its own requests.
 
 servers:
   llamacpp: true
@@ -183,7 +201,8 @@ sort_alphabetically: true
 # memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
 
 # Default geometry and colors for {..._pct:bar} tokens. Inline parts on a
-# token override these per bar.
+# token override these per bar. Colors accept a name, a 256-color palette
+# index ("240"), or a hex value ("#7aa2f7").
 # memory_status_bar:
 #   width: 10        # cells, clamped to 1–40
 #   color: green     # filled portion
@@ -384,6 +403,30 @@ See the [technical design doc](llama-launcher.TDD.md) for full schema details an
 
 For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)).
 
+### API keys
+
+Each entry in the `servers` section can carry an optional API key by switching from the bool form to the mapping form (`enabled` defaults to `true` when omitted):
+
+```yaml
+servers:
+  llamacpp:
+    api_key: "secret"
+  lmstudio:
+    enabled: true
+    api_key: "lm-studio-abc123..."
+  ollama: false
+```
+
+The launcher is not a proxy, so what the key does depends on the backend:
+
+| Backend | Effect of `api_key` |
+|---------|---------------------|
+| `llamacpp` | Passed as `--api-key` when the server is launched — llama-server then rejects client requests without `Authorization: Bearer <key>` (its `/health` endpoint stays open). |
+| `lmstudio` | LM Studio manages its own token: enable *Require API token* in its Server Settings, generate a token there, and paste it here so the launcher's health checks and model loads keep working. |
+| `ollama` | Ollama has no native authentication. Set a key only when the instance sits behind an authenticating reverse proxy; the launcher then sends it with its own requests. |
+
+In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). Keep in mind that the key is stored as plaintext in `config.yaml` (created with mode 0600) and, for `llamacpp`, is visible in the server's process arguments (`ps`).
+
 ## Usage
 
 ### Interactive mode
@@ -413,6 +456,10 @@ llama-launcher status [--json]              # Show all running instances (--json
 llama-launcher list [--json]                # List available profiles (--json for structured output)
 llama-launcher logs [target] [-f]           # Tail an instance's log
 llama-launcher logs clean [--days N|--all]  # Remove old log files
+llama-launcher config validate              # Check config file for errors
+llama-launcher config init [--force]        # Generate example config (--force overwrites)
+llama-launcher config reset                 # Reset config to the example (overwrites)
+llama-launcher version                      # Print version
 ```
 
 ### Options

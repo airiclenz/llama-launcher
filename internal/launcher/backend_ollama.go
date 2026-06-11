@@ -17,18 +17,20 @@ import (
 type Ollama struct {
 	lastPID     int
 	lastLogFile string
+	apiKey      string
 }
 
 func init() {
 	RegisterLLMServer(&Ollama{})
 }
 
-func (b *Ollama) Name() string        { return "ollama" }
-func (b *Ollama) DisplayName() string { return "Ollama" }
-func (b *Ollama) DefaultAddr() string { return "localhost:11434" }
+func (b *Ollama) Name() string         { return "ollama" }
+func (b *Ollama) DisplayName() string  { return "Ollama" }
+func (b *Ollama) DefaultAddr() string  { return "localhost:11434" }
+func (b *Ollama) setAPIKey(key string) { b.apiKey = key }
 
 func (b *Ollama) HealthCheck(addr string) error {
-	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/")
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/", b.apiKey)
 	if err != nil {
 		return err
 	}
@@ -56,16 +58,15 @@ func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 		"keep_alive": "24h",
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := (&http.Client{Timeout: modelLoadTimeout}).Post(
-		"http://"+addr+"/api/generate",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	resp, err := authedPostJSON(modelLoadTimeout, "http://"+addr+"/api/generate", b.apiKey, body)
 	if err != nil {
 		return fmt.Errorf("loading model via Ollama API: %w", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Ollama load returned status %d", resp.StatusCode)
 	}
@@ -78,16 +79,15 @@ func (b *Ollama) UnloadModel(addr string, modelID string) error {
 		"keep_alive": 0,
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Post(
-		"http://"+addr+"/api/generate",
-		"application/json",
-		bytes.NewReader(body),
-	)
+	resp, err := authedPostJSON(30*time.Second, "http://"+addr+"/api/generate", b.apiKey, body)
 	if err != nil {
 		return fmt.Errorf("unloading model via Ollama API: %w", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Ollama unload returned status %d", resp.StatusCode)
 	}
@@ -158,14 +158,17 @@ func (b *Ollama) TryStop(_ string) error {
 }
 
 func (b *Ollama) LastStartedPID() int        { return b.lastPID }
-func (b *Ollama) LastStartedLogFile() string  { return b.lastLogFile }
+func (b *Ollama) LastStartedLogFile() string { return b.lastLogFile }
 
 func (b *Ollama) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + addr + "/api/ps")
+	resp, err := authedGet(5*time.Second, "http://"+addr+"/api/ps", b.apiKey)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return nil, err
+	}
 
 	var result struct {
 		Models []struct {

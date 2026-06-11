@@ -18,6 +18,24 @@
 # Enable the servers available on your system.
 # Binaries are auto-detected from PATH; default ports are
 # per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234).
+#
+# Each entry is either a plain bool or a mapping with an optional API key:
+#
+#   llamacpp:
+#     enabled: true        # optional in the mapping form, defaults to true
+#     api_key: "secret"    # optional
+#
+# What api_key does depends on the server:
+#
+#   llamacpp   — passed as --api-key at launch; llama-server then rejects
+#                client requests without "Authorization: Bearer <key>".
+#                Note: the key is visible in the process arguments (ps).
+#   lmstudio   — LM Studio manages its own key: enable "Require API token"
+#                in its Server Settings and paste the generated token here
+#                so the launcher's health checks and model loads still work.
+#   ollama     — Ollama has no native auth; set a key only when the
+#                instance sits behind an authenticating reverse proxy.
+#                The launcher then sends the key with its own requests.
 
 servers:
   llamacpp: true

@@ -300,3 +300,62 @@ func TestExtractLMStudioError(t *testing.T) {
 		})
 	}
 }
+
+func TestLMStudioAuthHeaders(t *testing.T) {
+	t.Parallel()
+
+	srv, authFor := recordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Write([]byte(`{"data":[{"id":"m"}]}`))
+		default:
+			// LM Studio answers unknown paths with an error body; the
+			// discrimination probes rely on exactly that shape.
+			w.Write([]byte(`{"error":"Unexpected endpoint or method."}`))
+		}
+	})
+	addr := addrFromURL(t, srv.URL)
+
+	b := &LMStudio{apiKey: "k"}
+	if err := b.HealthCheck(addr); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if err := b.LoadModel(addr, &ResolvedProfile{ModelPath: "m"}); err != nil {
+		t.Fatalf("LoadModel: %v", err)
+	}
+	if err := b.UnloadModel(addr, "m"); err != nil {
+		t.Fatalf("UnloadModel: %v", err)
+	}
+	if _, err := b.ListRunningModels(addr); err != nil {
+		t.Fatalf("ListRunningModels: %v", err)
+	}
+	for _, path := range []string{"/v1/models", "/health", "/api/tags", "/api/v1/models/load", "/api/v1/models/unload"} {
+		if got := authFor(path); got != "Bearer k" {
+			t.Errorf("Authorization on %s = %q, want %q", path, got, "Bearer k")
+		}
+	}
+
+	noKey := &LMStudio{}
+	if err := noKey.HealthCheck(addr); err != nil {
+		t.Fatalf("HealthCheck without key: %v", err)
+	}
+	if got := authFor("/v1/models"); got != "" {
+		t.Errorf("Authorization without key = %q, want empty", got)
+	}
+}
+
+func TestLMStudioAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	b := &LMStudio{}
+	err := b.HealthCheck(addrFromURL(t, srv.URL))
+	if err == nil || !strings.Contains(err.Error(), "api_key") {
+		t.Errorf("error = %v, want actionable api_key message", err)
+	}
+}

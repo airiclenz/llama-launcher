@@ -25,6 +25,26 @@ type LLMServer interface {
 	TryStop(addr string) error
 }
 
+// apiKeyConfigurable is implemented by LLM Servers that accept a per-server
+// API key for the launcher's own HTTP calls (and, for managed servers, for
+// enforcing client auth at launch).
+type apiKeyConfigurable interface {
+	setAPIKey(key string)
+}
+
+// applyAPIKeys pushes the configured per-server API keys onto the registered
+// backends. Keys are applied unconditionally — including the empty string —
+// so removing a key from the config takes effect on reload. Called from
+// LoadConfig on the menu/CLI goroutine before any probe goroutines are
+// spawned, so no further synchronization is needed.
+func applyAPIKeys(cfg *Config) {
+	for name, b := range llmServers {
+		if configurable, ok := b.(apiKeyConfigurable); ok {
+			configurable.setAPIKey(cfg.APIKeyFor(name))
+		}
+	}
+}
+
 // ManagedLLMServer is implemented by LLM Servers where the launcher forks and
 // owns the server process (e.g. llama.cpp).
 type ManagedLLMServer interface {

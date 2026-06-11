@@ -180,3 +180,28 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+func TestFormatProfileParams_RedactsAPIKey(t *testing.T) {
+	t.Parallel()
+
+	profile := &ResolvedProfile{
+		Backend:   "llamacpp",
+		ModelPath: "test-model",
+		ExtraArgs: []string{"--api-key", "secret", "--no-warmup"},
+	}
+	lines := formatProfileParams(profile)
+	for _, line := range lines {
+		if contains(line, "secret") {
+			t.Errorf("api key leaked into popup line: %q", line)
+		}
+	}
+	found := false
+	for _, line := range lines {
+		if contains(line, "--api-key") && contains(line, "***") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected redacted --api-key line, got: %v", lines)
+	}
+}

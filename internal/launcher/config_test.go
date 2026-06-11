@@ -217,7 +217,7 @@ func TestProfileNames(t *testing.T) {
 
 	server := "llamacpp"
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		Defaults: ProfileParams{Server: &server},
 		Profiles: map[string]Profile{
 			"charlie": {Description: "C"},
@@ -245,7 +245,7 @@ func TestProfileNames_FavouritesFirst(t *testing.T) {
 	defaultServer := "llamacpp"
 	otherServer := "ollama"
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true, "ollama": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}, "ollama": {Enabled: true}},
 		Defaults: ProfileParams{Server: &defaultServer},
 		Profiles: map[string]Profile{
 			"zeta-default":  {Description: "Z default"},
@@ -287,7 +287,7 @@ func TestProfileNames_ConfigOrder(t *testing.T) {
 	server := "llamacpp"
 	sortFalse := false
 	cfg := &Config{
-		Servers:            map[string]bool{"llamacpp": true},
+		Servers:            map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		Defaults:           ProfileParams{Server: &server},
 		SortAlphabetically: &sortFalse,
 		Profiles: map[string]Profile{
@@ -318,7 +318,7 @@ func TestProfileNames_ConfigOrder_FiltersDisabledServers(t *testing.T) {
 	otherServer := "ollama"
 	sortFalse := false
 	cfg := &Config{
-		Servers:            map[string]bool{"llamacpp": true, "ollama": false},
+		Servers:            map[string]ServerConfig{"llamacpp": {Enabled: true}, "ollama": {Enabled: false}},
 		Defaults:           ProfileParams{Server: &defaultServer},
 		SortAlphabetically: &sortFalse,
 		Profiles: map[string]Profile{
@@ -347,7 +347,7 @@ func TestProfileNames_DefaultsToAlphabetic(t *testing.T) {
 
 	server := "llamacpp"
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		Defaults: ProfileParams{Server: &server},
 		Profiles: map[string]Profile{
 			"charlie": {Description: "C"},
@@ -428,7 +428,7 @@ func TestResolveProfile(t *testing.T) {
 
 		strPtr := func(v string) *string { return &v }
 		cfg := &Config{
-			Servers:   map[string]bool{"llamacpp": true},
+			Servers:   map[string]ServerConfig{"llamacpp": {Enabled: true}},
 			ModelsDir: dir,
 			Defaults:  ProfileParams{Server: strPtr("llamacpp")},
 			Profiles: map[string]Profile{
@@ -453,7 +453,7 @@ func TestResolveProfile(t *testing.T) {
 		t.Parallel()
 
 		cfg := &Config{
-			Servers:  map[string]bool{"llamacpp": true},
+			Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
 			Defaults: ProfileParams{Server: func() *string { s := "llamacpp"; return &s }()},
 			Profiles: map[string]Profile{},
 		}
@@ -647,7 +647,7 @@ func TestValidateAll_DefaultsServerFallbackWarning(t *testing.T) {
 
 	server := "llamacpp"
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true, "ollama": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}, "ollama": {Enabled: true}},
 		Defaults: ProfileParams{Server: &server},
 		Profiles: map[string]Profile{
 			"no-server": {Model: "test.gguf"},
@@ -671,7 +671,7 @@ func TestConfiguredBackendAddr(t *testing.T) {
 
 	server := "llamacpp"
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		Defaults: ProfileParams{Server: &server},
 	}
 
@@ -789,7 +789,7 @@ func TestValidateAll(t *testing.T) {
 
 		server := "llamacpp"
 		cfg := &Config{
-			Servers:   map[string]bool{"llamacpp": true},
+			Servers:   map[string]ServerConfig{"llamacpp": {Enabled: true}},
 			ModelsDir: dir,
 			Defaults:  ProfileParams{Server: &server},
 			Profiles: map[string]Profile{
@@ -807,7 +807,7 @@ func TestValidateAll(t *testing.T) {
 		cfg := &Config{
 			DefaultBackend: "llamacpp",
 			Endpoints:      map[string]string{"llamacpp": "localhost:8080"},
-			Servers:        map[string]bool{},
+			Servers:        map[string]ServerConfig{},
 			Profiles:       map[string]Profile{},
 		}
 		problems := cfg.validateAll()
@@ -819,7 +819,7 @@ func TestValidateAll(t *testing.T) {
 	t.Run("reports deprecated backend in profiles", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
-			Servers: map[string]bool{"llamacpp": true},
+			Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}},
 			Profiles: map[string]Profile{
 				"test": {Backend: "llamacpp", Model: "test.gguf"},
 			},
@@ -840,7 +840,7 @@ func TestValidateAll(t *testing.T) {
 		t.Parallel()
 		server := "llamacpp"
 		cfg := &Config{
-			Servers:   map[string]bool{"llamacpp": true},
+			Servers:   map[string]ServerConfig{"llamacpp": {Enabled: true}},
 			ModelsDir: "/nonexistent/models",
 			Defaults:  ProfileParams{Server: &server},
 			Profiles: map[string]Profile{
@@ -862,7 +862,7 @@ func TestValidateAll(t *testing.T) {
 	t.Run("reports unknown server", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
-			Servers: map[string]bool{"nonexistent_backend": true},
+			Servers: map[string]ServerConfig{"nonexistent_backend": {Enabled: true}},
 			Profiles: map[string]Profile{
 				"test": {Model: "test.gguf"},
 			},
@@ -882,7 +882,7 @@ func TestValidateAll(t *testing.T) {
 	t.Run("reports no servers enabled", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
-			Servers: map[string]bool{"llamacpp": false},
+			Servers: map[string]ServerConfig{"llamacpp": {Enabled: false}},
 			Profiles: map[string]Profile{
 				"test": {Model: "test.gguf"},
 			},
@@ -1079,5 +1079,102 @@ func TestCompiledMemoryTemplate_Memoization(t *testing.T) {
 	}
 	if cfg.CompiledMemoryTemplate() == nil {
 		t.Error("recompile after replacement should succeed")
+	}
+}
+
+func TestServerConfigUnmarshal(t *testing.T) {
+	t.Parallel()
+
+	writeAndParse := func(t *testing.T, serversYAML string) *Config {
+		t.Helper()
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.yaml")
+		yaml := "servers:\n" + serversYAML + "profiles:\n  test:\n    model: test.gguf\n"
+		if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		cfg, err := parseConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("parseConfig: %v", err)
+		}
+		return cfg
+	}
+
+	t.Run("scalar bool form", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp: true\n  ollama: false\n")
+		if !cfg.Servers["llamacpp"].Enabled {
+			t.Error("llamacpp should be enabled")
+		}
+		if cfg.Servers["ollama"].Enabled {
+			t.Error("ollama should be disabled")
+		}
+		if cfg.APIKeyFor("llamacpp") != "" {
+			t.Error("scalar form must not carry an api key")
+		}
+	})
+
+	t.Run("mapping form with api_key", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp:\n    enabled: true\n    api_key: secret\n")
+		if !cfg.Servers["llamacpp"].Enabled {
+			t.Error("llamacpp should be enabled")
+		}
+		if got := cfg.APIKeyFor("llamacpp"); got != "secret" {
+			t.Errorf("APIKeyFor = %q, want %q", got, "secret")
+		}
+	})
+
+	t.Run("mapping form defaults enabled to true", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp:\n    api_key: secret\n")
+		if !cfg.Servers["llamacpp"].Enabled {
+			t.Error("mapping form without enabled should default to enabled")
+		}
+	})
+
+	t.Run("mapping form with enabled false keeps the key", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp:\n    enabled: false\n    api_key: secret\n")
+		if cfg.Servers["llamacpp"].Enabled {
+			t.Error("llamacpp should be disabled")
+		}
+		if got := cfg.APIKeyFor("llamacpp"); got != "secret" {
+			t.Errorf("APIKeyFor = %q, want %q", got, "secret")
+		}
+	})
+
+	t.Run("invalid scalar returns error", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.yaml")
+		yaml := "servers:\n  llamacpp: maybe\nprofiles:\n  test:\n    model: m\n"
+		if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+		if _, err := parseConfig(cfgPath); err == nil {
+			t.Fatal("expected error for non-bool scalar server entry")
+		}
+	})
+}
+
+func TestAPIKeyWhitespaceWarning(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Servers: map[string]ServerConfig{
+		"llamacpp": {Enabled: true, APIKey: " secret \n"},
+		"ollama":   {Enabled: true, APIKey: "clean"},
+	}}
+
+	if got := cfg.APIKeyFor("llamacpp"); got != "secret" {
+		t.Errorf("APIKeyFor = %q, want trimmed %q", got, "secret")
+	}
+
+	warnings := cfg.apiKeyWarnings()
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one", warnings)
+	}
+	if !strings.Contains(warnings[0], "servers.llamacpp") {
+		t.Errorf("warning = %q, want it to name servers.llamacpp", warnings[0])
 	}
 }

@@ -11,18 +11,21 @@ import (
 )
 
 // LlamaCpp implements LLMServer for llama.cpp's llama-server.
-type LlamaCpp struct{}
+type LlamaCpp struct {
+	apiKey string
+}
 
 func init() {
 	RegisterLLMServer(&LlamaCpp{})
 }
 
-func (b *LlamaCpp) Name() string        { return "llamacpp" }
-func (b *LlamaCpp) DisplayName() string { return "LLaMA.cpp" }
-func (b *LlamaCpp) DefaultAddr() string { return "127.0.0.1:8080" }
+func (b *LlamaCpp) Name() string         { return "llamacpp" }
+func (b *LlamaCpp) DisplayName() string  { return "LLaMA.cpp" }
+func (b *LlamaCpp) DefaultAddr() string  { return "127.0.0.1:8080" }
+func (b *LlamaCpp) setAPIKey(key string) { b.apiKey = key }
 
 func (b *LlamaCpp) HealthCheck(addr string) error {
-	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/health")
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey)
 	if err != nil {
 		return err
 	}
@@ -33,7 +36,9 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 	}
 	// llama-server returns {"status":"ok"}. LM Studio returns 200 for all
 	// paths but with {"error":"..."} — the missing "status" field rejects it.
-	var health struct{ Status string `json:"status"` }
+	var health struct {
+		Status string `json:"status"`
+	}
 	if json.Unmarshal(body, &health) != nil || health.Status == "" {
 		return fmt.Errorf("not llamacpp: /health response missing status field")
 	}
@@ -49,11 +54,14 @@ func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
 // reading /v1/models. The OpenAI-style endpoint returns one entry whose `id`
 // is the model path or alias the server was launched with.
 func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/v1/models")
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", b.apiKey)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("/v1/models returned status %d", resp.StatusCode)
 	}
@@ -81,7 +89,7 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 // /props is available on recent llama.cpp builds; older builds return 404 and
 // this function returns (nil, nil), which paramDrift treats as "no drift".
 func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
-	resp, err := (&http.Client{Timeout: healthCheckTimeout}).Get("http://" + addr + "/props")
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/props", b.apiKey)
 	if err != nil {
 		return nil, err
 	}
@@ -89,20 +97,23 @@ func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("/props returned status %d", resp.StatusCode)
 	}
 	var raw struct {
 		DefaultGenerationSettings struct {
-			NCtx        *int     `json:"n_ctx"`
-			Temperature *float64 `json:"temperature"`
+			NCtx          *int     `json:"n_ctx"`
+			Temperature   *float64 `json:"temperature"`
 			RepeatPenalty *float64 `json:"repeat_penalty"`
-			TopK        *int     `json:"top_k"`
-			TopP        *float64 `json:"top_p"`
-			MinP        *float64 `json:"min_p"`
+			TopK          *int     `json:"top_k"`
+			TopP          *float64 `json:"top_p"`
+			MinP          *float64 `json:"min_p"`
 		} `json:"default_generation_settings"`
-		TotalSlots *int    `json:"total_slots"`
-		ModelPath  string  `json:"model_path"`
+		TotalSlots *int   `json:"total_slots"`
+		ModelPath  string `json:"model_path"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing /props response: %w", err)
@@ -203,6 +214,12 @@ func (b *LlamaCpp) BuildServerArgs(cfg *Config, profile *ResolvedProfile) []stri
 	}
 	if params.Jinja != nil && *params.Jinja {
 		args = append(args, "--jinja")
+	}
+
+	// Placed before extra_args so a user-supplied --api-key override wins
+	// (llama-server uses the last occurrence of a repeated flag).
+	if key := cfg.APIKeyFor(b.Name()); key != "" {
+		args = append(args, "--api-key", key)
 	}
 
 	args = append(args, profile.ExtraArgs...)

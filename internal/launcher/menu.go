@@ -487,7 +487,7 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 	}
 
 	if len(profile.ExtraArgs) > 0 {
-		add("Extra args", strings.Join(profile.ExtraArgs, " "))
+		add("Extra args", strings.Join(redactAPIKeyArgs(profile.ExtraArgs), " "))
 	}
 
 	return lines
@@ -612,8 +612,8 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 // flicker in and out as profiles are edited.
 func hasMultipleBackends(cfg *Config) bool {
 	count := 0
-	for _, enabled := range cfg.Servers {
-		if enabled {
+	for _, sc := range cfg.Servers {
+		if sc.Enabled {
 			count++
 		}
 	}

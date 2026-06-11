@@ -225,3 +225,47 @@ func TestOllamaListRunningModels(t *testing.T) {
 		}
 	})
 }
+
+func TestOllamaAuthHeaders(t *testing.T) {
+	t.Parallel()
+
+	srv, authFor := recordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Write([]byte("Ollama is running"))
+		case "/api/ps":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"models":[]}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	})
+	addr := addrFromURL(t, srv.URL)
+
+	b := &Ollama{apiKey: "k"}
+	if err := b.HealthCheck(addr); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if err := b.LoadModel(addr, &ResolvedProfile{ModelPath: "m"}); err != nil {
+		t.Fatalf("LoadModel: %v", err)
+	}
+	if err := b.UnloadModel(addr, "m"); err != nil {
+		t.Fatalf("UnloadModel: %v", err)
+	}
+	if _, err := b.ListRunningModels(addr); err != nil {
+		t.Fatalf("ListRunningModels: %v", err)
+	}
+	for _, path := range []string{"/", "/api/generate", "/api/ps"} {
+		if got := authFor(path); got != "Bearer k" {
+			t.Errorf("Authorization on %s = %q, want %q", path, got, "Bearer k")
+		}
+	}
+
+	noKey := &Ollama{}
+	if err := noKey.HealthCheck(addr); err != nil {
+		t.Fatalf("HealthCheck without key: %v", err)
+	}
+	if got := authFor("/"); got != "" {
+		t.Errorf("Authorization without key = %q, want empty", got)
+	}
+}

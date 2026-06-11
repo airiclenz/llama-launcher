@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Per-server API keys.** Entries in the `servers:` section now accept a mapping form alongside the plain bool: `llamacpp: {enabled: true, api_key: "secret"}` (`enabled` defaults to `true` when omitted). For `llamacpp` the key is passed as `--api-key` at launch, so llama-server rejects client requests without `Authorization: Bearer <key>` (`/health` stays open). For `lmstudio` the key is the token generated in LM Studio's own *Require API token* setting — the launcher sends it so its health checks and model loads keep working when that setting is on. For `ollama`, which has no native auth, a key is only useful behind an authenticating reverse proxy. In all cases the launcher attaches the key as a `Bearer` header to every HTTP call it makes to that server; 401/403 responses now produce an actionable "check api_key" error, the key is trimmed of stray whitespace with a load-time warning, and a `--api-key` value appearing in `extra_args` is masked as `***` in the "Show model config" pop-up.
+
 ## 1.4.2
 
 ### Added

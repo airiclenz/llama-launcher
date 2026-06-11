@@ -114,6 +114,35 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 			t.Errorf("extra args not appended correctly: %v", args)
 		}
 	})
+
+	t.Run("api key from server config is passed before extra args", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true, APIKey: "secret"},
+		}}
+		profile := &ResolvedProfile{ExtraArgs: []string{"--no-warmup"}}
+
+		args := b.BuildServerArgs(cfg, profile)
+		assertArg(t, toArgMap(args), "--api-key", "secret")
+		if args[len(args)-1] != "--no-warmup" {
+			t.Errorf("extra args must come after --api-key, got: %v", args)
+		}
+	})
+
+	t.Run("no api key omits the flag", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+		}}
+		args := b.BuildServerArgs(cfg, &ResolvedProfile{})
+		for _, arg := range args {
+			if arg == "--api-key" {
+				t.Errorf("unexpected --api-key in args: %v", args)
+			}
+		}
+	})
 }
 
 func TestLlamaCppResolveModel(t *testing.T) {
@@ -184,7 +213,7 @@ func TestLlamaCppServerBinary(t *testing.T) {
 	t.Parallel()
 
 	b := &LlamaCpp{}
-	cfg := &Config{Servers: map[string]bool{"llamacpp": true}}
+	cfg := &Config{Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}}}
 	if got := b.ServerBinary(cfg); got != "llama-server" {
 		t.Errorf("ServerBinary = %q, want llama-server", got)
 	}
@@ -247,6 +276,62 @@ func TestLlamaCppHealthCheck(t *testing.T) {
 			t.Fatal("expected error for unreachable server")
 		}
 	})
+}
+
+func TestLlamaCppAuthHeaders(t *testing.T) {
+	t.Parallel()
+
+	srv, authFor := recordingServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/health":
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			w.Write([]byte(`{"data":[{"id":"m"}]}`))
+		case "/props":
+			w.Write([]byte(`{}`))
+		}
+	})
+	addr := addrFromURL(t, srv.URL)
+
+	b := &LlamaCpp{apiKey: "k"}
+	if err := b.HealthCheck(addr); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	if _, err := b.ListRunningModels(addr); err != nil {
+		t.Fatalf("ListRunningModels: %v", err)
+	}
+	if _, err := b.QueryLiveParams(addr); err != nil {
+		t.Fatalf("QueryLiveParams: %v", err)
+	}
+	for _, path := range []string{"/health", "/v1/models", "/props"} {
+		if got := authFor(path); got != "Bearer k" {
+			t.Errorf("Authorization on %s = %q, want %q", path, got, "Bearer k")
+		}
+	}
+
+	noKey := &LlamaCpp{}
+	if err := noKey.HealthCheck(addr); err != nil {
+		t.Fatalf("HealthCheck without key: %v", err)
+	}
+	if got := authFor("/health"); got != "" {
+		t.Errorf("Authorization without key = %q, want empty", got)
+	}
+}
+
+func TestLlamaCppAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	b := &LlamaCpp{apiKey: "wrong"}
+	_, err := b.ListRunningModels(addrFromURL(t, srv.URL))
+	if err == nil || !strings.Contains(err.Error(), "api_key") {
+		t.Errorf("error = %v, want actionable api_key message", err)
+	}
 }
 
 // --- test helpers ---

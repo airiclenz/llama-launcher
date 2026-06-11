@@ -98,7 +98,7 @@ func TestLlamaCppQueryLiveParams(t *testing.T) {
 func TestDiscoverRunningInstances_NoBackendsReachable(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		LogDir:   t.TempDir(),
 		Profiles: map[string]Profile{},
 	}
@@ -138,7 +138,7 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 
 	host, portInt := hostPort(t, srv.URL)
 	cfg := &Config{
-		Servers:  map[string]bool{"llamacpp": true},
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		LogDir:   t.TempDir(),
 		Profiles: map[string]Profile{},
 	}
@@ -175,7 +175,7 @@ func TestMatchProfileName(t *testing.T) {
 	host := "127.0.0.1"
 	port := 9090
 	cfg := &Config{
-		Servers:   map[string]bool{"llamacpp": true},
+		Servers:   map[string]ServerConfig{"llamacpp": {Enabled: true}},
 		ModelsDir: modelsDir,
 		Profiles: map[string]Profile{
 			"oss": {Model: "gpt-oss-20b-MXFP4.gguf"},
