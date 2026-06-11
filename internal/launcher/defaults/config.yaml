@@ -164,7 +164,11 @@ defaults:
 # Profile parameters override any parameter from the defaults block.
 #
 # Profile fields:
-#   description   Human-readable label shown in the menu
+#   title         Optional human-readable label shown wherever the profile
+#                 appears (menus, status header). Falls back to the profile
+#                 name when unset.
+#   description   Optional longer text shown only in the "Show model config"
+#                 pop-up.
 #   model         Model reference (file path for llamacpp, name for ollama,
 #                 publisher/repo/file for lmstudio)
 #   server        Server to use (llamacpp, ollama, lmstudio)
@@ -177,6 +181,7 @@ profiles:
   # ── llama.cpp example ──────────────────────────────────────
   # Model is a file path, resolved relative to models_dir.
   example:
+    title: "Example Model"
     description: "Example profile"
     server: llamacpp
     model: your-model-file.gguf

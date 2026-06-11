@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Optional `title` profile field.** A human-readable label shown wherever a profile is presented to the user: the status header, the profile selection lists (server stopped / running with no model), the "Switch model" pop-up, the unload picker, and the load progress text. When unset, the profile name is shown instead. `list --json` includes the new field (`title`, omitted when empty).
+
+### Changed
+
+- **`description` is demoted to an optional, popup-only field.** Menus and the status header no longer render the description next to the profile name; it now appears only as a `Description` line in the "Show model config" pop-up, when set. The pop-up's frame title is the profile's `title` (or name) instead of the description. In `list --json`, `description` is omitted when empty instead of being emitted as `""`.
+- **Status header no longer repeats the server-reported model name.** When a running instance matches a configured profile, the header shows `address · title-or-name` only; the raw model id from the server is shown only when no profile matches.
+
 ### Fixed
 
 - **Externally loaded models now match their profile.** `matchProfileName` and the `load` idempotency check (ADR-0007) compared the profile's fully resolved model path against the name the server reports verbatim. Servers started outside the launcher report whatever path or alias they were launched with — llama-server defaults the id to the model file's basename — so the comparison never succeeded: "Show model config" said `No matching profile in config` and `load` would needlessly restart a server already serving the right model. Matching now falls back to basename comparison (`modelNamesMatch`); an exact path match still wins over a basename match, and ambiguity (several profiles sharing a basename) yields no match, as before.

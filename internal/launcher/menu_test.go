@@ -63,11 +63,11 @@ func TestFormatUptime(t *testing.T) {
 func TestProfileDisplayName(t *testing.T) {
 	t.Parallel()
 
-	t.Run("with description", func(t *testing.T) {
+	t.Run("with title", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
 			Profiles: map[string]Profile{
-				"test": {Description: "My Test Profile"},
+				"test": {Title: "My Test Profile"},
 			},
 		}
 		got := profileDisplayName(cfg, "test")
@@ -76,11 +76,11 @@ func TestProfileDisplayName(t *testing.T) {
 		}
 	})
 
-	t.Run("without description", func(t *testing.T) {
+	t.Run("without title falls back to profile name", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
 			Profiles: map[string]Profile{
-				"test": {},
+				"test": {Description: "Only shown in the config popup"},
 			},
 		}
 		got := profileDisplayName(cfg, "test")

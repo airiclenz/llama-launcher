@@ -62,12 +62,22 @@ type LiveParamsQuerier interface {
 // ResolvedProfile holds a fully merged profile ready for use by a backend.
 type ResolvedProfile struct {
 	Name        string
+	Title       string
 	Description string
 	ModelRef    string // original model reference from config (e.g. relative path, identifier)
 	ModelPath   string // absolute resolved path on disk
 	Backend     string
 	ExtraArgs   []string
 	ProfileParams
+}
+
+// DisplayName returns the label shown wherever the profile is presented to
+// the user: the optional title when set, otherwise the profile name.
+func (p *ResolvedProfile) DisplayName() string {
+	if p.Title != "" {
+		return p.Title
+	}
+	return p.Name
 }
 
 var llmServers = map[string]LLMServer{}

@@ -100,7 +100,8 @@ func (c *Config) IsServerEnabled(name string) bool {
 
 // Profile represents a named model configuration within the YAML config.
 type Profile struct {
-	Description   string   `yaml:"description"`
+	Title         string   `yaml:"title,omitempty"`
+	Description   string   `yaml:"description,omitempty"`
 	Model         string   `yaml:"model"`
 	Backend       string   `yaml:"backend"`
 	IsFavourite   bool     `yaml:"is_favourite,omitempty"`
@@ -418,6 +419,7 @@ func (c *Config) ResolveProfile(name string) (*ResolvedProfile, error) {
 
 	return &ResolvedProfile{
 		Name:          name,
+		Title:         profile.Title,
 		Description:   profile.Description,
 		ModelRef:      profile.Model,
 		ModelPath:     modelPath,

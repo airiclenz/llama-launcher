@@ -15,8 +15,6 @@
   - `formatProfileParams` already exists; this is mostly UI wiring to show a side-by-side or delta view
   - Helps users confirm they're switching to the right configuration before waiting for the server restart
 
-- [ ] Show a model description only in Model Config Details pop-up. Use only the profile name in the menu. This needs to demote the profile attribute `description` to optional.
-
 - [ ] Add a second timer for status updates:
 	- Update server running / model loaded polling as it is right now based on the config value `refresh_duration`
 	- Update teh memory status / free mem / GPU utilization / ... each second.

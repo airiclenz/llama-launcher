@@ -241,10 +241,7 @@ func doLoadProfile(cfg *Config, name string) error {
 		return err
 	}
 
-	displayName := profile.Description
-	if displayName == "" {
-		displayName = name
-	}
+	displayName := profile.DisplayName()
 
 	var progress ProgressFunc
 	if isTerminal() {
@@ -345,14 +342,11 @@ func doUnloadModel(cfg *Config) error {
 	} else {
 		items := make([]menuItem, len(loaded))
 		for i, inst := range loaded {
-			label := inst.ActiveProfile
-			if label == "" {
+			label := profileDisplayName(cfg, inst.ActiveProfile)
+			if inst.ActiveProfile == "" {
 				label = inst.ActiveModel
 			}
-			items[i] = menuItem{
-				Label:       label,
-				Description: profileDisplayName(cfg, inst.ActiveProfile),
-			}
+			items[i] = menuItem{Label: label}
 		}
 		title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 		headerFn := func() ([]string, bool) {
@@ -417,7 +411,7 @@ func doShowConfig(cfg *Config, inst *RunningInstance) error {
 	if err != nil {
 		return err
 	}
-	showPopup(profile.Description, formatProfileParams(profile))
+	showPopup(profile.DisplayName(), formatProfileParams(profile))
 	return nil
 }
 
@@ -434,6 +428,9 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 		lines = append(lines, fmt.Sprintf("%s%-18s%s %s", cDim, label, cReset, value))
 	}
 
+	if profile.Description != "" {
+		add("Description", profile.Description)
+	}
 	add("Backend", backendDisplayName(profile.Backend))
 	add("Model", profile.ModelPath)
 
@@ -497,8 +494,8 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 }
 
 func profileDisplayName(cfg *Config, profileName string) string {
-	if p, ok := cfg.Profiles[profileName]; ok && p.Description != "" {
-		return p.Description
+	if p, ok := cfg.Profiles[profileName]; ok && p.Title != "" {
+		return p.Title
 	}
 	return profileName
 }
@@ -528,11 +525,11 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	hasMixed := hasMultipleBackends(cfg)
 	anyFav := anyProfileFavourite(cfg, names)
 
-	maxNameLen := 0
+	maxLabelLen := 0
 	maxTagLen := 0
 	for _, name := range names {
-		if len(name) > maxNameLen {
-			maxNameLen = len(name)
+		if w := visibleWidth(profileDisplayName(cfg, name)); w > maxLabelLen {
+			maxLabelLen = w
 		}
 		if hasMixed {
 			p := cfg.Profiles[name]
@@ -543,27 +540,26 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 		}
 	}
 
-	descs := make([]string, len(names))
-	maxDescWidth := 0
+	rows := make([]string, len(names))
+	maxRowWidth := 0
 	for i, name := range names {
-		descs[i] = cfg.Profiles[name].Description
-		if w := visibleWidth(descs[i]); w > maxDescWidth {
-			maxDescWidth = w
+		label := profileDisplayName(cfg, name)
+		if hasMixed {
+			p := cfg.Profiles[name]
+			server := resolveProfileServer(cfg, &p)
+			tag := backendDisplayName(server)
+			label = fmt.Sprintf("%-*s  [%-*s]", maxLabelLen, label, maxTagLen, tag)
+		}
+		rows[i] = label
+		if w := visibleWidth(label); w > maxRowWidth {
+			maxRowWidth = w
 		}
 	}
 
 	lines := make([]string, len(names))
 	for i, name := range names {
 		p := cfg.Profiles[name]
-		desc := descs[i]
-		suffix := favouriteSuffix(p.IsFavourite, desc, maxDescWidth, anyFav)
-		if hasMixed {
-			server := resolveProfileServer(cfg, &p)
-			tag := backendDisplayName(server)
-			lines[i] = fmt.Sprintf("%-*s  [%-*s] %s%s", maxNameLen, name, maxTagLen, tag, desc, suffix)
-		} else {
-			lines[i] = fmt.Sprintf("%-*s  %s%s", maxNameLen, name, desc, suffix)
-		}
+		lines[i] = rows[i] + favouriteSuffix(p.IsFavourite, rows[i], maxRowWidth, anyFav)
 	}
 	return lines
 }
@@ -587,16 +583,12 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 	descs := make([]string, len(names))
 	maxDescWidth := 0
 	for i, name := range names {
-		p := cfg.Profiles[name]
-		desc := p.Description
+		desc := ""
 		if hasMixed {
+			p := cfg.Profiles[name]
 			server := resolveProfileServer(cfg, &p)
 			tag := backendDisplayName(server)
-			if desc != "" {
-				desc = fmt.Sprintf("[%-*s] %s", maxTagLen, tag, desc)
-			} else {
-				desc = fmt.Sprintf("[%-*s]", maxTagLen, tag)
-			}
+			desc = fmt.Sprintf("[%-*s]", maxTagLen, tag)
 		}
 		descs[i] = desc
 		if w := visibleWidth(desc); w > maxDescWidth {
@@ -608,7 +600,7 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 	for i, name := range names {
 		p := cfg.Profiles[name]
 		suffix := favouriteSuffix(p.IsFavourite, descs[i], maxDescWidth, anyFav)
-		items = append(items, menuItem{Label: name, Description: descs[i] + suffix})
+		items = append(items, menuItem{Label: profileDisplayName(cfg, name), Description: descs[i] + suffix})
 	}
 	return items
 }
@@ -685,8 +677,7 @@ func serverStatusLines(cfg *Config, instances []*RunningInstance) []string {
 			detail := inst.Addr()
 			if inst.ActiveProfile != "" {
 				detail += " · " + fmt.Sprintf("%s%s%s", cBoldLightGray, profileDisplayName(cfg, inst.ActiveProfile), cReset)
-			}
-			if inst.ActiveModel != "" {
+			} else if inst.ActiveModel != "" {
 				detail += " · " + inst.ActiveModel
 			}
 			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))

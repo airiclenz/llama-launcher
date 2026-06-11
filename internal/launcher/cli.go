@@ -126,10 +126,7 @@ func cmdLoad(cfg *Config, args []string) int {
 		return 2
 	}
 
-	displayName := profile.Description
-	if displayName == "" {
-		displayName = profile.Name
-	}
+	displayName := profile.DisplayName()
 	progress := newCLIProgress(fmt.Sprintf("Loading %s", displayName))
 	inst, started, err := LoadProfile(cfg, profile, restart, progress)
 	if err != nil {
@@ -559,7 +556,8 @@ func cmdStatusJSON(cfg *Config) int {
 func cmdListJSON(cfg *Config) int {
 	type entry struct {
 		Name        string `json:"name"`
-		Description string `json:"description"`
+		Title       string `json:"title,omitempty"`
+		Description string `json:"description,omitempty"`
 		Backend     string `json:"backend"`
 		Model       string `json:"model"`
 		GPULayers   *int   `json:"gpu_layers,omitempty"`
@@ -574,6 +572,7 @@ func cmdListJSON(cfg *Config) int {
 		merged := mergeParams(cfg.Defaults, p.ProfileParams)
 		output = append(output, entry{
 			Name:        name,
+			Title:       p.Title,
 			Description: p.Description,
 			Backend:     server,
 			Model:       p.Model,

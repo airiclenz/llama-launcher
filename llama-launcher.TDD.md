@@ -51,14 +51,16 @@ Running `llama-launcher` with no arguments enters a one-shot interactive menu wi
 
     Status  ● stopped
 
-    ▸ code-deepseek     DeepSeek Coder V2 Lite — coding tasks
-      chat-qwen         Qwen 2.5 32B — general conversation
-      reasoning-phi     Phi-4 — structured reasoning
+    ▸ DeepSeek Coder V2 Lite
+      Qwen 2.5 32B
+      reasoning-phi
       ─
       Start server only
 
     ↑↓ select · enter start & load · q quit
 ```
+
+Each Profile row shows the Profile's optional `title`, falling back to the Profile name (`reasoning-phi` above) when no title is set. The same rule applies everywhere a Profile is presented: the status header, the Profile lists, and the "Switch model" pop-up.
 
 After selecting a Profile, the launcher shows a step-by-step progress popup that updates in place as each lifecycle stage completes, then prints a confirmation and exits:
 
@@ -86,7 +88,7 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
     llama-launcher v1.0.0
 
     Status   ● running
-    Model    code-deepseek (deepseek-coder-v2-lite-Q4_K_M.gguf)
+    Model    DeepSeek Coder V2 Lite
     Server   127.0.0.1:8080  PID 41023  Uptime 2h 14m
 
     ▸ Switch model
@@ -107,9 +109,9 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
     Status   ● running (no model)
     Server   127.0.0.1:8080  PID 41023  Uptime 5m 30s
 
-    ▸ code-deepseek     DeepSeek Coder V2 Lite — coding tasks
-      chat-qwen         Qwen 2.5 32B — general conversation
-      reasoning-phi     Phi-4 — structured reasoning
+    ▸ DeepSeek Coder V2 Lite
+      Qwen 2.5 32B
+      reasoning-phi
       ─
       Stop server
       Show log
@@ -133,7 +135,7 @@ For scripting, automation, and quick access:
 | `llama-launcher start [--profile p]` | Start the LLM Server without loading a Model. With `--profile` (or `-p`), resolve the named Profile and activate it — equivalent to `load <profile>`. |
 | `llama-launcher stop [target]` | Stop a running LLM Server instance. `[target]` may be an `host:port` (preferred when multiple instances of the same backend run) or a backend name; auto-detects when only one instance is running. Stop is unconditional (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)) regardless of whether the launcher started the process. |
 | `llama-launcher status [--json]` | Print one row per running LLM Server instance (address, backend, active Profile/Model, PID if known, uptime). Exit code 0 if any running, 1 if all stopped. With `--json`, emits a JSON array with one entry per enabled configured backend (`backend`, `running`, `address`, `active_profile`, `active_model`, `pid`, `uptime_seconds`); same exit code semantics. |
-| `llama-launcher list [--json]` | Print all configured Profiles with descriptions and target LLM Server. With `--json`, emits a JSON array with one entry per Profile (`name`, `description`, `backend`, `model`, plus `gpu_layers` and `context_size` when set). |
+| `llama-launcher list [--json]` | Print all configured Profiles with descriptions and target LLM Server. With `--json`, emits a JSON array with one entry per Profile (`name`, `backend`, `model`, plus `title`, `description`, `gpu_layers` and `context_size` when set). |
 | `llama-launcher logs [target] [--follow]` | Tail an instance's log file. `[target]` is an `host:port` or backend name; auto-detects the active instance when only one applies. With `--follow`, behaves like `tail -f`. This is the one subcommand that remains running until interrupted. |
 | `llama-launcher logs clean [--days N\|--all]` | Delete old log files. Default threshold is 7 days; `--days N` overrides. `--all` removes everything. Always skips logs belonging to running servers. Reports files removed and space freed. |
 | `llama-launcher config validate` | Parse config and report all validation problems at once (deprecated fields, unknown/disabled servers, missing models, Profiles missing `server:` with no defensible fallback). Uses `parseConfig` + `validateAll` to collect errors without stopping at the first. Exit 0 if valid, 2 if invalid. |
@@ -258,6 +260,7 @@ defaults:
 # Set is_favourite: true to pin a profile to the top of menus.
 profiles:
   code-deepseek:
+    title: "DeepSeek Coder V2 Lite"
     description: "DeepSeek Coder V2 Lite — coding tasks"
     server: llamacpp
     model: deepseek-coder-v2-lite-instruct-Q4_K_M.gguf
@@ -285,6 +288,8 @@ profiles:
     server: lmstudio
     model: lmstudio-community/meta-llama-3.1-8b-instruct
 ```
+
+`title` and `description` are both optional. `title` is the label shown wherever a Profile is presented to the user (status header, Profile lists, "Switch model" pop-up); when unset, the Profile name is shown instead. `description` is longer free text displayed only in the "Show model config" pop-up.
 
 The `servers` map lists available LLM Servers. Keys are server names (`llamacpp`, `ollama`, `lmstudio`). Values are booleans: `true` enables the server, `false` disables it. Disabled servers are hidden from status display, and Profiles targeting a disabled server are excluded from menus, CLI output, and Profile resolution. At least one server must be enabled.
 
@@ -327,7 +332,7 @@ Each Profile **must** set `server:` explicitly. The launcher tolerates a missing
 
 ### 4.7 Favourite Profiles
 
-Each Profile may set `is_favourite: true` to pin it to the top of the menu and `list` output. Profiles are sorted by three keys in order: favourite status first (favourites before non-favourites), then by server (alphabetically), then by Profile name alphabetically. Favourite Profiles display a `★` marker right-aligned at the end of the row, in the same column across the entire list (descriptions are padded so the marker column is consistent). When no Profile in the listing is starred, no marker column is rendered. This ordering and rendering are produced by `Config.ProfileNames()` together with `buildProfileItems`/`buildSimpleProfileLines`/`cmdList`, and apply to every UI surface that lists Profiles (TUI menu, non-terminal fallback, `llama-launcher list`).
+Each Profile may set `is_favourite: true` to pin it to the top of the menu and `list` output. Profiles are sorted by three keys in order: favourite status first (favourites before non-favourites), then by server (alphabetically), then by Profile name alphabetically. Favourite Profiles display a `★` marker right-aligned at the end of the row, in the same column across the entire list (rows are padded so the marker column is consistent). When no Profile in the listing is starred, no marker column is rendered. This ordering and rendering are produced by `Config.ProfileNames()` together with `buildProfileItems`/`buildSimpleProfileLines`/`cmdList`, and apply to every UI surface that lists Profiles (TUI menu, non-terminal fallback, `llama-launcher list`).
 
 The top-level boolean `sort_alphabetically` selects the ordering rule. The default (unset or `true`) is the favourites/server/name sort described above. Setting `sort_alphabetically: false` lists Profiles in the order they appear under `profiles:` in the YAML file; favourite status no longer affects position (the `★` marker still renders unchanged). YAML insertion order is captured by `parseConfig`: after the standard struct decode it re-parses the document into a `yaml.Node` and walks the top-level `profiles:` mapping to record the keys in document order on the unexported `Config.profileOrder` slice. Disabled-server filtering is applied in both modes.
 
@@ -747,7 +752,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 |---|---|
 | `TestParseChoice` | Valid, zero, negative, exceeds max, non-numeric, empty. |
 | `TestFormatUptime` | Hours, minutes, seconds-only branches. |
-| `TestProfileDisplayName` | With description, without, unknown Profile. |
+| `TestProfileDisplayName` | With title, fallback to Profile name, unknown Profile. |
 | `TestFormatProfileParams_GPULayers_LMStudio` | Intermediate value shows number; 99 shows max; 0 shows off. |
 
 ### 12.4 Test Helpers
