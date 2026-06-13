@@ -1,6 +1,7 @@
 .DS_Store
 CLAUDE.md
 llama-launcher
+/llama-launcher-mcp
 frame-design.txt
 media/logo.png
 validate
