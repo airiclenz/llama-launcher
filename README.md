@@ -468,21 +468,51 @@ llama-launcher version                      # Print version
 --config <path>    Use a custom config file instead of the default
 ```
 
+## Remote control from a container (MCP)
+
+`llama-launcher` itself has no network surface — it is a one-shot CLI ([ADR-0002](docs/adr/0002-not-a-router.md)). When a client on another machine needs to control which model is running — typically a coding agent in a container reaching back to the host — an **optional, separate** binary, `llama-launcher-mcp`, exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP. It runs on the host and implements every tool by shelling out to the CLI; it dispatches control commands only and never proxies inference traffic ([ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)).
+
+Tools: `list_profiles`, `server_status`, `tail_log` (read) and `load_profile`, `unload_model`, `start_server`, `stop_server` (mutating, omitted under `--read-only`).
+
+**Trust model:** access is gated by a **source-IP allowlist**, not a token. Bind the listener to the host's container-facing bridge interface (not `0.0.0.0`) and allow the container — by its IP, CIDR, or hostname, or simply by naming the bridge interface (`--allow-interface bridge100`) so any IP the bridge hands the container is covered. The client receives no secret it could leak — appropriate when the remote is a cloud LLM agent you don't want to hand credentials to.
+
+Run on the host:
+
+```bash
+make build-mcp
+./llama-launcher-mcp --listen 192.168.64.1:7331 --allow-interface bridge100
+#   --listen           container-facing bridge IP:port (not 0.0.0.0)
+#   --allow-interface  local interface whose subnet(s) to allow, e.g. bridge100
+#                      (the container-facing bridge); repeatable. Covers whatever
+#                      IP the bridge gives the container — no IP to know or pin.
+#   --allow            client IP, CIDR, or hostname; repeatable; loopback by
+#                      default. A hostname is resolved to its IPs once at startup
+#                      (restart if the container's IP later changes). Beware: a
+#                      name like `devbox.dev` may resolve to a *public* address —
+#                      prefer --allow-interface or a private CIDR (192.168.64.0/24).
+#   --llama-launcher-bin  path to the CLI (default: PATH lookup)
+#   --config           llama-launcher config path, forwarded to each call
+#   --read-only        expose only the read tools
+```
+
+Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no token, just the URL. The bridge IP is the same container→host path you already use to reach the LLM server for inference.
+
 ## Building
 
 Requires Go 1.26+.
 
 ```bash
 make build      # Build the binary
+make build-mcp  # Build the optional MCP control-plane adapter (see above)
 make install    # Build + install to ~/.local/bin
-make clean      # Remove the binary
+make clean      # Remove the binaries
 ```
 
 The version is read from the `VERSION` file and injected at build time.
 
 ## Architecture
 
-All code lives in `internal/launcher/`. Three LLM Servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, and LM Studio. The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
+All code lives in `internal/launcher/`. Three LLM Servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, and LM Studio. The optional MCP control-plane adapter is a separate binary under `cmd/llama-launcher-mcp/` that shells out to the CLI and is the only component with a network listener. The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
 
 Key paths:
 

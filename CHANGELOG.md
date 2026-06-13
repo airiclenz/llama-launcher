@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.4
+
+### Added
+
+- **Optional MCP control-plane adapter (`llama-launcher-mcp`).** A separate binary (`make build-mcp`) that exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP, so a client on another machine — typically a coding agent in a container — can control which model is running on the host. It runs on the host and implements every tool by shelling out to the CLI; it dispatches *control* commands only and never proxies inference traffic, so `llama-launcher` itself keeps no listener and [ADR-0002](docs/adr/0002-not-a-router.md) stays intact (see [ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)). Tools: `list_profiles`, `server_status`, `tail_log` (read) plus `load_profile`, `unload_model`, `start_server`, `stop_server` (mutating, omitted under `--read-only`). Access is gated by a **source-IP allowlist** (`--allow <ip|cidr|host>`, repeatable; a hostname is resolved to its IPs once at startup; defaults to loopback only) — or `--allow-interface <name>` (repeatable) to allow the subnet(s) of a local interface such as the container-facing bridge (`bridge100`), which covers whatever IP the bridge hands the container so you never need to know or pin it. The listener is meant to **bind the container-facing bridge interface** (`--listen`, not `0.0.0.0`) — so the client receives no token or key it could leak, which is the point when the remote is a cloud LLM agent. `--llama-launcher-bin` and `--config` tune which CLI and config the adapter drives. The new dependency (`github.com/modelcontextprotocol/go-sdk`) is scoped to this binary; the core CLI build stays dependency-light.
+
 ## 1.4.3
 
 ### Added

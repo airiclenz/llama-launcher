@@ -35,7 +35,7 @@ Target platform: macOS (Apple Silicon). The compiled binary is the only artifact
 
 - Persistent TUI or dashboard (contradicts the memory-freeing goal).
 - Model downloading or GGUF management.
-- HTTP server, API proxying, or request routing (see [ADR-0002](docs/adr/0002-not-a-router.md)).
+- HTTP server, API proxying, or request routing **in the `llama-launcher` binary** (see [ADR-0002](docs/adr/0002-not-a-router.md)). Remote *control* (not inference) is available through a separate, optional adapter — see [§15](#15-optional-mcp-control-plane-adapter).
 - Cross-platform support beyond macOS (Linux would work but is not a design target).
 
 ## 3. User Experience
@@ -813,8 +813,9 @@ The version number lives in the root `VERSION` file and is injected at build tim
 
 ```bash
 make build          # builds ./llama-launcher binary (version injected from VERSION file)
+make build-mcp      # builds ./llama-launcher-mcp, the optional control-plane adapter (§15)
 make install        # builds + copies to ~/.local/bin, adds to PATH if needed
-make clean          # removes binary
+make clean          # removes binaries
 
 go test ./...       # run all tests
 go test ./internal/launcher/ -run TestMergeParams  # run a single test
@@ -832,3 +833,41 @@ Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read t
 1. Update the documents `llama-launcher.TDD.md`, `README.md`, `CHANGELOG.md`, and `TODO.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
 2. If the change touches one of the architectural decisions in [docs/adr/](docs/adr/), update or supersede the relevant ADR in the same change.
 3. Run `make install` to build and install the updated binary.
+
+## 15. Optional MCP Control-Plane Adapter
+
+`llama-launcher` itself never opens a socket — that property is load-bearing for [ADR-0002](docs/adr/0002-not-a-router.md). Remote control (e.g. a coding agent in a container deciding which Model the host runs) is provided by a **separate, optional binary**, `llama-launcher-mcp`, living under `cmd/llama-launcher-mcp/`. The rationale and trust model are pinned in [ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md); this section describes the implementation.
+
+### 15.1 Shape
+
+The adapter is a thin shim: it runs on the host, exposes an MCP server over Streamable HTTP (via `github.com/modelcontextprotocol/go-sdk`), and implements every tool by **shelling out to the installed `llama-launcher` CLI** and returning its output. It holds no Models and parses no inference requests — it forwards the same control commands a human or the `manage-llm-server` skill drives. The new dependency is scoped to this binary; the core CLI build does not import it.
+
+### 15.2 Tool surface
+
+Each tool maps 1:1 to an existing subcommand (`internal/launcher/cli.go`):
+
+| Tool | CLI invocation | Kind |
+|------|----------------|------|
+| `list_profiles` | `list --json` | read |
+| `server_status` | `status --json` | read |
+| `tail_log {target?}` | `logs [target]` | read |
+| `load_profile {name, restart?}` | `load <name> [--restart]` | mutate |
+| `unload_model {profile?}` | `unload [profile]` | mutate |
+| `start_server {profile?}` | `start [--profile p]` | mutate |
+| `stop_server {target?}` | `stop [target]` | mutate |
+
+The mutating tools are registered only when `--read-only` is not set. Judgment that needs context (e.g. "never swap mid-simulation") stays with the agent via the skill; the adapter exposes the tools plainly.
+
+**Result mapping.** stdout is returned as the tool's text content. A non-zero exit with empty stdout is flagged as a tool error carrying stderr. A non-zero exit that still printed stdout (e.g. `status --json` reports exit 1 when nothing is running but still emits the JSON array, per [§3.3](#33-exit-codes)) is returned as normal content so the caller keeps the data.
+
+### 15.3 Access control
+
+The driving constraint is that the remote client may be a cloud LLM agent that must not be handed credentials. The adapter therefore uses a **source-IP allowlist**, not a token:
+
+- `--listen host:port` — bind the container-facing bridge interface, **not** `0.0.0.0`.
+- `--allow ip|cidr|host` — repeatable; a request whose source IP is not matched gets `403`. A hostname is resolved to its addresses **once at startup** (each becomes an exact-IP matcher, so the request-time check stays a numeric comparison); restart the adapter if the container's IP changes, or allow its subnet as a CIDR. Note a hostname may resolve to a *public* address (e.g. `devbox.dev` is a real domain, not the local container) — prefer a private CIDR or `--allow-interface`.
+- `--allow-interface name` — repeatable; allow the network of every address bound to a local interface (e.g. `bridge100`, the container-facing bridge). Each address's CIDR (`ip.Mask(mask)` + mask) becomes a subnet matcher, so any IP the bridge assigns the container is covered without the operator knowing or pinning it, and a private bridge subnet can never collide with a public hostname. The interface is read once at startup (`interfaceAddrs`, a package var so tests can stub it); an unknown interface is a fatal startup error.
+- `--llama-launcher-bin path` / `--config path` — which CLI binary and config the adapter drives (config is forwarded as `--config` on every call).
+- `--read-only` — register only the read tools.
+
+`resolveAllowlist` combines the `--allow` specs and `--allow-interface` networks; the loopback default applies **only when neither is given**, so naming an interface (or any `--allow`) drops the implicit loopback. The IP check (`allowlistMiddleware`) is defense-in-depth on top of the narrow bind, not a substitute for it.
