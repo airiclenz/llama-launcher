@@ -11,7 +11,7 @@ See [CONTEXT.md](CONTEXT.md) for the project's domain language and [docs/adr/](d
 </p>
 
 <p align="center">
-  <img src="media/screen_2.png" alt="llama-launcher interactive menu" width="825">
+  <img src="media/screen_2.png" alt="llama-launcher interactive menu" width="550">
 </p>
 
 ## Install
