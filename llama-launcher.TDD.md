@@ -824,6 +824,10 @@ go vet ./...        # static analysis
 
 The binary is statically linked (default for Go on macOS with CGO_ENABLED=0) and has no external dependencies at runtime.
 
+### Homebrew
+
+The published formula (`airiclenz/tap/llama-launcher`) builds from the release source tarball and installs **both** binaries: the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (§15). The two builds inject the version with different `ldflags` targets — `internal/launcher.Version` for the CLI and `main.Version` for the adapter — because the adapter lives in `package main` under `cmd/llama-launcher-mcp/`. Packaging-only changes that don't bump `VERSION` (e.g. starting to ship the adapter from an already-tagged release) are released as a formula `revision` bump rather than a new tag.
+
 ## 14. Coding Standards
 
 Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read the base references and the Go-specific extensions before making changes.
@@ -841,6 +845,8 @@ Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read t
 ### 15.1 Shape
 
 The adapter is a thin shim: it runs on the host, exposes an MCP server over Streamable HTTP (via `github.com/modelcontextprotocol/go-sdk`), and implements every tool by **shelling out to the installed `llama-launcher` CLI** and returning its output. It holds no Models and parses no inference requests — it forwards the same control commands a human or the `manage-llm-server` skill drives. The new dependency is scoped to this binary; the core CLI build does not import it.
+
+It ships with the CLI: `make build-mcp` builds it locally, and the Homebrew formula installs it alongside `llama-launcher` (§13). It is inert until started — installing it adds no resident process.
 
 ### 15.2 Tool surface
 

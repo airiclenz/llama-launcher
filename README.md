@@ -23,6 +23,8 @@ brew tap airiclenz/tap
 brew install llama-launcher
 ```
 
+This installs both the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it, so installing it costs nothing if you don't use it.
+
 ### From source
 
 Requires Go 1.26+.
@@ -476,11 +478,10 @@ Tools: `list_profiles`, `server_status`, `tail_log` (read) and `load_profile`, `
 
 **Trust model:** access is gated by a **source-IP allowlist**, not a token. Bind the listener to the host's container-facing bridge interface (not `0.0.0.0`) and allow the container — by its IP, CIDR, or hostname, or simply by naming the bridge interface (`--allow-interface bridge100`) so any IP the bridge hands the container is covered. The client receives no secret it could leak — appropriate when the remote is a cloud LLM agent you don't want to hand credentials to.
 
-Run on the host:
+Run on the host. The Homebrew install puts `llama-launcher-mcp` on your `PATH` (or build it from source with `make build-mcp`):
 
 ```bash
-make build-mcp
-./llama-launcher-mcp --listen 192.168.64.1:7331 --allow-interface bridge100
+llama-launcher-mcp --listen 192.168.64.1:7331 --allow-interface bridge100
 #   --listen           container-facing bridge IP:port (not 0.0.0.0)
 #   --allow-interface  local interface whose subnet(s) to allow, e.g. bridge100
 #                      (the container-facing bridge); repeatable. Covers whatever
