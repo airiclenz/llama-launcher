@@ -231,7 +231,7 @@ still loads with LM Studio's GPU default, and the popup misreports the setting a
 
 ---
 
-## 5. Sanitize MCP tool target/profile arguments (read-only bypass + `-f` hang)
+## 5. Sanitize MCP tool target/profile arguments (read-only bypass + `-f` hang) — ✅ DONE (2026-07-06)
 
 **Severity:** High (security). **Authority:** ADR-0008 (`--read-only` "exposes only read
 tools"); the review's `[Security] H-01`.

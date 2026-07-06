@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -91,7 +92,7 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "tail_log",
 		Description: "Return the tail of a running instance's log. Target is optional when exactly one server is running; otherwise pass a backend name or host:port.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args targetArgs) (*mcp.CallToolResult, any, error) {
-		return cfg.run(ctx, argsFor("logs", args.Target)...), nil, nil
+		return cfg.runWithPositional(ctx, "logs", "target", args.Target), nil, nil
 	})
 
 	if cfg.readOnly {
@@ -113,7 +114,7 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "unload_model",
 		Description: "Unload the model (for managed backends this stops the server). Profile is optional when only one model is loaded.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args profileArgs) (*mcp.CallToolResult, any, error) {
-		return cfg.run(ctx, argsFor("unload", args.Profile)...), nil, nil
+		return cfg.runWithPositional(ctx, "unload", "profile", args.Profile), nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -131,7 +132,7 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "stop_server",
 		Description: "Stop a running server. Target is optional when exactly one server is running; otherwise pass a backend name or host:port.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args targetArgs) (*mcp.CallToolResult, any, error) {
-		return cfg.run(ctx, argsFor("stop", args.Target)...), nil, nil
+		return cfg.runWithPositional(ctx, "stop", "target", args.Target), nil, nil
 	})
 
 	return s
@@ -160,4 +161,46 @@ func argsFor(sub, arg string) []string {
 		return []string{sub}
 	}
 	return []string{sub, arg}
+}
+
+// runWithPositional is the single gate for tools that forward free-form input
+// to the CLI as a positional (tail_log, stop_server, unload_model). It rejects
+// values the CLI would parse as something other than a plain target/profile —
+// returning an MCP tool error without invoking the CLI — so no tool input can
+// select a different subcommand (e.g. turn the read-only tail_log into the
+// destructive `logs clean`) or trigger flag behaviour (`logs -f` follows
+// forever, blocking the adapter). Safe values are forwarded unchanged.
+func (c *config) runWithPositional(ctx context.Context, sub, field, value string) *mcp.CallToolResult {
+	if err := validatePositional(field, value); err != nil {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+		}
+	}
+	return c.run(ctx, argsFor(sub, value)...)
+}
+
+// launcherSubcommands are the llama-launcher CLI subcommand keywords. `logs`
+// treats a "clean" positional as its destructive sub-subcommand; the rest are
+// rejected defensively so a forwarded positional can never be read as a
+// command word by any current or future CLI parsing.
+var launcherSubcommands = map[string]bool{
+	"load": true, "unload": true, "start": true, "stop": true,
+	"status": true, "list": true, "logs": true, "clean": true,
+	"validate": true, "init": true, "reset": true,
+}
+
+// validatePositional rejects a tool-supplied value that the CLI would misread
+// as a flag or a subcommand keyword instead of a plain positional argument.
+// An empty value is valid: the positional is optional on every tool.
+func validatePositional(field, value string) error {
+	switch {
+	case value == "":
+		return nil
+	case strings.HasPrefix(value, "-"):
+		return fmt.Errorf("invalid %s %q: must not start with \"-\"", field, value)
+	case launcherSubcommands[value]:
+		return fmt.Errorf("invalid %s %q: launcher subcommand keywords are not accepted", field, value)
+	}
+	return nil
 }

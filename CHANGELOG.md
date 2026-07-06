@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- **The MCP adapter now validates tool-supplied `target`/`profile` arguments before forwarding them to the CLI.** `tail_log`, `stop_server`, and `unload_model` passed their optional argument to the CLI as a raw positional, so a hostile (e.g. prompt-injected) client could smuggle a flag or a subcommand keyword through it: `tail_log` with `target: "clean"` executed the destructive `logs clean` through the read surface — available even under `--read-only` — and `target: "-f"` made the adapter block forever on `logs --follow`. All three tools now pass their positional through a single validation gate that rejects values starting with `-` or matching a launcher subcommand keyword (`clean`, `load`, `stop`, …), returning an MCP tool error without invoking the CLI. Legitimate backend names and `host:port` targets are forwarded unchanged; the CLI's own `logs`/`stop`/`unload` parsing is untouched ([ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)).
+
 ### Fixed
 
 - **LM Studio profiles now actually apply `batch_size` and `flash_attn`, and no longer claim an unsupported `gpu_layers` mapping.** The load call sent only `model` and `context_length`, while the config's parameter table and the "Show model config" pop-up claimed `gpu_layers` (99→"max", 0→"off"), `batch_size` (→`eval_batch_size`), and `flash_attn` were in effect — so e.g. `gpu_layers: 0` on an lmstudio profile still loaded with LM Studio's GPU default. `batch_size` and `flash_attn` are now forwarded to `POST /api/v1/models/load` under LM Studio's REST field names (`eval_batch_size`, `flash_attention`). `gpu_layers` could not be implemented: LM Studio's REST load endpoint accepts no GPU-offload field (its only GPU knob, `offload_kv_cache_to_gpu`, controls KV-cache placement, not layer offload — GPU offload ratios exist only in the `lms` CLI and SDKs). The parameter table and the pop-up therefore no longer present `gpu_layers` as lmstudio-applicable; configure GPU offload in LM Studio itself.

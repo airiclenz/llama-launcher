@@ -22,6 +22,8 @@ The adapter therefore authenticates by **source IP allowlist** (`--allow <ip|cid
 
 A `--read-only` flag exposes only the read tools (`list_profiles`, `server_status`, `tail_log`) for containers that should observe but not mutate. Judgment rules that require context (e.g. "never swap Models mid-simulation") stay with the agent via the `manage-llm-server` skill; the adapter exposes the mutating tools plainly.
 
+Because the client is assumed prompt-injectable, tool inputs are treated as hostile. Every free-form value the adapter forwards to the CLI as a positional (`target` on `tail_log`/`stop_server`, `profile` on `unload_model`) passes through a single validation gate that rejects values starting with `-` or matching a CLI subcommand keyword, returning an MCP tool error without invoking the CLI. Without this, `tail_log{"target":"clean"}` would run the destructive `logs clean` through the read surface, and `tail_log{"target":"-f"}` would block the adapter on a `logs --follow` that never returns. The gate lives in the adapter; the CLI's own argument parsing is unchanged.
+
 ## Consequences
 
 - A small **resident control-plane process** now runs on the host — a conscious, documented exception to the zero-resident-memory goal. It is separate from `llama-launcher`, holds no Models, and only dispatches control commands.

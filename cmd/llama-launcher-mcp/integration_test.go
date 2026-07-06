@@ -89,12 +89,36 @@ func TestEndToEndToolsForwardCommands(t *testing.T) {
 		{"start_server", map[string]any{"profile": "qwen"}, "start --profile qwen"},
 		{"stop_server", map[string]any{"target": "llamacpp"}, "stop llamacpp"},
 		{"tail_log", map[string]any{}, "logs"},
+		{"tail_log", map[string]any{"target": "127.0.0.1:8080"}, "logs 127.0.0.1:8080"},
 	}
 	for _, c := range cases {
 		if got := callText(t, s, c.tool, c.args); got != c.want {
 			t.Errorf("%s -> %q, want %q", c.tool, got, c.want)
 		}
 	}
+}
+
+// Hostile tool inputs must be rejected at the adapter boundary even in
+// read-only mode: a "clean" target would turn tail_log into the destructive
+// `logs clean`, and "-f" would make `logs` follow forever, hanging the
+// adapter. Neither may reach the CLI.
+func TestEndToEndTailLogRejectsUnsafeTarget(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "invoked")
+	cfg := &config{llamaLauncherBin: markerCLI(t, marker), readOnly: true}
+	s := startAdapter(t, cfg, loopbackAllow(t))
+
+	for _, target := range []string{"clean", "-f"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		res, err := s.CallTool(ctx, &mcp.CallToolParams{Name: "tail_log", Arguments: map[string]any{"target": target}})
+		cancel()
+		if err != nil {
+			t.Fatalf("CallTool(tail_log, %q): %v", target, err)
+		}
+		if !res.IsError {
+			t.Errorf("tail_log with target %q should return a tool error", target)
+		}
+	}
+	assertCLINotInvoked(t, marker)
 }
 
 // In --read-only mode the mutating tools must not be registered at all.
