@@ -297,7 +297,16 @@ size-limited writer) and note truncation in the returned content when the cap is
 
 ---
 
-## 7. Bound HTTP response reads from probed servers with `io.LimitReader`
+## 7. Bound HTTP response reads from probed servers with `io.LimitReader` — ✅ DONE (2026-07-06)
+
+NOTES (2026-07-06): Beyond the review's cited health/model-list//props sites,
+the same files' remaining body reads were bounded too, per the Change's "wrap
+each response body": LM Studio's load/unload error-body reads and Ollama's
+load/unload response drains (`io.Copy(io.Discard, …)`), all at the 8 KiB
+status cap. `/props` uses the 1 MiB cap (its response can carry a multi-KB
+chat template), not the "few KB" class. Also touched `llama-launcher.TDD.md`
+(not in this item's Files list) — module/test tables for `backend_http.go`
+and the new oversized-body tests — per the plan-wide docs rule.
 
 **Severity:** Medium (security). **Authority:** the review's `[Security]` unbounded-read
 finding; threat model includes a process squatting on a configured port.

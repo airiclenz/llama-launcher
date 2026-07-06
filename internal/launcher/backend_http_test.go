@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,86 @@ func TestAuthFailedErr(t *testing.T) {
 			t.Errorf("authFailedErr(%d) = %v, want nil", code, err)
 		}
 	}
+}
+
+// countingReader counts the bytes read through it from the wrapped reader,
+// so tests can assert how much of a source a bounded read consumed.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func TestReadBodyLimited(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns a short body in full", func(t *testing.T) {
+		t.Parallel()
+		got, err := readBodyLimited(strings.NewReader("ok"), 16)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(got) != "ok" {
+			t.Errorf("body = %q, want %q", got, "ok")
+		}
+	})
+
+	t.Run("stops reading at the limit", func(t *testing.T) {
+		t.Parallel()
+		src := &countingReader{r: strings.NewReader(strings.Repeat("a", 64))}
+
+		got, err := readBodyLimited(src, 16)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 16 {
+			t.Errorf("read %d bytes, want %d", len(got), 16)
+		}
+		if src.n > 16 {
+			t.Errorf("consumed %d bytes from the source, want at most 16", src.n)
+		}
+	})
+}
+
+func TestDecodeJSONLimited(t *testing.T) {
+	t.Parallel()
+
+	t.Run("decodes a body within the limit", func(t *testing.T) {
+		t.Parallel()
+		var v struct {
+			Status string `json:"status"`
+		}
+		if err := decodeJSONLimited(strings.NewReader(`{"status":"ok"}`), 64, &v); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if v.Status != "ok" {
+			t.Errorf("Status = %q, want %q", v.Status, "ok")
+		}
+	})
+
+	t.Run("fails on an oversized body without reading past the limit", func(t *testing.T) {
+		t.Parallel()
+		oversized := `{"status":"` + strings.Repeat("a", 256) + `"}`
+		src := &countingReader{r: strings.NewReader(oversized)}
+		var v struct {
+			Status string `json:"status"`
+		}
+
+		err := decodeJSONLimited(src, 64, &v)
+
+		if err == nil {
+			t.Fatal("expected a decode error for a body larger than the limit")
+		}
+		if src.n > 64 {
+			t.Errorf("consumed %d bytes from the source, want at most 64", src.n)
+		}
+	})
 }
 
 func TestRedactAPIKeyArgs(t *testing.T) {

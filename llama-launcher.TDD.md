@@ -412,7 +412,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `defaults/config.yaml` | Example config template, embedded at compile time via `go:embed`. |
 | `defaults/embed.go` | Embeds `config.yaml` and exports it as `defaults.ExampleConfig`. |
 | `backend.go` | `LLMServer` and `ManagedLLMServer` interface definitions (see [§5.3](#53-llmserver-interface)), `ResolvedProfile` struct, LLM Server registry (register/get), `applyAPIKeys` (pushes per-server API keys from the config onto backends implementing the package-private `apiKeyConfigurable`). |
-| `backend_http.go` | Shared HTTP helpers for backend API calls: `authedGet` / `authedPostJSON` attach `Authorization: Bearer <key>` when a per-server API key is configured, `authFailedErr` maps 401/403 to an actionable "check api_key" error, `redactAPIKeyArgs` masks `--api-key` values for display surfaces. |
+| `backend_http.go` | Shared HTTP helpers for backend API calls: `authedGet` / `authedPostJSON` attach `Authorization: Bearer <key>` when a per-server API key is configured, `authFailedErr` maps 401/403 to an actionable "check api_key" error, `redactAPIKeyArgs` masks `--api-key` values for display surfaces. `readBodyLimited` / `decodeJSONLimited` bound every response-body read from a probed server via `io.LimitReader` (`maxStatusBodyBytes` = 8 KiB for health/discrimination probes, error bodies, and drained load/unload responses; `maxJSONBodyBytes` = 1 MiB for model lists and `/props`), so a process squatting on a configured port cannot stream unbounded data within the client timeout. |
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
 | `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload (forwards `context_size`, `batch_size`, `flash_attn` as `context_length`, `eval_batch_size`, `flash_attention`; the REST load endpoint has no GPU-offload field, so `gpu_layers` is not sent), `lms` CLI for server start/stop. Registers via `init()`. |
@@ -429,7 +429,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `backend_ollama_test.go` | httptest-based tests for Ollama health check (body discrimination), `LoadModel`, `UnloadModel`, `ListRunningModels`, and auth header propagation. |
 | `backend_lmstudio_test.go` | httptest-based tests for LM Studio health check (cross-backend exclusion), `LoadModel`, `UnloadModel`, `extractLMStudioError`, and auth header propagation (including the discrimination probes). |
 | `backend_test.go` | Tests for `GetLLMServer` with known and unknown LLM Server names. |
-| `backend_http_test.go` | Tests for `authedGet`/`authedPostJSON` (header present/absent, JSON content type), `authFailedErr`, `redactAPIKeyArgs`, and `applyAPIKeys` (apply and clear on reload). |
+| `backend_http_test.go` | Tests for `authedGet`/`authedPostJSON` (header present/absent, JSON content type), `authFailedErr`, `redactAPIKeyArgs`, `applyAPIKeys` (apply and clear on reload), and the bounded body reads (`readBodyLimited`/`decodeJSONLimited` stop at the cap, asserted via a counting reader). |
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, and `shouldCrossServerUnload`. |
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
@@ -769,8 +769,8 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 
 | Test | What it covers |
 |---|---|
-| `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; non-200 → error; unreachable → error. |
-| `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error. |
+| `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; non-200 → error; unreachable → error; a body larger than the read cap → rejected (the bounded read truncates it). |
+| `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error; "Ollama" marker sitting past the read cap → error (the bounded read never sees it). |
 | `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when `/health` body lacks `status` field; healthy when LM Studio returns `{"error":"..."}` for `/health` and `/api/tags`; detects llamacpp via `/health` body containing `{"status":"ok"}`; detects Ollama via `/api/tags` body containing `{"models":[...]}`; non-200 → error; unreachable → error. |
 | `TestLMStudioLoadModel` | Success, context_length inclusion, batch_size/flash_attn mapped to `eval_batch_size`/`flash_attention`, unset params and gpu_layers omitted from the payload, error with message, error without message. |
 | `TestLMStudioUnloadModel` | Success, non-200 with error message, non-200 with empty body returns error. |
@@ -778,6 +778,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestOllamaLoadModel` | Success (verifies keep_alive payload), error status. |
 | `TestOllamaUnloadModel` | Success (verifies keep_alive=0), error status. |
 | `TestOllamaListRunningModels` | Success with models, empty list, malformed JSON. |
+| `TestLMStudioListRunningModels_OversizedBody` | A `/v1/models` response larger than the read cap fails to parse instead of being consumed in full. |
 | `TestLlamaCppListRunningModels` | `/v1/models` parsing — single-entry `data` array with `id` populated. |
 | `TestLlamaCppQueryLiveParams` | `/props` parsing populates `ContextSize`, `Parallel`, generation settings; `404` returns `(nil, nil)` so paramDrift treats it as "no drift". |
 

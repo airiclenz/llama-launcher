@@ -35,7 +35,7 @@ func (b *Ollama) HealthCheck(addr string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyLimited(resp.Body, maxStatusBodyBytes)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
@@ -63,7 +63,7 @@ func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 		return fmt.Errorf("loading model via Ollama API: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	io.Copy(io.Discard, io.LimitReader(resp.Body, maxStatusBodyBytes))
 	if err := authFailedErr(resp.StatusCode); err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (b *Ollama) UnloadModel(addr string, modelID string) error {
 		return fmt.Errorf("unloading model via Ollama API: %w", err)
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	io.Copy(io.Discard, io.LimitReader(resp.Body, maxStatusBodyBytes))
 	if err := authFailedErr(resp.StatusCode); err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func (b *Ollama) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 			Size int64  `json:"size"`
 		} `json:"models"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeJSONLimited(resp.Body, maxJSONBodyBytes, &result); err != nil {
 		return nil, fmt.Errorf("parsing /api/ps response: %w", err)
 	}
 

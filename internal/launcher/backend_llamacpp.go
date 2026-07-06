@@ -3,7 +3,6 @@ package launcher
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,7 +28,7 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 	if err != nil {
 		return err
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := readBodyLimited(resp.Body, maxStatusBodyBytes)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
@@ -70,7 +69,7 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeJSONLimited(resp.Body, maxJSONBodyBytes, &result); err != nil {
 		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
 	}
 	models := make([]RunningModelInfo, 0, len(result.Data))
@@ -115,7 +114,7 @@ func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 		TotalSlots *int   `json:"total_slots"`
 		ModelPath  string `json:"model_path"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := decodeJSONLimited(resp.Body, maxJSONBodyBytes, &raw); err != nil {
 		return nil, fmt.Errorf("parsing /props response: %w", err)
 	}
 	out := &ProfileParams{

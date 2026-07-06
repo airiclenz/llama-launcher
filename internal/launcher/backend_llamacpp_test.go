@@ -328,6 +328,26 @@ func TestLlamaCppHealthCheck(t *testing.T) {
 			t.Fatal("expected error for unreachable server")
 		}
 	})
+
+	t.Run("rejects a body larger than the read cap", func(t *testing.T) {
+		t.Parallel()
+		// Valid JSON overall, but the bounded read truncates it mid-body;
+		// an unbounded read would accept this response as healthy.
+		huge := `{"status":"ok","pad":"` + strings.Repeat("a", maxStatusBodyBytes) + `"}`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(huge))
+		}))
+		defer srv.Close()
+
+		err := b.HealthCheck(addrFromURL(t, srv.URL))
+		if err == nil {
+			t.Fatal("expected error for a body larger than the read cap")
+		}
+		if !strings.Contains(err.Error(), "not llamacpp") {
+			t.Errorf("error = %q, want it to contain 'not llamacpp'", err)
+		}
+	})
 }
 
 func TestLlamaCppAuthHeaders(t *testing.T) {

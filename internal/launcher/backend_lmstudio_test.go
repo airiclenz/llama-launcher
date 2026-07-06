@@ -341,6 +341,35 @@ func TestLMStudioUnloadModel(t *testing.T) {
 	})
 }
 
+// TestLMStudioListRunningModels_OversizedBody asserts the model-list read is
+// bounded: a response larger than the cap fails to parse instead of being
+// consumed in full (an unbounded decode would accept it).
+func TestLMStudioListRunningModels_OversizedBody(t *testing.T) {
+	t.Parallel()
+
+	b := &LMStudio{}
+	var body strings.Builder
+	body.WriteString(`{"data":[`)
+	for body.Len() < maxJSONBodyBytes+1024 {
+		body.WriteString(`{"id":"model"},`)
+	}
+	body.WriteString(`{"id":"last"}]}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(body.String()))
+	}))
+	defer srv.Close()
+
+	_, err := b.ListRunningModels(addrFromURL(t, srv.URL))
+
+	if err == nil {
+		t.Fatal("expected a parse error for a model list larger than the read cap")
+	}
+	if !strings.Contains(err.Error(), "parsing /v1/models") {
+		t.Errorf("error = %q, want it to contain 'parsing /v1/models'", err)
+	}
+}
+
 func TestExtractLMStudioError(t *testing.T) {
 	t.Parallel()
 

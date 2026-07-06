@@ -3,7 +3,6 @@ package launcher
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -43,7 +42,7 @@ func (b *LMStudio) HealthCheck(addr string) error {
 	// LM Studio returns {"error":"..."} for the same path.
 	r, err := authedGet(healthCheckTimeout, base+"/health", b.apiKey)
 	if err == nil {
-		healthBody, _ := io.ReadAll(r.Body)
+		healthBody, _ := readBodyLimited(r.Body, maxStatusBodyBytes)
 		r.Body.Close()
 		if r.StatusCode == http.StatusOK {
 			var h struct {
@@ -59,7 +58,7 @@ func (b *LMStudio) HealthCheck(addr string) error {
 	// LM Studio returns 200 for all paths but with {"error":"..."}.
 	r, err = authedGet(healthCheckTimeout, base+"/api/tags", b.apiKey)
 	if err == nil {
-		tagsBody, _ := io.ReadAll(r.Body)
+		tagsBody, _ := readBodyLimited(r.Body, maxStatusBodyBytes)
 		r.Body.Close()
 		if r.StatusCode == http.StatusOK {
 			var tags struct {
@@ -106,7 +105,7 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 		return fmt.Errorf("loading model via LM Studio API: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readBodyLimited(resp.Body, maxStatusBodyBytes)
 	if err := authFailedErr(resp.StatusCode); err != nil {
 		return err
 	}
@@ -142,7 +141,7 @@ func (b *LMStudio) UnloadModel(addr string, modelID string) error {
 		return fmt.Errorf("unloading model via LM Studio API: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := readBodyLimited(resp.Body, maxStatusBodyBytes)
 	if err := authFailedErr(resp.StatusCode); err != nil {
 		return err
 	}
@@ -196,7 +195,7 @@ func (b *LMStudio) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeJSONLimited(resp.Body, maxJSONBodyBytes, &result); err != nil {
 		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
 	}
 	models := make([]RunningModelInfo, 0, len(result.Data))
