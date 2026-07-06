@@ -1,6 +1,8 @@
 package launcher
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -192,6 +194,82 @@ func TestCleanupLogs_SkipsNonLogFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(txtFile); err != nil {
 		t.Error("non-log file should still exist")
+	}
+}
+
+func TestAutoCleanupLogs_SkipsRunningServersLogs(t *testing.T) {
+	t.Parallel()
+
+	// A healthy llama.cpp stand-in at the configured backend address: its
+	// managed log must survive the automatic cleanup even when its filename
+	// timestamp lies outside the retention window.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"data":[{"id":"/models/x.gguf"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	logDir := t.TempDir()
+	runningLog := filepath.Join(logDir, "llamacpp-20200101-000000.log")
+	staleLog := filepath.Join(logDir, "ollama-20200101-000000.log")
+	if err := os.WriteFile(runningLog, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleLog, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host, port := hostPort(t, srv.URL)
+	retentionDays := 0 // zero-day window: every aged file is eligible
+	cfg := &Config{
+		Servers:      map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:       logDir,
+		LogRetention: &retentionDays,
+		Profiles:     map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("llamacpp"),
+		Host:   &host,
+		Port:   &port,
+	}
+
+	autoCleanupLogs(cfg)
+
+	if _, err := os.Stat(runningLog); err != nil {
+		t.Error("running server's log must survive automatic cleanup")
+	}
+	if _, err := os.Stat(staleLog); !os.IsNotExist(err) {
+		t.Error("stale log of a stopped backend should have been removed")
+	}
+}
+
+func TestAutoCleanupLogs_NoRetentionConfigured(t *testing.T) {
+	t.Parallel()
+	logDir := t.TempDir()
+
+	oldLog := filepath.Join(logDir, "llamacpp-20200101-000000.log")
+	if err := os.WriteFile(oldLog, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{},
+		LogDir:   logDir,
+		Profiles: map[string]Profile{},
+	}
+
+	autoCleanupLogs(cfg)
+
+	if _, err := os.Stat(oldLog); err != nil {
+		t.Error("logs must be untouched when log_retention is unset")
 	}
 }
 

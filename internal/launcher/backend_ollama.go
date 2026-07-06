@@ -100,7 +100,7 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 		return fmt.Errorf("ollama binary not found in PATH")
 	}
 
-	logPath, err := createLogPath(cfg.LogDir, "ollama", cfg.LogRetention)
+	logPath, err := createLogPath(cfg, "ollama")
 	if err != nil {
 		return fmt.Errorf("creating log path: %w", err)
 	}

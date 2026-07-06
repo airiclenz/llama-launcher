@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Automatic log cleanup no longer deletes the log of a running server.** With `log_retention` set (the shipped default is `7`), the cleanup pass that runs before each new log file is created had no access to the loaded config, so it could not discover running instances and deleted the still-open log of any server running longer than the retention window — the server kept writing to the unlinked file and `llama-launcher logs` reported no managed log. The automatic path now threads the live config through to the cleanup, so logs belonging to running servers are always skipped, exactly as `logs clean` already did (TDD §9.1).
+
 ## 1.4.4
 
 ### Added

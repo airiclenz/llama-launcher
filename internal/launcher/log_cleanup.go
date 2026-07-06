@@ -102,8 +102,8 @@ func formatBytes(b int64) string {
 // activeLogFiles maps the current log-file path for each running instance.
 // Discovered via live probing, then resolved to a path via the deterministic
 // log-naming convention. Used by cleanupLogs to skip files in active use.
-// Returns an empty map when no config is provided (the autoCleanupLogs
-// fast-path on log creation has no cfg to share).
+// Returns an empty map when no config is provided (nothing can be probed
+// without one).
 func activeLogFiles(cfg *Config) map[string]bool {
 	active := make(map[string]bool)
 	if cfg == nil {
@@ -118,7 +118,16 @@ func activeLogFiles(cfg *Config) map[string]bool {
 	return active
 }
 
-func autoCleanupLogs(logDir string, retentionDays int) {
-	maxAge := time.Duration(retentionDays) * 24 * time.Hour
-	cleanupLogs(nil, logDir, maxAge, false)
+// autoCleanupLogs applies the configured retention window to cfg.LogDir
+// before a new log file is created. No-op when log_retention is unset.
+// Passing the live config through to cleanupLogs lets activeLogFiles skip
+// logs belonging to running servers, exactly as `logs clean` does (TDD §9.1).
+// Silent by design: automatic cleanup produces no output and best-effort
+// failures are ignored, matching cleanupLogs' per-file semantics.
+func autoCleanupLogs(cfg *Config) {
+	if cfg.LogRetention == nil {
+		return
+	}
+	maxAge := time.Duration(*cfg.LogRetention) * 24 * time.Hour
+	cleanupLogs(cfg, cfg.LogDir, maxAge, false)
 }
