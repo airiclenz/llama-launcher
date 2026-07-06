@@ -17,6 +17,7 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 	intPtr := func(v int) *int { return &v }
 	strPtr := func(v string) *string { return &v }
 	boolPtr := func(v bool) *bool { return &v }
+	floatPtr := func(v float64) *float64 { return &v }
 
 	t.Run("full parameter set", func(t *testing.T) {
 		t.Parallel()
@@ -81,6 +82,57 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 		for _, arg := range args {
 			if arg == "--mlock" || arg == "--no-mmap" || arg == "--jinja" {
 				t.Errorf("unexpected boolean flag: %s", arg)
+			}
+		}
+	})
+
+	t.Run("sampling params are emitted when set", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{}
+		profile := &ResolvedProfile{
+			ProfileParams: ProfileParams{
+				Temperature:   floatPtr(0.7),
+				RepeatPenalty: floatPtr(1.1),
+				TopK:          intPtr(40),
+				TopP:          floatPtr(0.95),
+				MinP:          floatPtr(0.05),
+			},
+			ExtraArgs: []string{"--temp", "0.9"},
+		}
+
+		args := b.BuildServerArgs(cfg, profile)
+		argSet := toArgMap(args)
+
+		assertArg(t, argSet, "--repeat-penalty", "1.1")
+		assertArg(t, argSet, "--top-k", "40")
+		assertArg(t, argSet, "--top-p", "0.95")
+		assertArg(t, argSet, "--min-p", "0.05")
+
+		// Sampling flags must precede extra_args so a user override wins
+		// (llama-server uses the last occurrence of a repeated flag).
+		if len(args) < 2 || args[len(args)-2] != "--temp" || args[len(args)-1] != "0.9" {
+			t.Errorf("extra_args must come after sampling flags, got: %v", args)
+		}
+		if !hasArgPair(args, "--temp", "0.7") {
+			t.Errorf("missing configured --temp 0.7 before extra_args: %v", args)
+		}
+	})
+
+	t.Run("nil sampling params omit the flags", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{}
+		profile := &ResolvedProfile{
+			ProfileParams: ProfileParams{Host: strPtr("localhost")},
+		}
+
+		args := b.BuildServerArgs(cfg, profile)
+		for _, flag := range []string{"--temp", "--repeat-penalty", "--top-k", "--top-p", "--min-p"} {
+			for _, arg := range args {
+				if arg == flag {
+					t.Errorf("unexpected sampling flag %s in args: %v", flag, args)
+				}
 			}
 		}
 	})
@@ -356,6 +408,15 @@ func assertArg(t *testing.T, m map[string]string, key, want string) {
 	if got != want {
 		t.Errorf("arg %s = %q, want %q", key, got, want)
 	}
+}
+
+func hasArgPair(args []string, flag, value string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func assertFlagPresent(t *testing.T, args []string, flag string) {

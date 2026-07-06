@@ -215,6 +215,21 @@ func (b *LlamaCpp) BuildServerArgs(cfg *Config, profile *ResolvedProfile) []stri
 	if params.Jinja != nil && *params.Jinja {
 		args = append(args, "--jinja")
 	}
+	if params.Temperature != nil {
+		args = append(args, "--temp", formatFloatArg(*params.Temperature))
+	}
+	if params.RepeatPenalty != nil {
+		args = append(args, "--repeat-penalty", formatFloatArg(*params.RepeatPenalty))
+	}
+	if params.TopK != nil {
+		args = append(args, "--top-k", strconv.Itoa(*params.TopK))
+	}
+	if params.TopP != nil {
+		args = append(args, "--top-p", formatFloatArg(*params.TopP))
+	}
+	if params.MinP != nil {
+		args = append(args, "--min-p", formatFloatArg(*params.MinP))
+	}
 
 	// Placed before extra_args so a user-supplied --api-key override wins
 	// (llama-server uses the last occurrence of a repeated flag).
@@ -225,4 +240,10 @@ func (b *LlamaCpp) BuildServerArgs(cfg *Config, profile *ResolvedProfile) []stri
 	args = append(args, profile.ExtraArgs...)
 
 	return args
+}
+
+// formatFloatArg renders a float CLI argument value in its shortest form that
+// round-trips exactly (e.g. 0.7 -> "0.7").
+func formatFloatArg(v float64) string {
+	return strconv.FormatFloat(v, 'g', -1, 64)
 }

@@ -130,7 +130,13 @@ whether sampling params are emitted.)
 
 ---
 
-## 3. llamacpp sampling parameters: apply them or drop the promise — DESIGN-CALL
+## 3. llamacpp sampling parameters: apply them or drop the promise — DESIGN-CALL — ✅ DONE (2026-07-06)
+
+NOTES (2026-07-06): User chose Option A. Flag spellings verified against the
+installed `/opt/homebrew/bin/llama-server --help`: `--temp` (alias
+`--temperature`), `--repeat-penalty`, `--top-k`, `--top-p`, `--min-p` all exist
+as documented. Also added the five flags to the TDD §8 flag-mapping table
+(covered by the item's "TDD only if wording needs tightening" Files entry).
 
 **Severity:** High (cross-validated). **Authority:** `defaults/config.yaml:184-188` +
 README backend table + TDD §4.2 all promise these as llamacpp-applicable.

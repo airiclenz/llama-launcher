@@ -697,6 +697,11 @@ The launcher builds the `llama-server` command line from the merged default para
 | `cont_batching` (true) | `-cb` |
 | `parallel` | `-np` |
 | `embedding` (true) | `--embedding` |
+| `temperature` | `--temp` |
+| `repeat_penalty` | `--repeat-penalty` |
+| `top_k` | `--top-k` |
+| `top_p` | `--top-p` |
+| `min_p` | `--min-p` |
 | `models_dir` | `--models-dir` |
 
 Boolean flags are only appended when the resolved value is `true`. Numeric flags are only appended when explicitly set (not nil after merge).
