@@ -441,19 +441,10 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 	isLlamaCpp := profile.Backend == "llamacpp"
 	isLMStudio := profile.Backend == "lmstudio"
 
-	if p.GPULayers != nil {
-		if isLlamaCpp {
-			add("GPU layers", strconv.Itoa(*p.GPULayers))
-		} else if isLMStudio {
-			switch {
-			case *p.GPULayers >= 99:
-				add("GPU offload", "max")
-			case *p.GPULayers <= 0:
-				add("GPU offload", "off")
-			default:
-				add("GPU offload", strconv.Itoa(*p.GPULayers))
-			}
-		}
+	// gpu_layers is llamacpp-only: LM Studio's REST load endpoint has no
+	// GPU-offload field, so showing it for lmstudio would misreport it as active.
+	if isLlamaCpp && p.GPULayers != nil {
+		add("GPU layers", strconv.Itoa(*p.GPULayers))
 	}
 	if isLlamaCpp && p.Threads != nil {
 		add("Threads", strconv.Itoa(*p.Threads))

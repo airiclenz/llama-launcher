@@ -168,13 +168,13 @@ sort_alphabetically: true
 #
 #   Parameter       llamacpp   ollama   lmstudio
 #   ─────────────   ────────   ──────   ────────
-#   gpu_layers      yes        -        yes (mapped: 99→"max", 0→"off")
+#   gpu_layers      yes        -        -
 #   threads         yes        -        -
 #   threads_batch   yes        -        -
 #   batch_size      yes        -        yes (mapped to eval_batch_size)
 #   context_size    yes        -        yes
 #   host / port     yes        yes      yes
-#   flash_attn      yes        -        yes
+#   flash_attn      yes        -        yes (mapped to flash_attention)
 #   cont_batching   yes        -        -
 #   parallel        yes        -        -
 #   mlock           yes        -        -

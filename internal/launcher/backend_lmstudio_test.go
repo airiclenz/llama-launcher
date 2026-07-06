@@ -181,6 +181,72 @@ func TestLMStudioLoadModel(t *testing.T) {
 		}
 	})
 
+	t.Run("maps batch_size and flash_attn to the REST field names", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]interface{}
+			json.Unmarshal(body, &payload)
+			if payload["eval_batch_size"] != float64(512) {
+				t.Errorf("eval_batch_size = %v, want 512", payload["eval_batch_size"])
+			}
+			if payload["flash_attention"] != true {
+				t.Errorf("flash_attention = %v, want true", payload["flash_attention"])
+			}
+			if _, ok := payload["batch_size"]; ok {
+				t.Error("payload carries raw batch_size; want it mapped to eval_batch_size")
+			}
+			if _, ok := payload["flash_attn"]; ok {
+				t.Error("payload carries raw flash_attn; want it mapped to flash_attention")
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		batchSize := 512
+		flashAttn := true
+		profile := &ResolvedProfile{
+			ModelPath: "test-model",
+			ProfileParams: ProfileParams{
+				BatchSize: &batchSize,
+				FlashAttn: &flashAttn,
+			},
+		}
+		if err := b.LoadModel(addrFromURL(t, srv.URL), profile); err != nil {
+			t.Errorf("expected success, got: %v", err)
+		}
+	})
+
+	t.Run("omits unset params and never sends gpu_layers", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]interface{}
+			json.Unmarshal(body, &payload)
+			// The load endpoint accepts no GPU-offload field, so gpu_layers
+			// must not leak into the payload under any name.
+			for _, key := range []string{"gpu_layers", "gpu", "context_length", "eval_batch_size", "flash_attention"} {
+				if _, ok := payload[key]; ok {
+					t.Errorf("payload unexpectedly carries %q", key)
+				}
+			}
+			if payload["model"] != "test-model" {
+				t.Errorf("model = %v, want test-model", payload["model"])
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		gpuLayers := 99
+		profile := &ResolvedProfile{
+			ModelPath:     "test-model",
+			ProfileParams: ProfileParams{GPULayers: &gpuLayers},
+		}
+		if err := b.LoadModel(addrFromURL(t, srv.URL), profile); err != nil {
+			t.Errorf("expected success, got: %v", err)
+		}
+	})
+
 	t.Run("error with message", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

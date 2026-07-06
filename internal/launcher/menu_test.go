@@ -104,68 +104,37 @@ func TestProfileDisplayName(t *testing.T) {
 func TestFormatProfileParams_GPULayers_LMStudio(t *testing.T) {
 	t.Parallel()
 
-	t.Run("intermediate value shows number", func(t *testing.T) {
-		t.Parallel()
-		layers := 50
-		profile := &ResolvedProfile{
-			Backend:       "lmstudio",
-			ModelPath:     "test-model",
-			ProfileParams: ProfileParams{GPULayers: &layers},
+	// LM Studio's REST load endpoint has no GPU-offload field, so the popup
+	// must not present gpu_layers as active for lmstudio profiles.
+	layers := 99
+	profile := &ResolvedProfile{
+		Backend:       "lmstudio",
+		ModelPath:     "test-model",
+		ProfileParams: ProfileParams{GPULayers: &layers},
+	}
+	for _, line := range formatProfileParams(profile) {
+		if contains(line, "GPU") {
+			t.Errorf("expected no GPU line for lmstudio profile, got: %q", line)
 		}
-		lines := formatProfileParams(profile)
-		found := false
-		for _, line := range lines {
-			if contains(line, "50") && contains(line, "GPU offload") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected GPU offload line with value 50, got lines: %v", lines)
-		}
-	})
+	}
+}
 
-	t.Run("99 shows max", func(t *testing.T) {
-		t.Parallel()
-		layers := 99
-		profile := &ResolvedProfile{
-			Backend:       "lmstudio",
-			ModelPath:     "test-model",
-			ProfileParams: ProfileParams{GPULayers: &layers},
-		}
-		lines := formatProfileParams(profile)
-		found := false
-		for _, line := range lines {
-			if contains(line, "max") && contains(line, "GPU offload") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected GPU offload line with 'max', got lines: %v", lines)
-		}
-	})
+func TestFormatProfileParams_GPULayers_LlamaCpp(t *testing.T) {
+	t.Parallel()
 
-	t.Run("0 shows off", func(t *testing.T) {
-		t.Parallel()
-		layers := 0
-		profile := &ResolvedProfile{
-			Backend:       "lmstudio",
-			ModelPath:     "test-model",
-			ProfileParams: ProfileParams{GPULayers: &layers},
+	layers := 50
+	profile := &ResolvedProfile{
+		Backend:       "llamacpp",
+		ModelPath:     "test-model",
+		ProfileParams: ProfileParams{GPULayers: &layers},
+	}
+	lines := formatProfileParams(profile)
+	for _, line := range lines {
+		if contains(line, "GPU layers") && contains(line, "50") {
+			return
 		}
-		lines := formatProfileParams(profile)
-		found := false
-		for _, line := range lines {
-			if contains(line, "off") && contains(line, "GPU offload") {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected GPU offload line with 'off', got lines: %v", lines)
-		}
-	})
+	}
+	t.Errorf("expected GPU layers line with value 50, got lines: %v", lines)
 }
 
 func contains(s, substr string) bool {

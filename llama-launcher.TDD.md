@@ -415,7 +415,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `backend_http.go` | Shared HTTP helpers for backend API calls: `authedGet` / `authedPostJSON` attach `Authorization: Bearer <key>` when a per-server API key is configured, `authFailedErr` maps 401/403 to an actionable "check api_key" error, `redactAPIKeyArgs` masks `--api-key` values for display surfaces. |
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
 | `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
-| `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
+| `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload (forwards `context_size`, `batch_size`, `flash_attn` as `context_length`, `eval_batch_size`, `flash_attention`; the REST load endpoint has no GPU-offload field, so `gpu_layers` is not sent), `lms` CLI for server start/stop. Registers via `init()`. |
 | `server.go` | LLM Server lifecycle. Unified start path (fork-and-detach for llamacpp; backend-supplied `TryStart` for Ollama/LM Studio), unified stop path that always tries to stop the process whether or not the launcher started it ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). `LoadProfile` orchestration with live idempotency check + drift notice from `GET /props` ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)) and unified `auto_unload` rule across same-server and cross-server cases ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). Instances are keyed by `host:port` and rediscovered live each invocation ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). `createLogPath` triggers automatic cleanup when `log_retention` is set. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
 | `discovery.go` | `RunningInstance` type and `DiscoverRunningInstances(cfg)` — probes every (backend, address) pair derivable from the config in parallel, returns the reachable set with the loaded Model and (for llamacpp) the live parameters from `/props`. Optional runtime details (PID via `lsof`, start time via `ps -o lstart=`, log path via the deterministic naming convention) are populated lazily by `fillRuntimeDetails`. `instancesSignature` condenses a discovery result into a comparable string (backend, address, loaded model per instance) used by the menu to detect background state changes between refresh ticks. |
 | `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
@@ -433,7 +433,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, and `shouldCrossServerUnload`. |
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
-| `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting. |
+| `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU layers display formatting (shown for llamacpp, suppressed for lmstudio). |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
 
 ### 5.3 LLMServer Interface
@@ -772,7 +772,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; non-200 → error; unreachable → error. |
 | `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error. |
 | `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when `/health` body lacks `status` field; healthy when LM Studio returns `{"error":"..."}` for `/health` and `/api/tags`; detects llamacpp via `/health` body containing `{"status":"ok"}`; detects Ollama via `/api/tags` body containing `{"models":[...]}`; non-200 → error; unreachable → error. |
-| `TestLMStudioLoadModel` | Success, context_length inclusion, error with message, error without message. |
+| `TestLMStudioLoadModel` | Success, context_length inclusion, batch_size/flash_attn mapped to `eval_batch_size`/`flash_attention`, unset params and gpu_layers omitted from the payload, error with message, error without message. |
 | `TestLMStudioUnloadModel` | Success, non-200 with error message, non-200 with empty body returns error. |
 | `TestExtractLMStudioError` | Valid JSON, empty body, malformed JSON, missing message field. |
 | `TestOllamaLoadModel` | Success (verifies keep_alive payload), error status. |
@@ -806,7 +806,8 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestParseChoice` | Valid, zero, negative, exceeds max, non-numeric, empty. |
 | `TestFormatUptime` | Hours, minutes, seconds-only branches. |
 | `TestProfileDisplayName` | With title, fallback to Profile name, unknown Profile. |
-| `TestFormatProfileParams_GPULayers_LMStudio` | Intermediate value shows number; 99 shows max; 0 shows off. |
+| `TestFormatProfileParams_GPULayers_LMStudio` | lmstudio profiles render no GPU line (the REST load endpoint has no GPU-offload field). |
+| `TestFormatProfileParams_GPULayers_LlamaCpp` | llamacpp profiles show the configured GPU layers value. |
 
 ### 12.4 Test Helpers
 

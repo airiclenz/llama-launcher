@@ -178,7 +178,24 @@ table, TDD §4.2, and drop them from `paramDrift`'s comparison list (`server.go:
 
 ---
 
-## 4. LM Studio parameter mappings: implement them or correct the docs — DESIGN-CALL
+## 4. LM Studio parameter mappings: implement them or correct the docs — DESIGN-CALL — ✅ DONE (2026-07-06)
+
+NOTES (2026-07-06): User chose Option A. Field names verified against LM Studio's
+REST docs (lmstudio.ai/docs/developer/rest/load — `POST /api/v1/models/load`
+accepts `model`, `context_length`, `eval_batch_size`, `flash_attention`,
+`num_experts`, `offload_kv_cache_to_gpu`, `echo_load_config`). `batch_size` and
+`flash_attn` are implemented as `eval_batch_size`/`flash_attention` per Option A.
+The endpoint has **no** GPU-offload field — the documented 99→"max"/0→"off"
+`gpu_layers` mapping is not implementable over this API (`offload_kv_cache_to_gpu`
+is KV-cache placement, wrong semantics; the "max"/"off" GPU knob exists only in
+the `lms` CLI/SDKs, not the REST API) — so `gpu_layers` alone got the Option-B
+treatment: dropped from the config/README parameter table and the popup
+(`menu.go`), with `TestFormatProfileParams_GPULayers_LMStudio` now asserting no
+GPU line renders for lmstudio (llamacpp display coverage kept in a new
+`TestFormatProfileParams_GPULayers_LlamaCpp`). Also touched `README.md` and
+`llama-launcher.TDD.md` (parameter table / test-table rows) under the item's
+"docs only if wording needs tightening" entry, and `menu.go`/`menu_test.go` from
+the Files (B) list for the popup correction.
 
 **Severity:** High. **Authority:** `defaults/config.yaml:171-177` + README backend table
 promise `gpu_layers` (99→"max"/0→"off"), `batch_size` (→`eval_batch_size`), `flash_attn`
