@@ -115,12 +115,55 @@ var (
 	errHelp    = errors.New("help requested")
 )
 
+// maxCapturedOutput caps how many bytes of the CLI's stdout and stderr (each)
+// run retains, so a runaway subprocess cannot grow the adapter's memory — and
+// the MCP response — without bound. 1 MiB comfortably covers the largest
+// legitimate output (profile/status JSON, log tails).
+const maxCapturedOutput = 1 << 20
+
+// truncationNotice is appended to a stream's returned content when it hit
+// maxCapturedOutput, so the caller knows the output is incomplete.
+const truncationNotice = "[output truncated: 1MiB cap reached]"
+
+// limitedWriter retains at most limit bytes of what is written to it and
+// discards the rest, recording that truncation happened. Write always reports
+// the full input as consumed and never returns an error, so the subprocess
+// keeps running (and exits on its own terms) after the cap is hit instead of
+// dying on a broken pipe.
+type limitedWriter struct {
+	b         strings.Builder
+	limit     int
+	truncated bool
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := w.limit - w.b.Len(); n > room {
+		w.truncated = true
+		p = p[:room]
+	}
+	w.b.Write(p)
+	return n, nil
+}
+
+// text returns the retained content trimmed of trailing newlines, with the
+// truncation notice appended when the cap was hit.
+func (w *limitedWriter) text() string {
+	s := strings.TrimRight(w.b.String(), "\n")
+	if w.truncated {
+		s += "\n" + truncationNotice
+	}
+	return s
+}
+
 // run executes `llama-launcher [--config path] <args...>` and maps the result
 // to an MCP tool result. stdout is returned as the tool's text content; when
 // the command exits non-zero with no stdout, the result is flagged as an error
 // carrying stderr. Several subcommands (e.g. `status`) exit non-zero to signal
 // an informational negative while still printing valid JSON on stdout — those
-// are returned as normal content so the caller keeps the data.
+// are returned as normal content so the caller keeps the data. Each captured
+// stream is capped at maxCapturedOutput; content past the cap is dropped and
+// a truncation notice is appended.
 func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
 	full := args
 	if c.configPath != "" {
@@ -128,13 +171,14 @@ func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
 	}
 
 	cmd := exec.CommandContext(ctx, c.llamaLauncherBin, full...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &limitedWriter{limit: maxCapturedOutput}
+	stderr := &limitedWriter{limit: maxCapturedOutput}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err := cmd.Run()
 
-	out := strings.TrimRight(stdout.String(), "\n")
-	errOut := strings.TrimRight(stderr.String(), "\n")
+	out := stdout.text()
+	errOut := stderr.text()
 
 	if err != nil && out == "" {
 		msg := errOut

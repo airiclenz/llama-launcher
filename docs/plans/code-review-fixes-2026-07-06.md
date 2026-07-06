@@ -266,7 +266,14 @@ argument-validation hardening), `CHANGELOG.md`.
 
 ---
 
-## 6. Add HTTP server timeouts and cap MCP tool output size
+## 6. Add HTTP server timeouts and cap MCP tool output size — ✅ DONE (2026-07-06)
+
+NOTES (2026-07-06): Also touched `llama-launcher.TDD.md` (not in this item's Files
+list) — §15.1 now documents the listener timeouts and §15.2's result-mapping
+paragraph the 1 MiB per-stream output cap, per the plan-wide "update docs in the
+same commit" rule. Timeout values chosen: `ReadHeaderTimeout` 10 s, `IdleTimeout`
+2 min, `WriteTimeout` 10 min (must outlast `load_profile`, whose model-load wait
+is up to 5 min via `modelLoadTimeout` plus health/stop grace periods).
 
 **Severity:** Medium (security). **Authority:** the review's `[Security]` timeout/output
 finding; complements item 5.

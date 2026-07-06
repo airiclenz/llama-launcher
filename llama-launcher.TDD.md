@@ -854,6 +854,8 @@ The adapter is a thin shim: it runs on the host, exposes an MCP server over Stre
 
 It ships with the CLI: `make build-mcp` builds it locally, and the Homebrew formula installs it alongside `llama-launcher` (§13). It is inert until started — installing it adds no resident process.
 
+The HTTP listener sets connection timeouts so a stuck or hostile client cannot hold it open indefinitely: `ReadHeaderTimeout` 10 s, `IdleTimeout` 2 min, and `WriteTimeout` 10 min — the write window is generous because it must outlast the slowest tool call (`load_profile` waits up to 5 minutes for a model load, plus health-check and stop grace periods).
+
 ### 15.2 Tool surface
 
 Each tool maps 1:1 to an existing subcommand (`internal/launcher/cli.go`):
@@ -870,7 +872,7 @@ Each tool maps 1:1 to an existing subcommand (`internal/launcher/cli.go`):
 
 The mutating tools are registered only when `--read-only` is not set. Judgment that needs context (e.g. "never swap mid-simulation") stays with the agent via the skill; the adapter exposes the tools plainly.
 
-**Result mapping.** stdout is returned as the tool's text content. A non-zero exit with empty stdout is flagged as a tool error carrying stderr. A non-zero exit that still printed stdout (e.g. `status --json` reports exit 1 when nothing is running but still emits the JSON array, per [§3.3](#33-exit-codes)) is returned as normal content so the caller keeps the data.
+**Result mapping.** stdout is returned as the tool's text content. A non-zero exit with empty stdout is flagged as a tool error carrying stderr. A non-zero exit that still printed stdout (e.g. `status --json` reports exit 1 when nothing is running but still emits the JSON array, per [§3.3](#33-exit-codes)) is returned as normal content so the caller keeps the data. Each captured stream (stdout and stderr) is capped at 1 MiB: content past the cap is dropped and a `[output truncated: 1MiB cap reached]` notice is appended, so a runaway subprocess cannot grow the adapter's memory or the MCP response without bound.
 
 ### 15.3 Access control
 
