@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **Re-running `load` on an already-active llamacpp profile no longer reports false parameter drift.** The idempotent no-op path (ADR-0007) diffs the freshly resolved profile against the live parameters from llama-server's `/props`, but `/props` reports only a subset of the launch parameters (`context_size`, `parallel`, and the sampling settings) — the fields it never reports (`gpu_layers`, `threads`, `batch_size`, `flash_attn`, …) came back nil and were counted as drift. With the shipped defaults setting those fields, the second `load` of any llamacpp profile printed a bogus "parameters have drifted" notice that `--restart` could never clear. The drift comparison now skips any field that either side does not carry a value for (unknown ≠ drifted); a genuinely changed shared field (e.g. `context_size`) is still reported.
 - **Automatic log cleanup no longer deletes the log of a running server.** With `log_retention` set (the shipped default is `7`), the cleanup pass that runs before each new log file is created had no access to the loaded config, so it could not discover running instances and deleted the still-open log of any server running longer than the retention window — the server kept writing to the unlinked file and `llama-launcher logs` reported no managed log. The automatic path now threads the live config through to the cleanup, so logs belonging to running servers are always skipped, exactly as `logs clean` already did (TDD §9.1).
 
 ## 1.4.4

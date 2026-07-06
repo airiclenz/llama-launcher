@@ -203,12 +203,56 @@ func TestParamDrift(t *testing.T) {
 		}
 	})
 
-	t.Run("set-vs-unset is reported", func(t *testing.T) {
+	t.Run("set-vs-unset is skipped, not reported", func(t *testing.T) {
 		t.Parallel()
 		a := ProfileParams{ContextSize: intPtr(8192)}
 		b := ProfileParams{}
-		d := paramDrift(a, b)
-		if len(d) != 1 || d[0] != "context_size: 8192 → (unset)" {
+		if d := paramDrift(a, b); len(d) != 0 {
+			t.Errorf("want no drift when one side is unknown, got %v", d)
+		}
+	})
+
+	t.Run("fields the backend does not report are skipped", func(t *testing.T) {
+		t.Parallel()
+		// live carries only the fields llama-server's /props reports
+		// (see LlamaCpp.QueryLiveParams).
+		live := ProfileParams{
+			ContextSize:   intPtr(8192),
+			Parallel:      intPtr(1),
+			Temperature:   floatPtr(0.7),
+			RepeatPenalty: floatPtr(1.1),
+			TopK:          intPtr(40),
+			TopP:          floatPtr(0.9),
+			MinP:          floatPtr(0.05),
+		}
+		// fresh has every field populated, matching live on the shared ones.
+		fresh := live
+		fresh.GPULayers = intPtr(99)
+		fresh.Threads = intPtr(8)
+		fresh.ThreadsBatch = intPtr(8)
+		fresh.BatchSize = intPtr(512)
+		fresh.FlashAttn = boolPtr(true)
+		fresh.ContBatching = boolPtr(true)
+		fresh.Mlock = boolPtr(false)
+		fresh.NoMmap = boolPtr(false)
+		fresh.Embedding = boolPtr(false)
+		fresh.Jinja = boolPtr(true)
+		if d := paramDrift(live, fresh); len(d) != 0 {
+			t.Errorf("want no drift for fields the backend does not report, got %v", d)
+		}
+	})
+
+	t.Run("changed shared field still drifts when others are unreported", func(t *testing.T) {
+		t.Parallel()
+		live := ProfileParams{ContextSize: intPtr(4096), Temperature: floatPtr(0.7)}
+		fresh := ProfileParams{
+			ContextSize: intPtr(8192),
+			Temperature: floatPtr(0.7),
+			GPULayers:   intPtr(99),
+			FlashAttn:   boolPtr(true),
+		}
+		d := paramDrift(live, fresh)
+		if len(d) != 1 || d[0] != "context_size: 4096 → 8192" {
 			t.Errorf("unexpected drift: %v", d)
 		}
 	})

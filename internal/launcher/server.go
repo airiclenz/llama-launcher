@@ -413,33 +413,30 @@ func liveParamDrift(b LLMServer, addr string, fresh ProfileParams) []string {
 // are intentionally skipped: drift in those puts the activation in a
 // different address slot, which the idempotency check up the stack would
 // not have matched in the first place. Each returned string has the form
-// "field: old → new". Nil values on either side are treated as "unset" and
-// only produce drift when the other side has a value.
+// "field: old → new". A field is compared only when both sides carry a
+// value: nil means the field is unknown on that side (llama-server's
+// /props reports only a subset of the launch parameters), so nil-vs-value
+// pairs are skipped rather than reported as drift (ADR-0007 — the notice
+// is for real divergence only).
 func paramDrift(stored, fresh ProfileParams) []string {
 	var drifts []string
 	addInt := func(name string, a, b *int) {
-		if a == nil && b == nil {
+		if a == nil || b == nil || *a == *b {
 			return
 		}
-		if a == nil || b == nil || *a != *b {
-			drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatIntPtr(a), formatIntPtr(b)))
-		}
+		drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatIntPtr(a), formatIntPtr(b)))
 	}
 	addBool := func(name string, a, b *bool) {
-		if a == nil && b == nil {
+		if a == nil || b == nil || *a == *b {
 			return
 		}
-		if a == nil || b == nil || *a != *b {
-			drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatBoolPtr(a), formatBoolPtr(b)))
-		}
+		drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatBoolPtr(a), formatBoolPtr(b)))
 	}
 	addFloat := func(name string, a, b *float64) {
-		if a == nil && b == nil {
+		if a == nil || b == nil || *a == *b {
 			return
 		}
-		if a == nil || b == nil || *a != *b {
-			drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatFloatPtr(a), formatFloatPtr(b)))
-		}
+		drifts = append(drifts, fmt.Sprintf("%s: %s → %s", name, formatFloatPtr(a), formatFloatPtr(b)))
 	}
 
 	addInt("gpu_layers", stored.GPULayers, fresh.GPULayers)

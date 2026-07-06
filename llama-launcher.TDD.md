@@ -785,7 +785,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestRunningInstance_Addr` / `_Uptime` / `_Uptime_ZeroStart` | Instance helper methods including the zero-StartedAt fallback. |
 | `TestDiscoverRunningInstances_*` | Discovery returns the empty set when nothing listens; an httptest llama-server stand-in is found with `ActiveModel` and `ResolvedParams.ContextSize` populated from `/v1/models` and `/props`. |
 | `TestFindManagedLogFile` | Most-recent file picked by lexicographic timestamp; filters by backend prefix; returns empty when no matching file exists. |
-| `TestParamDrift` | Identical params, nil-vs-nil, set-vs-unset, bool/float comparisons, slot-identity fields skipped. |
+| `TestParamDrift` | Identical params, bool/float comparisons, slot-identity fields skipped; nil on either side (a field the backend does not report) is skipped, not drift — a live set carrying only the `/props` subset against a fully populated profile yields no drift, while a changed shared field still does. |
 | `TestShouldCrossServerUnload` | Decides whether to issue an unload on a discovered instance during cross-server `auto_unload`. |
 | `TestGetLLMServer` | Known LLM Server names return correct instance; unknown returns error. |
 | `TestExpandTilde` | `~/path`, bare `~`, `~username` (unchanged), absolute path, empty. |

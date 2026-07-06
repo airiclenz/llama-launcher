@@ -85,7 +85,13 @@ cleanup already have `cfg` in scope — do not introduce a package global.
 
 ---
 
-## 2. Idempotent llamacpp load must not report false parameter drift
+## 2. Idempotent llamacpp load must not report false parameter drift — ✅ DONE (2026-07-06)
+
+NOTES (2026-07-06): Also touched `llama-launcher.TDD.md` (not in this item's Files
+list) — the §12 test-table row for `TestParamDrift` documented the old
+"set-vs-unset is reported" semantics and was updated to match, per the plan-wide
+"update docs in the same commit" rule. `backend_llamacpp.go` was not changed: the
+`QueryLiveParams` docstring already describes the skip behaviour this fix makes true.
 
 **Severity:** High (cross-validated). **Authority:** ADR-0007 (drift notice is for *real*
 divergence between the running server and the resolved profile); `QueryLiveParams`'s
