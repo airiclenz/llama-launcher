@@ -334,7 +334,21 @@ corresponding `*_test.go`, `CHANGELOG.md`.
 
 ---
 
-## 8. Confirm and (if needed) redact secrets in `tail_log` output — investigate first
+## 8. Confirm and (if needed) redact secrets in `tail_log` output — investigate first — ✅ DONE (2026-07-06)
+
+NOTES (2026-07-06): Negative result — no leak, no code change. Confirmed empirically
+against the installed llama-server (Homebrew build 9870): loaded a real llamacpp
+profile via `llama-launcher --config <tmp> load keytest` with
+`servers.llamacpp.api_key: "LLTESTKEY-8f3a9c"` on 127.0.0.1:18234, verified the key
+was active (`/v1/chat/completions` → 401 without/with wrong key, 200 with correct
+key), exercised authorized + unauthorized requests, then checked
+`llama-launcher logs` and grepped the managed log directly: zero occurrences of the
+key or any fragment. llama-server does not echo argv at default verbosity; auth
+failures log only `unauthorized: Invalid API Key`; and `startManagedServer`
+(server.go) writes nothing of its own to the log (child stdout/stderr only).
+Residual, out of default path: if a user opts into verbose logging via
+`extra_args: ["-lv", "N"]`, llama-server prints `api_keys: ****3a9c` — self-masked
+by llama.cpp to the last 4 chars, not a plaintext leak.
 
 **Severity:** Medium (security, uncertain). **Authority:** ADR-0008 (client "receives no
 secret it could leak"); the review's `[Security]` key-leak finding.
