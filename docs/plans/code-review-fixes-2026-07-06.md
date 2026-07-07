@@ -712,7 +712,14 @@ the assertions match the fixed behaviour).
 
 ---
 
-## 18. Add CLI exit-code and MCP allowlist adversarial tests
+## 18. Add CLI exit-code and MCP allowlist adversarial tests — ✅ DONE (2026-07-07)
+
+NOTES (2026-07-07): The item's Files list says "new internal/launcher/cli_test.go",
+but that file already exists (items 9/14 created it); the `Run`-driving tests were
+appended to it rather than to a second file. Test-only item — no behaviour change,
+so no CHANGELOG/docs touched (the item's Files list omits them). The `[::1]:port`
+case asserts 403 (v6 loopback is not in the single-entry `192.168.64.2` allowlist),
+exercising bracketed-IPv6 RemoteAddr parsing; the IPv4-mapped case asserts 200.
 
 **Severity:** Medium (critical contract + sole auth layer untested). **Authority:** TDD §3.3
 exit codes; ADR-0008 allowlist; the MCP result mapping depends on the real CLI's exit codes.
