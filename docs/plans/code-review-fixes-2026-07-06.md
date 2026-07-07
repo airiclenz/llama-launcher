@@ -406,7 +406,18 @@ documented field set (`backend`, `running`, `address`, `active_profile`, `active
 
 ---
 
-## 10. Fix `Ollama.TryStop` (broken call + host-wide sweep)
+## 10. Fix `Ollama.TryStop` (broken call + host-wide sweep) — ✅ DONE (2026-07-07)
+
+NOTES (2026-07-07): Chose the delete option (Option B) — `Ollama.TryStop` is now a
+no-op, relying on the address-scoped `lsof`/PID path in `EnsureStopped`. `ollama`
+is **not installed** on the target machine (`which ollama` → not found), so the
+`ollama stop` arity could not be confirmed empirically; per the item's own "if that
+is not reliable across versions" clause this favours Option B, and `ollama stop`'s
+documented arity is `ollama stop <model>` (exactly one model arg, unloads a model
+without stopping `ollama serve`, subcommand absent on older versions). Also touched
+`llama-launcher.TDD.md` module-table row (§7.1, `backend_ollama.go`) and the
+`TryStart`/`TryStop`-pair paragraph in addition to §6.5, since both named the removed
+`ollama stop` mechanism — per the plan-wide "update docs in the same commit" rule.
 
 **Severity:** Medium (cross-validated). **Authority:** ADR-0001 (stop is unconditional but
 per-instance); ADR-0006 (address-keyed instances); TryStop is documented "best-effort,

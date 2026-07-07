@@ -245,6 +245,18 @@ func TestOllamaListRunningModels(t *testing.T) {
 	})
 }
 
+func TestOllamaTryStop_IsNoOpAndNeverErrors(t *testing.T) {
+	t.Parallel()
+
+	// TryStop used to run `ollama stop` (which errors without a model argument)
+	// and then SIGTERM every `ollama serve` on the host. It is now a pure no-op:
+	// the launcher stops the specific instance via the address-scoped PID path.
+	b := &Ollama{}
+	if err := b.TryStop("127.0.0.1:11434"); err != nil {
+		t.Errorf("TryStop = %v, want nil", err)
+	}
+}
+
 func TestOllamaAuthHeaders(t *testing.T) {
 	t.Parallel()
 

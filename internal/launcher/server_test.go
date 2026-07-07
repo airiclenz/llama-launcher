@@ -1,11 +1,103 @@
 package launcher
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// fakeStopServer is a minimal LLMServer used to drive EnsureStopped's stop-hook
+// handling without touching real processes. Its behaviour is fixed at
+// construction (no field mutation after registration) so concurrent registry
+// readers cannot race it.
+type fakeStopServer struct {
+	name      string
+	stopErr   error
+	healthErr error
+	stopCalls atomic.Int32
+}
+
+func (f *fakeStopServer) Name() string                                 { return f.name }
+func (f *fakeStopServer) DisplayName() string                          { return f.name }
+func (f *fakeStopServer) DefaultAddr() string                          { return "" }
+func (f *fakeStopServer) HealthCheck(string) error                     { return f.healthErr }
+func (f *fakeStopServer) ResolveModel(*Config, string) (string, error) { return "", nil }
+func (f *fakeStopServer) LoadModel(string, *ResolvedProfile) error     { return nil }
+func (f *fakeStopServer) UnloadModel(string, string) error             { return nil }
+func (f *fakeStopServer) TryStart(*Config, string) error               { return nil }
+func (f *fakeStopServer) TryStop(string) error {
+	f.stopCalls.Add(1)
+	return f.stopErr
+}
+
+var (
+	fakeStopErroring = &fakeStopServer{
+		name:      "faketrystop-erroring",
+		stopErr:   errors.New("stop hook boom"),
+		healthErr: errors.New("unreachable"),
+	}
+	fakeStopQuiet = &fakeStopServer{
+		name:      "faketrystop-quiet",
+		healthErr: errors.New("unreachable"),
+	}
+)
+
+func init() {
+	RegisterLLMServer(fakeStopErroring)
+	RegisterLLMServer(fakeStopQuiet)
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns whatever
+// was written. Safe only in a non-parallel test (os.Stderr is process-global).
+func captureStderr(fn func()) string {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	fn()
+	_ = w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	_ = r.Close()
+	return string(out)
+}
+
+func TestEnsureStopped_StopHookErrorIsNonBlocking(t *testing.T) {
+	// Not parallel: captureStderr swaps the process-global os.Stderr.
+	before := fakeStopErroring.stopCalls.Load()
+
+	var stopErr error
+	out := captureStderr(func() {
+		stopErr = EnsureStopped(fakeStopErroring.name, "127.0.0.1:1", nil)
+	})
+	if stopErr != nil {
+		t.Fatalf("EnsureStopped = %v, want nil (stop hook errors must be non-blocking)", stopErr)
+	}
+	if got := fakeStopErroring.stopCalls.Load() - before; got != 1 {
+		t.Errorf("TryStop invocations = %d, want 1", got)
+	}
+	if !strings.Contains(out, fakeStopErroring.name) || !strings.Contains(out, "stop hook boom") {
+		t.Errorf("stderr = %q, want it to surface the backend and the stop-hook error", out)
+	}
+}
+
+func TestEnsureStopped_QuietWhenStopHookSucceeds(t *testing.T) {
+	// Not parallel: captureStderr swaps the process-global os.Stderr.
+	var stopErr error
+	out := captureStderr(func() {
+		stopErr = EnsureStopped(fakeStopQuiet.name, "127.0.0.1:1", nil)
+	})
+	if stopErr != nil {
+		t.Fatalf("EnsureStopped = %v, want nil", stopErr)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("stderr = %q, want no warning when the stop hook succeeds", out)
+	}
+}
 
 func TestRunningInstance_Addr(t *testing.T) {
 	t.Parallel()

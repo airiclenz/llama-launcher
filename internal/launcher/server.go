@@ -189,7 +189,11 @@ func EnsureStopped(backend, addr string, progress ProgressFunc) error {
 	}
 
 	reportStep(progress, "Disconnecting")
-	b.TryStop(addr)
+	// The stop hook is best-effort: report its error but keep going, since the
+	// address-scoped PID path below is the authoritative stop (TDD §6.5).
+	if err := b.TryStop(addr); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: stop hook for %s at %s reported: %v\n", backend, addr, err)
+	}
 	if b.HealthCheck(addr) != nil {
 		return nil
 	}

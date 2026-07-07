@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -127,35 +125,15 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 	return nil
 }
 
-func (b *Ollama) TryStop(_ string) error {
-	binary, err := exec.LookPath("ollama")
-	if err != nil {
-		return nil
-	}
-	cmd := exec.Command(binary, "stop")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("stopping Ollama: %w", err)
-	}
-
-	out, err := exec.Command("pgrep", "-f", "ollama serve").Output()
-	if err != nil || len(out) == 0 {
-		return nil
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		pid, err := strconv.Atoi(strings.TrimSpace(line))
-		if err != nil || pid <= 0 {
-			continue
-		}
-		proc, err := os.FindProcess(pid)
-		if err != nil {
-			continue
-		}
-		if err := proc.Signal(syscall.SIGTERM); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to signal PID %d: %v\n", pid, err)
-		}
-	}
-	return nil
-}
+// TryStop is intentionally a no-op for Ollama. The launcher stops the specific
+// instance by signalling whatever process is listening at addr — the
+// address-scoped lsof/PID path in EnsureStopped, which already handles the
+// listener. It deliberately does not shell out to `ollama stop <model>` (that
+// only unloads a model from a still-running `ollama serve`, so it would not
+// make the listener go away, and the subcommand is absent on older ollama
+// versions), and it never sweeps every `ollama serve` on the host by PID —
+// that would kill unrelated instances regardless of addr.
+func (b *Ollama) TryStop(_ string) error { return nil }
 
 func (b *Ollama) LastStartedPID() int        { return b.lastPID }
 func (b *Ollama) LastStartedLogFile() string { return b.lastLogFile }
