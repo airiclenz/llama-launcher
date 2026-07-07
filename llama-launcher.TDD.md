@@ -833,7 +833,7 @@ The published formula (`airiclenz/tap/llama-launcher`) builds from the release s
 
 ## 14. Coding Standards
 
-Follow `skills/coding-standards/SKILL.md` when writing or modifying code. Read the base references and the Go-specific extensions before making changes.
+Follow the `coding-standards` skill when writing or modifying code. It is a personal Claude skill kept outside this repository at `~/.claude/skills/coding-standards/SKILL.md`; read its base references (`references/coding-standards.md`, `references/testing.md`) and the Go extensions (`references/coding-standards.go.md`, `references/testing.go.md`) before making changes.
 
 ### After Changing Code
 

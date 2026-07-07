@@ -610,7 +610,16 @@ first so this deletion doesn't disturb it).
 
 ---
 
-## 16. Fix stale documentation that contradicts the live-derivation design
+## 16. Fix stale documentation that contradicts the live-derivation design — ✅ DONE (2026-07-07)
+
+NOTES (2026-07-07): Also corrected the *second* stale reference in the same
+CONTEXT.md "Flagged ambiguities" section — line 33's "(recorded in its per-server
+state file)" — to "(derived live by probing that server, not stored anywhere)".
+The item body named only the line-32 `ServerState` sentence, but leaving line 33's
+state-file claim would have left the section self-contradicting the same
+no-persisted-state invariant this item exists to enforce. For TDD §14 I took the
+item's "reference the `~/.claude/skills/...` path explicitly" option (not vendoring a
+copy). No code touched.
 
 **Severity:** Medium. **Authority:** invariant "no persisted state / everything derived live";
 the review's `[Intent/Structure]` stale-docs finding.
