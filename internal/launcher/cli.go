@@ -446,21 +446,21 @@ func cmdList(cfg *Config, args []string) int {
 	maxDescLen := 0
 	descs := make(map[string]string, len(names))
 	for _, name := range names {
-		if len(name) > maxNameLen {
-			maxNameLen = len(name)
+		if w := visibleWidth(name); w > maxNameLen {
+			maxNameLen = w
 		}
 		p := cfg.Profiles[name]
 		server := resolveProfileServer(cfg, &p)
 		tag := backendDisplayName(server)
-		if len(tag) > maxTagLen {
-			maxTagLen = len(tag)
+		if w := visibleWidth(tag); w > maxTagLen {
+			maxTagLen = w
 		}
 		desc := p.Description
 		if desc == "" {
 			desc = "-"
 		}
 		descs[name] = desc
-		if w := len(desc); w > maxDescLen {
+		if w := visibleWidth(desc); w > maxDescLen {
 			maxDescLen = w
 		}
 	}
@@ -473,7 +473,7 @@ func cmdList(cfg *Config, args []string) int {
 		desc := descs[name]
 		suffix := ""
 		if anyFav {
-			pad := strings.Repeat(" ", maxDescLen-len(desc))
+			pad := strings.Repeat(" ", maxDescLen-visibleWidth(desc))
 			if p.IsFavourite {
 				suffix = pad + " ★"
 			}
