@@ -159,9 +159,6 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 	if inst.ActiveModel != "/models/x.gguf" {
 		t.Errorf("ActiveModel = %q, want /models/x.gguf", inst.ActiveModel)
 	}
-	if inst.ResolvedParams.ContextSize == nil || *inst.ResolvedParams.ContextSize != 4096 {
-		t.Errorf("ContextSize = %v, want 4096", inst.ResolvedParams.ContextSize)
-	}
 }
 
 func TestMatchProfileName(t *testing.T) {

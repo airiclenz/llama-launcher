@@ -251,23 +251,6 @@ func formatUnit(v float64, unit string) string {
 // is unset in the config.
 const DefaultMemoryStatusTemplate = "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
 
-// FormatMemoryLine substitutes memory readout placeholders in template
-// with humanised byte values (e.g. "12 GB") or integer percentages
-// (e.g. "23%"). Unknown placeholders are left in place. Percentage
-// placeholders return "0%" when the denominator is zero. One-shot
-// convenience over CompileMemoryTemplate; the menu's render loop uses
-// Config.CompiledMemoryTemplate instead to avoid recompiling per tick.
-func FormatMemoryLine(s MemStats, template string) string {
-	return CompileMemoryTemplate(template, builtinBarDefaults()).Render(s)
-}
-
-// percentString renders n/d as a rounded integer percentage with a
-// trailing "%". Returns "0%" when d is zero so swap-disabled systems
-// don't show a divide-by-zero.
-func percentString(n, d uint64) string {
-	return fmt.Sprintf("%d%%", percentValue(n, d))
-}
-
 // percentValue computes n/d as a rounded integer percentage. Returns 0
 // when d is zero so swap-disabled systems don't divide by zero.
 func percentValue(n, d uint64) uint64 {

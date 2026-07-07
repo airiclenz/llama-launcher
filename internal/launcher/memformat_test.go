@@ -345,22 +345,26 @@ func TestMemoryTemplate_SwapDisabledBarIsEmpty(t *testing.T) {
 func TestMemoryTemplate_LegacyByteCompat(t *testing.T) {
 	t.Parallel()
 
-	// Placeholder-only templates must render exactly as the pre-compiled
-	// FormatMemoryLine always has.
+	// Placeholder-only templates must render byte-for-byte as the plain
+	// pre-1.5 readout did, and must not report Styled (no style tags or bars).
 	stats := memTestStats()
-	for _, template := range []string{
-		"RAM: {free_ram} free · Swap: {swap_used} used", // pre-1.5 default
-		"Mem {used_ram}/{total_ram} · Swap {swap_used}",
-		"{free_ram_pct} free / {used_ram_pct} used",
-		"GPU {gpu_util_pct} · {gpu_used_ram} / {gpu_alloc_ram}",
-		"free={free_ram} unknown={foo}",
-	} {
-		tpl := CompileMemoryTemplate(template, builtinBarDefaults())
-		if got, want := tpl.Render(stats), FormatMemoryLine(stats, template); got != want {
-			t.Errorf("template %q: Render = %q, want %q", template, got, want)
+	cases := []struct {
+		template string
+		want     string
+	}{
+		{"RAM: {free_ram} free · Swap: {swap_used} used", "RAM: 12GB free · Swap: 1.5GB used"}, // pre-1.5 default
+		{"Mem {used_ram}/{total_ram} · Swap {swap_used}", "Mem 20GB/32GB · Swap 1.5GB"},
+		{"{free_ram_pct} free / {used_ram_pct} used", "38% free / 63% used"},
+		{"GPU {gpu_util_pct} · {gpu_used_ram} / {gpu_alloc_ram}", "GPU 17% · 512MB / 15GB"},
+		{"free={free_ram} unknown={foo}", "free=12GB unknown={foo}"},
+	}
+	for _, tc := range cases {
+		tpl := CompileMemoryTemplate(tc.template, builtinBarDefaults())
+		if got := tpl.Render(stats); got != tc.want {
+			t.Errorf("template %q: Render = %q, want %q", tc.template, got, tc.want)
 		}
 		if tpl.Styled() {
-			t.Errorf("template %q should not report Styled", template)
+			t.Errorf("template %q should not report Styled", tc.template)
 		}
 	}
 }
