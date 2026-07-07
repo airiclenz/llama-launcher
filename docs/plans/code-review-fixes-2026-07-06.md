@@ -474,7 +474,17 @@ instance; only fall back to `instances[0]` after the loop when none has a model.
 
 ---
 
-## 12. auto-stop / auto-unload must match the target by address AND backend
+## 12. auto-stop / auto-unload must match the target by address AND backend — ✅ DONE (2026-07-07)
+
+NOTES (2026-07-07): Extracted the skip predicate into a pure helper
+`isTargetInstance(inst, targetAddr, targetBackend)` (`server.go`) and pointed
+both loops at it, rather than inlining `inst.Addr() == targetAddr &&
+inst.Backend == profile.Backend` in each. This makes the behaviour unit-testable
+without item 17's fake-backend scaffolding — the inline path runs through
+`StopInstance`, which locates the listening PID via `lsof` and would SIGTERM the
+httptest server's owning process (the test process). `TestIsTargetInstance`
+(`server_test.go`) covers the different-backend-same-address blocker case,
+mirroring item 11's "extract into a pure, testable helper" precedent.
 
 **Severity:** Medium. **Authority:** ADR-0004 (auto_unload rule), ADR-0006 (address keying);
 the review's `[Correctness]` finding.

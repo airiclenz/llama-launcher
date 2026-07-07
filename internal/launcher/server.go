@@ -351,7 +351,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 	if cfg.ShouldAutoStopServer() {
 		instances := DiscoverRunningInstances(cfg)
 		for _, inst := range instances {
-			if inst.Addr() == targetAddr {
+			if isTargetInstance(inst, targetAddr, profile.Backend) {
 				continue
 			}
 			reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(inst.Backend)))
@@ -362,7 +362,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 	} else if cfg.ShouldAutoUnload() {
 		instances := DiscoverRunningInstances(cfg)
 		for _, inst := range instances {
-			if inst.Addr() == targetAddr {
+			if isTargetInstance(inst, targetAddr, profile.Backend) {
 				continue
 			}
 			if !shouldCrossServerUnload(inst, profile.Backend) {
@@ -490,6 +490,17 @@ func printDriftNotice(profileName, addr string, drifts []string) {
 		fmt.Fprintf(os.Stderr, "  %s\n", d)
 	}
 	fmt.Fprintf(os.Stderr, "Run `llama-launcher load %s --restart` to apply the new parameters.\n", profileName)
+}
+
+// isTargetInstance reports whether inst is the very instance LoadProfile is
+// activating — the one at targetAddr running targetBackend. The
+// auto_stop_server and auto_unload loops skip it so they do not tear down the
+// server they are about to (re)use. Matching by address alone is not enough:
+// an instance of a *different* backend squatting on targetAddr is a blocker,
+// not the target, and must be stopped so the new server can bind (ADR-0004,
+// ADR-0006).
+func isTargetInstance(inst *RunningInstance, targetAddr, targetBackend string) bool {
+	return inst.Addr() == targetAddr && inst.Backend == targetBackend
 }
 
 // shouldCrossServerUnload reports whether the given instance is a candidate

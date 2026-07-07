@@ -261,6 +261,54 @@ func TestShouldCrossServerUnload(t *testing.T) {
 	}
 }
 
+func TestIsTargetInstance(t *testing.T) {
+	t.Parallel()
+
+	const targetAddr = "127.0.0.1:8080"
+
+	tests := []struct {
+		name          string
+		inst          *RunningInstance
+		targetBackend string
+		want          bool
+	}{
+		{
+			name:          "same address and same backend is the target",
+			inst:          &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 8080},
+			targetBackend: "ollama",
+			want:          true,
+		},
+		{
+			name:          "same address but different backend is a blocker",
+			inst:          &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080},
+			targetBackend: "ollama",
+			want:          false,
+		},
+		{
+			name:          "same backend but different address",
+			inst:          &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 9090},
+			targetBackend: "ollama",
+			want:          false,
+		},
+		{
+			name:          "different backend and different address",
+			inst:          &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 9090},
+			targetBackend: "ollama",
+			want:          false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isTargetInstance(tc.inst, targetAddr, tc.targetBackend); got != tc.want {
+				t.Errorf("isTargetInstance = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParamDrift(t *testing.T) {
 	t.Parallel()
 
