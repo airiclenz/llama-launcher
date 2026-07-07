@@ -449,7 +449,7 @@ reporting in `EnsureStopped`), `internal/launcher/backend_ollama_test.go` /
 
 ---
 
-## 11. Menu "primary instance" must be the one with a model loaded
+## 11. Menu "primary instance" must be the one with a model loaded — ✅ DONE (2026-07-07)
 
 **Severity:** Medium. **Authority:** the review's `[Correctness]` finding; CONTEXT.md (no
 global "primary" — but the menu's local selection should not surface an idle instance as the

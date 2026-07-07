@@ -26,20 +26,9 @@ func RunInteractiveMenu(cfg *Config) error {
 		cfg.Reload()
 		instances := DiscoverRunningInstances(cfg)
 
-		var primary *RunningInstance
-		anyModel := false
+		primary := selectLoadedInstance(instances)
 		anyServer := len(instances) > 0
-		for _, inst := range instances {
-			if inst.ActiveModel != "" {
-				anyModel = true
-				if primary == nil {
-					primary = inst
-				}
-			}
-			if primary == nil {
-				primary = inst
-			}
-		}
+		anyModel := primary != nil && primary.ActiveModel != ""
 		if primary != nil {
 			fillRuntimeDetails(cfg, primary)
 		}
@@ -68,6 +57,25 @@ func RunInteractiveMenu(cfg *Config) error {
 			showErrorPopup(err)
 		}
 	}
+}
+
+// selectLoadedInstance picks the instance the menu should treat as the
+// "loaded" one: the first discovered instance that actually has a model
+// loaded, falling back to the first instance only when none has a model.
+// Without this, an idle instance that sorts ahead of a loaded one (e.g. an
+// idle LM Studio before an Ollama serving a model) would surface as the
+// loaded instance and show the wrong log/config and an empty Model: line.
+// Returns nil for an empty slice.
+func selectLoadedInstance(instances []*RunningInstance) *RunningInstance {
+	for _, inst := range instances {
+		if inst.ActiveModel != "" {
+			return inst
+		}
+	}
+	if len(instances) > 0 {
+		return instances[0]
+	}
+	return nil
 }
 
 func runStoppedMenu(cfg *Config, stateSig string) error {

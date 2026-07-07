@@ -101,6 +101,38 @@ func TestProfileDisplayName(t *testing.T) {
 	})
 }
 
+func TestSelectLoadedInstance(t *testing.T) {
+	t.Parallel()
+
+	idle := &RunningInstance{Backend: "lmstudio", Host: "127.0.0.1", Port: 1234}
+	loaded := &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 11434, ActiveModel: "llama3"}
+	other := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080}
+
+	tests := []struct {
+		name      string
+		instances []*RunningInstance
+		want      *RunningInstance
+	}{
+		{"none", nil, nil},
+		{"empty slice", []*RunningInstance{}, nil},
+		{"single idle", []*RunningInstance{idle}, idle},
+		{"single loaded", []*RunningInstance{loaded}, loaded},
+		{"loaded after idle", []*RunningInstance{idle, loaded}, loaded},
+		{"first loaded wins", []*RunningInstance{loaded, other}, loaded},
+		{"none loaded returns first", []*RunningInstance{idle, other}, idle},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := selectLoadedInstance(tt.instances)
+			if got != tt.want {
+				t.Errorf("selectLoadedInstance(%v) = %v, want %v", tt.instances, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatProfileParams_GPULayers_LMStudio(t *testing.T) {
 	t.Parallel()
 
