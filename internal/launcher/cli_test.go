@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +109,51 @@ func TestCmdStatusJSON_TwoInstancesSameBackend(t *testing.T) {
 	}
 	if entries[0].Address == entries[1].Address {
 		t.Errorf("both entries report address %q, want distinct addresses", entries[0].Address)
+	}
+}
+
+// starColumn returns the visible column (escape-aware, rune-counted) at which
+// the ★ marker sits in line, or -1 when the line carries no marker.
+func starColumn(line string) int {
+	if i := strings.IndexRune(line, '★'); i >= 0 {
+		return visibleWidth(line[:i])
+	}
+	return -1
+}
+
+func TestCmdList_StarColumnAlignmentMultibyte(t *testing.T) {
+	// Two favourite profiles whose descriptions share the same *visible* width
+	// but differ in byte length (the em dash is a 3-byte rune). Byte-len
+	// measurement drifts the ★ column between the rows; visibleWidth keeps the
+	// marker aligned, matching how the menu builders measure the same input.
+	host := "127.0.0.1"
+	port := 8080
+	cfg := &Config{
+		Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:  t.TempDir(),
+		Profiles: map[string]Profile{
+			"alpha": {Description: "wide — dash", IsFavourite: true},
+			"bravo": {Description: "plain-ascii", IsFavourite: true},
+		},
+	}
+	cfg.Defaults = ProfileParams{Server: strPtrLocal("llamacpp"), Host: &host, Port: &port}
+
+	out, code := captureStdout(t, func() int { return cmdList(cfg, nil) })
+	if code != 0 {
+		t.Fatalf("cmdList exit = %d, want 0", code)
+	}
+
+	var cols []int
+	for _, line := range strings.Split(out, "\n") {
+		if c := starColumn(line); c >= 0 {
+			cols = append(cols, c)
+		}
+	}
+	if len(cols) != 2 {
+		t.Fatalf("expected 2 ★ rows, got %d in:\n%s", len(cols), out)
+	}
+	if cols[0] != cols[1] {
+		t.Errorf("★ columns misaligned: %d vs %d\n%s", cols[0], cols[1], out)
 	}
 }
 

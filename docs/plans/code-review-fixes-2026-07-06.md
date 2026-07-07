@@ -537,7 +537,7 @@ manual check that `escCursorShow` is emitted on the popup-exit path.)
 
 ---
 
-## 14. `cmdList` must use display width for star-column alignment
+## 14. `cmdList` must use display width for star-column alignment — ✅ DONE (2026-07-07)
 
 **Severity:** Medium. **Authority:** the review's `[Intent/Structure]` finding.
 
