@@ -70,9 +70,20 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 		return nil, fmt.Errorf("starting server: %w", err)
 	}
 	logFile.Close()
+	pid := cmd.Process.Pid
+
+	// Reap the child so a fast-exiting server never lingers as a zombie. A
+	// zombie still satisfies kill(pid, 0), so without reaping the liveness
+	// check would report an already-dead child as alive and the start-crash
+	// detection below would never fire. cmd.Wait runs in its own goroutine and
+	// reports the exit through waitResult; if the launcher exits before the
+	// child does, the detached (Setsid) child is reparented to init and reaped
+	// there instead.
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- cmd.Wait() }()
 
 	inst := &RunningInstance{
-		PID:       cmd.Process.Pid,
+		PID:       pid,
 		Backend:   profile.Backend,
 		Host:      *profile.Host,
 		Port:      *profile.Port,
@@ -80,10 +91,15 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 		LogFile:   logPath,
 	}
 
-	time.Sleep(startupGracePeriod)
-	if !IsProcessAlive(inst.PID) {
+	// If the child exits within the startup grace period the start failed
+	// (port conflict, bad args, ...): surface the log tail instead of reporting
+	// a server that has already died. Otherwise the child is still running and
+	// the wait goroutine stays parked to reap it whenever it does exit.
+	select {
+	case waitErr := <-waitResult:
 		tail := readLastLines(logPath, crashLogTailLines)
-		return nil, fmt.Errorf("server exited immediately after start\nLog tail:\n%s", tail)
+		return nil, fmt.Errorf("server exited immediately after start (%v)\nLog tail:\n%s", waitErr, tail)
+	case <-time.After(startupGracePeriod):
 	}
 
 	return inst, nil

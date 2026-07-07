@@ -433,6 +433,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, `isTargetInstance`, and `shouldCrossServerUnload`. |
 | `server_load_test.go` | Lifecycle orchestration and stop-path tests driven by an in-package fake `LLMServer` (records load/stop/start calls, no real process): `LoadProfile` idempotency no-op, drift notice, `auto_stop_server` (incl. a different-backend blocker at the target address), the `StopInstance`/`EnsureStopped` error and stop-hook-flip paths, `WaitForHealth` timeout, external start failure, and the managed "binary not found" branch. |
+| `server_reap_test.go` | Start-crash detection test driven by an in-package fake `ManagedLLMServer` whose forked child exits immediately: `StartServer` must return the "exited immediately" error rather than a `RunningInstance`, verifying the child is reaped (not left as a zombie that a liveness-only check would read as alive). |
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
 | `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU layers display formatting (shown for llamacpp, suppressed for lmstudio). |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
@@ -568,8 +569,8 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 2. Build server arguments via `ManagedLLMServer.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `-m`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
 3. Open the log file for stdout/stderr redirection.
 4. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
-5. Call `cmd.Start()` (non-blocking).
-6. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
+5. Call `cmd.Start()` (non-blocking), then reap the child with a `cmd.Wait()` goroutine that reports the exit through a buffered channel.
+6. Detect early exit (port conflict, binary not found, etc.) by selecting on that channel against a 500 ms (`startupGracePeriod`) timer: an exit within the window returns the "server exited immediately after start" error with the log tail, while a still-running child leaves the wait goroutine parked to reap it later. Reaping is required — an unreaped child that dies becomes a zombie that still satisfies `kill(pid, 0)`, so a liveness-only check would report a dead server as alive.
 7. Wait for backend health check to succeed (up to 15 seconds).
 8. Print confirmation. The active Model and parameters are observable on subsequent invocations via the LLM Server's own API.
 
@@ -744,7 +745,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 | Model load/unload API error | Print server response, exit 3. |
 | SIGTERM timeout (on `stop`) | Escalate to SIGKILL, warn, exit 0 (server is stopped). |
 | `lsof` not on PATH (stop path) | Print message that the listening PID could not be determined, exit 3. |
-| Port already in use | Detected via early server exit — the launcher checks if the process is still alive ~500 ms after start and reports the log tail if it died. |
+| Port already in use | Detected via early server exit — the forked child is reaped by a `cmd.Wait()` goroutine, and if it exits within ~500 ms of start the launcher reports the log tail instead of a running instance. |
 
 ## 11. Future Considerations
 
