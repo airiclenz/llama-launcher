@@ -561,7 +561,20 @@ the width helper is exercised there), `CHANGELOG.md`.
 
 ---
 
-## 15. Remove dead code, the write-only field, and its per-discovery probe
+## 15. Remove dead code, the write-only field, and its per-discovery probe — ✅ DONE (2026-07-07)
+
+NOTES (2026-07-07): Touched two files beyond the item's Files list. (1)
+`internal/launcher/memformat_test.go`: `TestMemoryTemplate_LegacyByteCompat` used the
+deleted `FormatMemoryLine` as a (tautological self-)oracle; rewrote it with the concrete
+expected outputs the deleted `TestFormatMemoryLine` asserted (same `memTestStats` fixture),
+preserving byte-compat + `!Styled()` coverage without the deleted symbol.
+(2) `internal/launcher/memformat.go`: two doc comments named the deleted
+`FormatMemoryLine`/`percentString`; reworded them (comments only). Also converted
+`TestPercentString` → `TestPercentValue` (retargeted at the retained `percentValue`) rather
+than deleting it outright, to keep the rounding/zero-denominator coverage. Extended the doc
+edits to TDD §5.3 (`IsServerAlive` call-path mention) and §7.2 (the discovery `QueryLiveParams`
+bullet) in addition to the named §5.2/§7.1 spots, per the plan-wide "docs must match
+behaviour" rule. The `LiveParamsQuerier` interface and `QueryLiveParams` are kept (drift check).
 
 **Severity:** Medium. **Authority:** the review's `[Intent/Structure]` dead-code and
 write-only-field findings (deletion test).
