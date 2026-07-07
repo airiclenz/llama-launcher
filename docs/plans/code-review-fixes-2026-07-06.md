@@ -513,7 +513,7 @@ item's assertion may live in that test file.
 
 ---
 
-## 13. Restore the terminal cursor when a popup closes
+## 13. Restore the terminal cursor when a popup closes — ✅ DONE (2026-07-07)
 
 **Severity:** Medium. **Authority:** the review's `[Correctness]` finding.
 

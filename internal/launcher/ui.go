@@ -348,4 +348,5 @@ func showPopup(title string, lines []string) {
 	}
 	readKey()
 	term.Restore(fd, oldState)
+	fmt.Print(escCursorShow)
 }
