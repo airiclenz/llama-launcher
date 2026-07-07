@@ -175,6 +175,13 @@ func TestAllowlistMiddleware(t *testing.T) {
 		{"192.168.64.2:51000", http.StatusOK},
 		{"192.168.64.3:51000", http.StatusForbidden},
 		{"garbage", http.StatusForbidden},
+		// Bracketed IPv6 RemoteAddr must be parsed (SplitHostPort strips the
+		// brackets); loopback v6 is not in this allowlist, so it is denied.
+		{"[::1]:51000", http.StatusForbidden},
+		// An IPv4-mapped IPv6 form of the allowed v4 address still matches
+		// (net.IP.Equal treats ::ffff:a.b.c.d and a.b.c.d as equal), so a
+		// client presenting the mapped form cannot be smuggled past the entry.
+		{"[::ffff:192.168.64.2]:51000", http.StatusOK},
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -184,5 +191,16 @@ func TestAllowlistMiddleware(t *testing.T) {
 		if rec.Code != c.want {
 			t.Errorf("remote %q: status = %d, want %d", c.remote, rec.Code, c.want)
 		}
+	}
+
+	// The middleware trusts only the transport-level RemoteAddr. A spoofable
+	// X-Forwarded-For naming an allowed IP must not grant a denied peer access.
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.RemoteAddr = "192.168.64.3:51000" // not allowed
+	req.Header.Set("X-Forwarded-For", "192.168.64.2")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("X-Forwarded-For spoof: status = %d, want %d (header must be ignored)", rec.Code, http.StatusForbidden)
 	}
 }
