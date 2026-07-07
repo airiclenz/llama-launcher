@@ -11,7 +11,7 @@ commit. Work them in order — later items assume earlier ones are landed.
   `references/coding-standards.md` + the Go extension `references/coding-standards.go.md`,
   and `references/testing.md` + `references/testing.go.md` for any test work) and follow
   them for every item. A clear violation is a verifier FAIL. If that repo-relative path
-  is missing, use `~/.claude/skills/coding-standards/SKILL.md` (item 15 fixes the broken
+  is missing, use `~/.claude/skills/coding-standards/SKILL.md` (item 16 fixes the broken
   path reference).
 - **Authoritative source precedence.** Where an item's fix and a doc disagree, the
   **ADRs in `docs/adr/` and the code review report win**, in that order; the TDD and
