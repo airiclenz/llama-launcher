@@ -431,7 +431,8 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `backend_test.go` | Tests for `GetLLMServer` with known and unknown LLM Server names. |
 | `backend_http_test.go` | Tests for `authedGet`/`authedPostJSON` (header present/absent, JSON content type), `authFailedErr`, `redactAPIKeyArgs`, `applyAPIKeys` (apply and clear on reload), and the bounded body reads (`readBodyLimited`/`decodeJSONLimited` stop at the cap, asserted via a counting reader). |
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
-| `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, and `shouldCrossServerUnload`. |
+| `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, `isTargetInstance`, and `shouldCrossServerUnload`. |
+| `server_load_test.go` | Lifecycle orchestration and stop-path tests driven by an in-package fake `LLMServer` (records load/stop/start calls, no real process): `LoadProfile` idempotency no-op, drift notice, `auto_stop_server` (incl. a different-backend blocker at the target address), the `StopInstance`/`EnsureStopped` error and stop-hook-flip paths, `WaitForHealth` timeout, external start failure, and the managed "binary not found" branch. |
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
 | `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU layers display formatting (shown for llamacpp, suppressed for lmstudio). |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
@@ -789,6 +790,9 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestFindManagedLogFile` | Most-recent file picked by lexicographic timestamp; filters by backend prefix; returns empty when no matching file exists. |
 | `TestParamDrift` | Identical params, bool/float comparisons, slot-identity fields skipped; nil on either side (a field the backend does not report) is skipped, not drift — a live set carrying only the `/props` subset against a fully populated profile yields no drift, while a changed shared field still does. |
 | `TestShouldCrossServerUnload` | Decides whether to issue an unload on a discovered instance during cross-server `auto_unload`. |
+| `TestLoadProfile_*` | `LoadProfile` orchestration: idempotent no-op (a field the backend does not report is not drift), drift notice without `--restart`, `auto_stop_server` stops another address while leaving the target alone, a different-backend blocker at the target address is stopped (address + backend match), and external start failure surfaces "not reachable". |
+| `TestStopInstance_ErrorPaths` / `TestEnsureStopped_TryStopFlipsHealthCheck` | Unreachable address → `ErrNotRunning`; invalid address → error; `EnsureStopped` returns nil once the backend's `TryStop` makes the health check fail (no PID signalled). |
+| `TestWaitForHealth_TimeoutNamesAddress` / `TestStartServer_BinaryNotFound` | Health-poll timeout error names the address; a managed backend whose server binary is missing from `PATH` fails fast. |
 | `TestGetLLMServer` | Known LLM Server names return correct instance; unknown returns error. |
 | `TestExpandTilde` | `~/path`, bare `~`, `~username` (unchanged), absolute path, empty. |
 | `TestLoadConfig` | Missing file, valid config, no-profiles validation. |

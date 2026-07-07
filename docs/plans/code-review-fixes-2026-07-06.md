@@ -646,7 +646,29 @@ is not sent to a non-existent path.
 
 ---
 
-## 17. Add tests for the lifecycle orchestration and stop path
+## 17. Add tests for the lifecycle orchestration and stop path — ✅ DONE (2026-07-07)
+
+NOTES (2026-07-07): Deviation — the "start failure" bullet's managed `exited
+immediately` assertion is not implemented as written: it is untestable against the
+current code. `startManagedServer` never reaps the forked child (no `cmd.Wait`, no
+`SIGCHLD` handling), so a fast-exiting child becomes a zombie and `IsProcessAlive`
+(`kill(pid,0)`) returns true for it — verified empirically: a fake `llama-server`
+that prints two lines and exits non-zero makes `StartServer` return `(inst, nil)`,
+not an "exited immediately" error. Forcing detection would require process-wide
+`signal.Ignore(SIGCHLD)`, which auto-reaps and would break other tests' `exec`
+`Wait` calls (ECHILD) and would assert behaviour that never occurs in production.
+Instead, the managed start-failure surface is covered reliably by
+`TestStartServer_BinaryNotFound` (the `ServerBinary`/`LookPath` branch), the external
+start-failure path by `TestLoadProfile_ExternalStartFailure` (the cited
+`connectExternalServer` "not reachable" lines), and the health-timeout path by
+`TestWaitForHealth_TimeoutNamesAddress` (server.go:571-580). The idempotency/drift/
+auto-stop tests use in-package fake `LLMServer`s (recording calls) rather than
+httptest so "no stop/load traffic" is asserted directly; both tie-in tests were
+confirmed to fail against the pre-fix behaviour of items 2 and 12 and pass after.
+The item-12 different-backend-at-target-address case is added through `LoadProfile`
+in addition to the different-address case named in the bullet. Also touched
+`llama-launcher.TDD.md` (§5.2 + §12.2 test-table rows) per the plan-wide docs rule.
+See FOLLOW-UP for the underlying zombie/no-reaper defect.
 
 **Severity:** Medium (critical paths untested). **Authority:** ADR-0001/0004/0007; TDD §12.
 
