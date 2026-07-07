@@ -207,16 +207,16 @@ func TestApplyAPIKeys(t *testing.T) {
 		"llamacpp": {Enabled: true, APIKey: "secret"},
 	}}
 	applyAPIKeys(cfg)
-	if lc.apiKey != "secret" {
-		t.Errorf("apiKey = %q, want %q", lc.apiKey, "secret")
+	if got := lc.getAPIKey(); got != "secret" {
+		t.Errorf("apiKey = %q, want %q", got, "secret")
 	}
 
 	// A reload without the key must clear it again.
 	applyAPIKeys(&Config{Servers: map[string]ServerConfig{
 		"llamacpp": {Enabled: true},
 	}})
-	if lc.apiKey != "" {
-		t.Errorf("apiKey = %q after reload without key, want empty", lc.apiKey)
+	if got := lc.getAPIKey(); got != "" {
+		t.Errorf("apiKey = %q after reload without key, want empty", got)
 	}
 }
 

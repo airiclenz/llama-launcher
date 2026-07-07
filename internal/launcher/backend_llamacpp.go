@@ -7,10 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 )
 
 // LlamaCpp implements LLMServer for llama.cpp's llama-server.
 type LlamaCpp struct {
+	// mu guards apiKey: applyAPIKeys/setAPIKey writes it on the config-load
+	// goroutine while probe goroutines read it via HealthCheck,
+	// ListRunningModels and QueryLiveParams.
+	mu     sync.RWMutex
 	apiKey string
 }
 
@@ -18,13 +23,24 @@ func init() {
 	RegisterLLMServer(&LlamaCpp{})
 }
 
-func (b *LlamaCpp) Name() string         { return "llamacpp" }
-func (b *LlamaCpp) DisplayName() string  { return "LLaMA.cpp" }
-func (b *LlamaCpp) DefaultAddr() string  { return "127.0.0.1:8080" }
-func (b *LlamaCpp) setAPIKey(key string) { b.apiKey = key }
+func (b *LlamaCpp) Name() string        { return "llamacpp" }
+func (b *LlamaCpp) DisplayName() string { return "LLaMA.cpp" }
+func (b *LlamaCpp) DefaultAddr() string { return "127.0.0.1:8080" }
+
+func (b *LlamaCpp) setAPIKey(key string) {
+	b.mu.Lock()
+	b.apiKey = key
+	b.mu.Unlock()
+}
+
+func (b *LlamaCpp) getAPIKey() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.apiKey
+}
 
 func (b *LlamaCpp) HealthCheck(addr string) error {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.getAPIKey())
 	if err != nil {
 		return err
 	}
@@ -53,7 +69,7 @@ func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
 // reading /v1/models. The OpenAI-style endpoint returns one entry whose `id`
 // is the model path or alias the server was launched with.
 func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", b.getAPIKey())
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +104,7 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 // /props is available on recent llama.cpp builds; older builds return 404 and
 // this function returns (nil, nil), which paramDrift treats as "no drift".
 func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/props", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/props", b.getAPIKey())
 	if err != nil {
 		return nil, err
 	}

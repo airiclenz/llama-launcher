@@ -34,9 +34,10 @@ type apiKeyConfigurable interface {
 
 // applyAPIKeys pushes the configured per-server API keys onto the registered
 // backends. Keys are applied unconditionally — including the empty string —
-// so removing a key from the config takes effect on reload. Called from
-// LoadConfig on the menu/CLI goroutine before any probe goroutines are
-// spawned, so no further synchronization is needed.
+// so removing a key from the config takes effect on reload. LoadConfig can run
+// concurrently with in-flight discovery probes (and with another LoadConfig),
+// so each backend's setAPIKey guards the field with its own mutex; readers use
+// the matching getter.
 func applyAPIKeys(cfg *Config) {
 	for name, b := range llmServers {
 		if configurable, ok := b.(apiKeyConfigurable); ok {
