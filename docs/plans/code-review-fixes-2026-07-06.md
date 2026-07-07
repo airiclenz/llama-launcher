@@ -377,7 +377,7 @@ boundary) or `internal/launcher/` (source-side masking), the corresponding test,
 
 ---
 
-## 9. `status --json` must emit one entry per running instance
+## 9. `status --json` must emit one entry per running instance — ✅ DONE (2026-07-07)
 
 **Severity:** Medium (cross-validated). **Authority:** ADR-0006 (instances keyed by
 `host:port`); §6.6 status prints one row per live instance. TDD §3.2 currently documents the

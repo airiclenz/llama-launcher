@@ -483,11 +483,11 @@ func cmdList(cfg *Config, args []string) int {
 	return 0
 }
 
-// cmdStatusJSON prints one JSON entry per enabled configured backend. When
-// a backend's configured address is reachable, the entry's running fields
-// reflect the live discovery; otherwise the entry is emitted with
-// running=false and zero/empty fields. Exit code matches the human path: 0
-// if any backend is running, 1 if all are stopped.
+// cmdStatusJSON prints a JSON array with one entry per discovered running
+// instance (multiple instances of one backend on different ports each get
+// their own entry), plus one running=false entry with zero/empty fields for
+// every enabled backend that has no running instance. Exit code matches the
+// human path: 0 if anything is running, 1 if all backends are stopped.
 func cmdStatusJSON(cfg *Config) int {
 	type entry struct {
 		Backend       string `json:"backend"`
@@ -509,29 +509,23 @@ func cmdStatusJSON(cfg *Config) int {
 
 	instances := DiscoverRunningInstances(cfg)
 
-	output := make([]entry, 0, len(backends))
-	anyRunning := false
+	output := make([]entry, 0, len(instances)+len(backends))
+	runningBackends := make(map[string]bool, len(instances))
+	for _, inst := range instances {
+		runningBackends[inst.Backend] = true
+		fillRuntimeDetails(cfg, inst)
+		output = append(output, entry{
+			Backend:       inst.Backend,
+			Running:       true,
+			Address:       inst.Addr(),
+			ActiveProfile: inst.ActiveProfile,
+			ActiveModel:   inst.ActiveModel,
+			PID:           inst.PID,
+			UptimeSeconds: int64(inst.Uptime().Seconds()),
+		})
+	}
 	for _, name := range backends {
-		var found *RunningInstance
-		for _, inst := range instances {
-			if inst.Backend == name {
-				found = inst
-				break
-			}
-		}
-		if found != nil {
-			anyRunning = true
-			fillRuntimeDetails(cfg, found)
-			output = append(output, entry{
-				Backend:       name,
-				Running:       true,
-				Address:       found.Addr(),
-				ActiveProfile: found.ActiveProfile,
-				ActiveModel:   found.ActiveModel,
-				PID:           found.PID,
-				UptimeSeconds: int64(found.Uptime().Seconds()),
-			})
-		} else {
+		if !runningBackends[name] {
 			output = append(output, entry{Backend: name})
 		}
 	}
@@ -543,7 +537,7 @@ func cmdStatusJSON(cfg *Config) int {
 	}
 	fmt.Println(string(data))
 
-	if !anyRunning {
+	if len(instances) == 0 {
 		return 1
 	}
 	return 0
