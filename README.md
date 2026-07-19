@@ -224,15 +224,15 @@ sort_alphabetically: true
 #
 #   Parameter       llamacpp   ollama   lmstudio
 #   ─────────────   ────────   ──────   ────────
-#   gpu_layers      yes        -        yes (mapped: 99→"max", 0→"off")
+#   gpu_layers      yes        -        -        (LM Studio manages GPU offload itself)
 #   threads         yes        -        -
 #   threads_batch   yes        -        -
 #   batch_size      yes        -        yes (mapped to eval_batch_size)
 #   context_size    yes        -        yes
 #   host / port     yes        yes      yes
-#   flash_attn      yes        -        yes
+#   flash_attn      yes        -        yes (mapped to flash_attention)
 #   cont_batching   yes        -        -
-#   parallel        yes        -        -
+#   parallel        yes        -        yes
 #   mlock           yes        -        -
 #   no_mmap         yes        -        -
 #   embedding       yes        -        -
@@ -308,7 +308,6 @@ profiles:
   #   model: lmstudio-community/meta-llama-3.1-8b-instruct
   #   context_size: 16384
   #   flash_attn: true
-  #   gpu_layers: 99
   #   batch_size: 512
   #
   # lmstudio-qwen:
@@ -316,7 +315,6 @@ profiles:
   #   server: lmstudio
   #   model: lmstudio-community/qwen2.5-32b-instruct
   #   context_size: 8192
-  #   gpu_layers: 99
 
   # ── Ollama examples ────────────────────────────────────────
   # Model is an Ollama model name (e.g. "llama3.1:8b").

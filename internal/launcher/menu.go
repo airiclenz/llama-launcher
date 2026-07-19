@@ -441,19 +441,10 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 	isLlamaCpp := profile.Backend == "llamacpp"
 	isLMStudio := profile.Backend == "lmstudio"
 
-	if p.GPULayers != nil {
-		if isLlamaCpp {
-			add("GPU layers", strconv.Itoa(*p.GPULayers))
-		} else if isLMStudio {
-			switch {
-			case *p.GPULayers >= 99:
-				add("GPU offload", "max")
-			case *p.GPULayers <= 0:
-				add("GPU offload", "off")
-			default:
-				add("GPU offload", strconv.Itoa(*p.GPULayers))
-			}
-		}
+	// gpu_layers is llamacpp-only: LM Studio's load API has no GPU-offload
+	// field, so displaying it for lmstudio profiles would misreport reality.
+	if isLlamaCpp && p.GPULayers != nil {
+		add("GPU layers", strconv.Itoa(*p.GPULayers))
 	}
 	if isLlamaCpp && p.Threads != nil {
 		add("Threads", strconv.Itoa(*p.Threads))
@@ -470,7 +461,7 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 	if isLlamaCpp && p.ContBatching != nil {
 		add("Cont. batching", strconv.FormatBool(*p.ContBatching))
 	}
-	if isLlamaCpp && p.Parallel != nil {
+	if (isLlamaCpp || isLMStudio) && p.Parallel != nil {
 		add("Parallel", strconv.Itoa(*p.Parallel))
 	}
 	if isLlamaCpp && p.Mlock != nil {

@@ -81,12 +81,27 @@ func (b *LMStudio) ResolveModel(_ *Config, modelRef string) (string, error) {
 	return modelRef, nil
 }
 
+// LoadModel loads a Model via LM Studio's REST API (POST /api/v1/models/load).
+// Only parameters that endpoint accepts (verified against LM Studio 0.4.15 and
+// its REST docs) are sent: context_size maps to context_length, batch_size to
+// eval_batch_size, flash_attn to flash_attention, and parallel passes through
+// under the same name. gpu_layers has no REST-API equivalent and is
+// deliberately not sent — LM Studio decides GPU offload itself.
 func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 	payload := map[string]interface{}{
 		"model": profile.ModelPath,
 	}
 	if profile.ContextSize != nil {
 		payload["context_length"] = *profile.ContextSize
+	}
+	if profile.BatchSize != nil {
+		payload["eval_batch_size"] = *profile.BatchSize
+	}
+	if profile.FlashAttn != nil {
+		payload["flash_attention"] = *profile.FlashAttn
+	}
+	if profile.Parallel != nil {
+		payload["parallel"] = *profile.Parallel
 	}
 
 	body, _ := json.Marshal(payload)

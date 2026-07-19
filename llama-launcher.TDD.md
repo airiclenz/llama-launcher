@@ -433,7 +433,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `log_cleanup_test.go` | Tests for `parseLogTimestamp`, `formatBytes`, and `cleanupLogs` (empty dir, nonexistent dir, old/new file filtering, `--all` mode, non-log file safety). |
 | `server_test.go` | Tests for `IsProcessAlive` (including PID 0 guard), `readLastLines`, `RunningInstance` methods (`Addr`, `Uptime`), `paramDrift`, and `shouldCrossServerUnload`. |
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable), `LlamaCpp.ListRunningModels`, `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
-| `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and GPU offload display formatting. |
+| `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, and `formatProfileParams` (`TestFormatProfileParams_LMStudio` asserts LM Studio profiles omit GPU offload — it is not part of the load request — while showing the params the load request does send; API-key redaction is covered separately). |
 | `helpers_test.go` | Shared test helper `addrFromURL` for extracting `host:port` from httptest server URLs. |
 
 ### 5.3 LLMServer Interface
@@ -767,7 +767,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; non-200 → error; unreachable → error. |
 | `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error. |
 | `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when `/health` body lacks `status` field; healthy when LM Studio returns `{"error":"..."}` for `/health` and `/api/tags`; detects llamacpp via `/health` body containing `{"status":"ok"}`; detects Ollama via `/api/tags` body containing `{"models":[...]}`; non-200 → error; unreachable → error. |
-| `TestLMStudioLoadModel` | Success, context_length inclusion, error with message, error without message. |
+| `TestLMStudioLoadModel` | Success, context_length inclusion, param mapping (`batch_size`→`eval_batch_size`, `flash_attn`→`flash_attention`, `parallel`; unsupported params like `gpu_layers` never enter the payload), error with message, error without message. |
 | `TestLMStudioUnloadModel` | Success, non-200 with error message, non-200 with empty body returns error. |
 | `TestExtractLMStudioError` | Valid JSON, empty body, malformed JSON, missing message field. |
 | `TestOllamaLoadModel` | Success (verifies keep_alive payload), error status. |
@@ -801,7 +801,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestParseChoice` | Valid, zero, negative, exceeds max, non-numeric, empty. |
 | `TestFormatUptime` | Hours, minutes, seconds-only branches. |
 | `TestProfileDisplayName` | With title, fallback to Profile name, unknown Profile. |
-| `TestFormatProfileParams_GPULayers_LMStudio` | Intermediate value shows number; 99 shows max; 0 shows off. |
+| `TestFormatProfileParams_LMStudio` | Omits GPU offload (not part of LM Studio's load request); shows batch size, flash attention, and parallel (the params the load request sends); omits llamacpp-only params. |
 
 ### 12.4 Test Helpers
 

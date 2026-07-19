@@ -181,6 +181,64 @@ func TestLMStudioLoadModel(t *testing.T) {
 		}
 	})
 
+	t.Run("maps supported params and omits unsupported ones", func(t *testing.T) {
+		t.Parallel()
+		var payload map[string]interface{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &payload)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		ctxSize := 8192
+		gpuLayers := 99
+		threads := 8
+		batchSize := 512
+		flashAttn := true
+		parallel := 2
+		mlock := true
+		profile := &ResolvedProfile{
+			ModelPath: "test-model",
+			ProfileParams: ProfileParams{
+				ContextSize: &ctxSize,
+				GPULayers:   &gpuLayers,
+				Threads:     &threads,
+				BatchSize:   &batchSize,
+				FlashAttn:   &flashAttn,
+				Parallel:    &parallel,
+				Mlock:       &mlock,
+			},
+		}
+		if err := b.LoadModel(addrFromURL(t, srv.URL), profile); err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+
+		if got := payload["eval_batch_size"]; got != float64(512) {
+			t.Errorf("eval_batch_size = %v, want 512", got)
+		}
+		if got := payload["flash_attention"]; got != true {
+			t.Errorf("flash_attention = %v, want true", got)
+		}
+		if got := payload["parallel"]; got != float64(2) {
+			t.Errorf("parallel = %v, want 2", got)
+		}
+		// LM Studio's load API accepts no other launcher params; anything
+		// else in the payload would be sent without ever being applied.
+		wantKeys := map[string]bool{
+			"model":           true,
+			"context_length":  true,
+			"eval_batch_size": true,
+			"flash_attention": true,
+			"parallel":        true,
+		}
+		for key := range payload {
+			if !wantKeys[key] {
+				t.Errorf("unexpected key %q in load payload", key)
+			}
+		}
+	})
+
 	t.Run("error with message", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

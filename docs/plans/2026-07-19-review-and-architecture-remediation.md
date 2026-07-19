@@ -235,7 +235,21 @@ as the JSON path's consumer. No adapter behaviour changed.
 - **Docs:** update TDD §3.2 `status --json` description to "one entry per running instance
   plus one per idle enabled backend"; `CHANGELOG.md` (Fixed).
 
-## 6. Reconcile LM Studio parameter support: docs, display, and payload — DESIGN-CALL
+## 6. Reconcile LM Studio parameter support: docs, display, and payload — DESIGN-CALL — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Design question resolved by verification, per the user's
+rule "verify the load API first". Both the official REST docs
+(lmstudio.ai/docs/developer/rest/load) and the installed LM Studio 0.4.15's
+own request schema (zod schema in the app bundle) agree: `POST
+/api/v1/models/load` accepts `model`, `context_length`, `eval_batch_size`,
+`physical_batch_size`, `parallel`, `flash_attention`, `speculative_decoding`,
+`num_experts`, `offload_kv_cache_to_gpu`, `ttl_seconds`, `echo_load_config` —
+and no GPU-offload field of any kind. Outcome: `batch_size`→`eval_batch_size`
+and `flash_attn`→`flash_attention` are now sent (docs/display kept);
+`gpu_layers` is stripped from the lmstudio docs column and the pop-up.
+Extension under the same rule ("fields it actually accepts get sent"):
+`parallel` is accepted by the API, so it is also sent, displayed, and marked
+supported for lmstudio — one field beyond the three the item names.
 
 - **Severity:** High. The shipped config and the profile popup tell users that
   `gpu_layers` / `batch_size` / `flash_attn` apply to LM Studio profiles; the load request
