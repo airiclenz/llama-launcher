@@ -54,6 +54,41 @@ func TestValidateTarget(t *testing.T) {
 	}
 }
 
+func TestValidateProfile(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		profile string
+		ok      bool
+	}{
+		{"empty auto-selects", "", true},
+		{"plain name", "qwen", true},
+		{"dashed name", "qwen-7b", true},
+		{"dotted name", "llama3.1", true},
+		{"backend-shaped name", "llamacpp", true},
+
+		{"short flag", "-f", false},
+		{"long flag", "--all", false},
+		{"restart flag", "--restart", false},
+		{"shell metacharacters", "; rm", false},
+		{"space-separated injection", "qwen --restart", false},
+		{"command substitution", "$(reboot)", false},
+		{"pipe", "a|b", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateProfile(tc.profile)
+			if tc.ok && err != nil {
+				t.Errorf("validateProfile(%q) = %v, want nil", tc.profile, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("validateProfile(%q) = nil, want error", tc.profile)
+			}
+		})
+	}
+}
+
 // recordingCLI writes a fake llama-launcher that appends every invocation's
 // argv to a record file (and echoes it), so a test can prove a rejected tool
 // call never reached the CLI at all.
@@ -111,6 +146,63 @@ func TestEndToEndReadOnlyTailLogRejectsInjection(t *testing.T) {
 		}
 		if got := resultText(t, res); got != tc.want {
 			t.Errorf("tail_log target %q forwarded as %q, want %q", tc.target, got, tc.want)
+		}
+	}
+}
+
+// stop_server and unload_model forward a free-form argument as a CLI
+// positional (`stop [target]`, `unload [profile]`). Adversarial values must
+// be rejected in the adapter — before the CLI is ever invoked — so the CLI's
+// argument grammar is not the security boundary (same rule as tail_log).
+func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
+	bin, record := recordingCLI(t)
+	cfg := &config{llamaLauncherBin: bin}
+	s := startAdapter(t, cfg, loopbackAllow(t))
+
+	rejected := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"stop_server", map[string]any{"target": "-f"}},
+		{"stop_server", map[string]any{"target": "--all"}},
+		{"stop_server", map[string]any{"target": "; rm"}},
+		{"stop_server", map[string]any{"target": "$(reboot)"}},
+		{"stop_server", map[string]any{"target": "vllm"}},
+		{"stop_server", map[string]any{"target": "clean --all"}},
+		{"unload_model", map[string]any{"profile": "-f"}},
+		{"unload_model", map[string]any{"profile": "--all"}},
+		{"unload_model", map[string]any{"profile": "; rm"}},
+		{"unload_model", map[string]any{"profile": "$(reboot)"}},
+		{"unload_model", map[string]any{"profile": "qwen --restart"}},
+	}
+	for _, tc := range rejected {
+		res := callTool(t, s, tc.tool, tc.args)
+		if !res.IsError {
+			t.Errorf("%s args %v: want tool error, got success (%q)", tc.tool, tc.args, resultText(t, res))
+		}
+	}
+
+	// None of the rejected calls may have shelled out.
+	if data, err := os.ReadFile(record); err == nil && len(data) > 0 {
+		t.Errorf("rejected arguments reached the CLI: %q", data)
+	}
+
+	accepted := []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{"stop_server", map[string]any{"target": "ollama"}, "stop ollama"},
+		{"stop_server", map[string]any{"target": "127.0.0.1:8080"}, "stop 127.0.0.1:8080"},
+		{"unload_model", map[string]any{"profile": "qwen-7b"}, "unload qwen-7b"},
+	}
+	for _, tc := range accepted {
+		res := callTool(t, s, tc.tool, tc.args)
+		if res.IsError {
+			t.Fatalf("%s args %v: unexpected tool error: %q", tc.tool, tc.args, resultText(t, res))
+		}
+		if got := resultText(t, res); got != tc.want {
+			t.Errorf("%s args %v forwarded as %q, want %q", tc.tool, tc.args, got, tc.want)
 		}
 	}
 }

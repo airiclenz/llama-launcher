@@ -116,6 +116,9 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "unload_model",
 		Description: "Unload the model (for managed backends this stops the server). Profile is optional when only one model is loaded.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args profileArgs) (*mcp.CallToolResult, any, error) {
+		if err := validateProfile(args.Profile); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
 		return cfg.run(ctx, argsFor("unload", args.Profile)...), nil, nil
 	})
 
@@ -134,6 +137,9 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "stop_server",
 		Description: "Stop a running server. Target is optional when exactly one server is running; otherwise pass a backend name or host:port.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args targetArgs) (*mcp.CallToolResult, any, error) {
+		if err := validateTarget(args.Target); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
 		return cfg.run(ctx, argsFor("stop", args.Target)...), nil, nil
 	})
 
