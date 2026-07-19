@@ -45,6 +45,20 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 	return nil
 }
 
+// StartingUp reports whether the server at addr is reachable but still
+// starting up: llama-server answers /health with 503 Service Unavailable
+// while it loads its model, before turning healthy. A connection error
+// means nothing is running there, and any other status belongs to a
+// healthy or foreign server — both return false.
+func (b *LlamaCpp) StartingUp(addr string) bool {
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusServiceUnavailable
+}
+
 func (b *LlamaCpp) LoadModel(_ string, _ *ResolvedProfile) error { return nil }
 func (b *LlamaCpp) UnloadModel(_ string, _ string) error         { return nil }
 func (b *LlamaCpp) TryStart(_ *Config, _ string) error           { return nil }

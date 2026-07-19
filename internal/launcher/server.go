@@ -58,6 +58,17 @@ func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error
 }
 
 func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServer) (*RunningInstance, error) {
+	// A server spawned by an earlier start may still be coming up at the
+	// target address (llama-server answers /health with 503 while it loads
+	// its model, and a large model can outlive the health-wait window).
+	// Spawning a second server there would only die with "address already
+	// in use", so the start is refused instead — the loading server is
+	// deliberately left alone.
+	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	if sp, ok := mb.(StartupProber); ok && sp.StartingUp(addr) {
+		return nil, stillStartingUpErr(cfg, mb, addr)
+	}
+
 	binary := mb.ServerBinary(cfg)
 	if _, err := exec.LookPath(binary); err != nil {
 		return nil, fmt.Errorf("server binary not found: %s", binary)
@@ -307,7 +318,7 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, bool
 
 	if _, ok := b.(ManagedLLMServer); ok {
 		if err := WaitForHealth(b, inst.Addr(), 15*time.Second); err != nil {
-			return nil, false, err
+			return nil, false, startupTimeoutErr(err, inst)
 		}
 	}
 
@@ -603,7 +614,7 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, healthy bool, b L
 
 	reportStep(progress, "Waiting for server")
 	if err := WaitForHealth(b, inst.Addr(), 30*time.Second); err != nil {
-		return nil, false, err
+		return nil, false, startupTimeoutErr(err, inst)
 	}
 
 	inst.ActiveProfile = profile.Name
@@ -660,6 +671,44 @@ func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 		time.Sleep(healthPollInterval)
 	}
 	return fmt.Errorf("server at %s did not become healthy within %s", addr, timeout)
+}
+
+// startupTimeoutErr decorates a health-wait timeout that follows a
+// managed start. The just-spawned server is deliberately left running —
+// killing it would throw away a legitimately slow model load (a 30–70 GB
+// GGUF on a cold disk can exceed the wait window) — so the error names
+// its PID and log path instead of orphaning the process silently. A
+// retry while it is still loading is refused (see stillStartingUpErr); a
+// retry after it turns healthy is the idempotent no-op (ADR-0007).
+func startupTimeoutErr(err error, inst *RunningInstance) error {
+	return fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `kill %d`",
+		err, inst.PID, inst.LogFile, inst.Backend, inst.PID)
+}
+
+// stillStartingUpErr builds the refusal for a managed start onto an
+// address where an earlier-spawned server is still coming up (the
+// startup probe answers "still loading"). PID and log-path details are
+// best-effort — the loading server fails its backend's health check, so
+// discovery cannot see it and the PID comes straight from lsof.
+func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
+	pid, err := findListeningPID(addr)
+	if err != nil || pid <= 0 {
+		pid = 0
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "a %s server at %s is still starting up", b.DisplayName(), addr)
+	if pid > 0 {
+		fmt.Fprintf(&sb, " (PID %d)", pid)
+	}
+	sb.WriteString(" — refusing to start a second one")
+	if logFile := findManagedLogFile(cfg.LogDir, b.Name()); logFile != "" {
+		fmt.Fprintf(&sb, "\nLog: %s", logFile)
+	}
+	fmt.Fprintf(&sb, "\nWatch it with `llama-launcher logs %s` and retry once it is healthy", b.Name())
+	if pid > 0 {
+		fmt.Fprintf(&sb, ", or stop it with `kill %d`", pid)
+	}
+	return errors.New(sb.String())
 }
 
 // UnloadInstanceModel unloads the active model for the instance at the given

@@ -278,6 +278,49 @@ func TestLlamaCppHealthCheck(t *testing.T) {
 	})
 }
 
+// TestLlamaCppStartingUp covers the still-loading probe: llama-server
+// answers /health with 503 while it loads its model, which is the one
+// state that must be told apart from both "healthy" and "not running"
+// so a retry does not spawn a duplicate server (TDD §6.2).
+func TestLlamaCppStartingUp(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+
+	t.Run("503 while loading reports starting up", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"error":{"code":503,"message":"Loading model","type":"unavailable_error"}}`))
+		}))
+		defer srv.Close()
+
+		if !b.StartingUp(addrFromURL(t, srv.URL)) {
+			t.Error("StartingUp = false for a 503 /health, want true")
+		}
+	})
+
+	t.Run("healthy server is not starting up", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer srv.Close()
+
+		if b.StartingUp(addrFromURL(t, srv.URL)) {
+			t.Error("StartingUp = true for a healthy server, want false")
+		}
+	})
+
+	t.Run("dead address is not starting up", func(t *testing.T) {
+		t.Parallel()
+		if b.StartingUp("127.0.0.1:1") {
+			t.Error("StartingUp = true for a dead address, want false")
+		}
+	})
+}
+
 func TestLlamaCppAuthHeaders(t *testing.T) {
 	t.Parallel()
 

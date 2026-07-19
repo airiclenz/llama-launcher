@@ -81,6 +81,16 @@ type LiveParamsQuerier interface {
 	QueryLiveParams(addr string) (*ProfileParams, error)
 }
 
+// StartupProber is implemented by LLM Servers that can tell a server that
+// is reachable but still starting up (e.g. llama-server answering /health
+// with 503 while it loads its model) apart from one that is not running
+// at all. The managed start path uses it to refuse spawning a duplicate
+// server onto an address where an earlier start is still coming up
+// (TDD §6.2).
+type StartupProber interface {
+	StartingUp(addr string) bool
+}
+
 // ResolvedProfile holds a fully merged profile ready for use by a backend.
 type ResolvedProfile struct {
 	Name        string

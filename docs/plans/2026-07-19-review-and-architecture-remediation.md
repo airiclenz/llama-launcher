@@ -366,7 +366,20 @@ item's docs scope is CHANGELOG + TDD §6.5 and the ADR's decision itself
   passes.
 - **Docs:** `CHANGELOG.md` (Fixed); reconcile TDD §6.5 with the final order.
 
-## 10. Do not orphan a server when the health wait times out — DESIGN-CALL
+## 10. Do not orphan a server when the health wait times out — DESIGN-CALL — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Option B implemented as decided. The "refuse to
+double-spawn" guard lives in `startManagedServer` — the single choke point
+for managed forks — so it covers both listed sites (`loadProfileManaged`
+and `EnsureServer`/`cmdStart`), via a new `StartupProber` capability
+interface (`LlamaCpp.StartingUp`: /health answering 503). The refusal
+applies to `load --restart` too — the design decision names no restart
+exception, and the still-loading server cannot be stopped via the normal
+stop path anyway (it fails every backend's health check, so
+`identifyBackend` yields ErrNotRunning); the refusal/timeout errors
+therefore point at `kill <PID>`. Docs beyond the item's list: TDD §5.3
+(new interface) and §6.2 (managed start steps), alongside §10 and the
+CHANGELOG.
 
 - **Severity:** Medium. A slow-loading large model leaves a running `llama-server` behind
   and a confusing follow-up error.

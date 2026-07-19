@@ -470,6 +470,10 @@ type ModelLister interface {
 type LiveParamsQuerier interface {
     QueryLiveParams(addr string) (*ProfileParams, error)
 }
+
+type StartupProber interface {
+    StartingUp(addr string) bool
+}
 ```
 
 The interface name `LLMServer` matches the domain language in [CONTEXT.md](CONTEXT.md).
@@ -483,6 +487,8 @@ The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle
 `ModelLister` is implemented by LLM Servers that report their currently-loaded Models: llamacpp via `/v1/models`, Ollama via `/api/ps`, LM Studio via `/v1/models`. Discovery uses it on every invocation to know what is actually loaded (instead of relying on a persisted snapshot that can drift from reality when a Model is loaded externally).
 
 `LiveParamsQuerier` is implemented by LLM Servers that report their currently-active parameters: llamacpp via `/props` (per-slot n_ctx scaled by total_slots into the profile's total `context_size`, plus total_slots as `parallel`; sampling settings are deliberately not read — the launcher passes no sampling flags, so they cannot drift). Used by ADR-0007 drift detection — the launcher compares live params against the freshly resolved Profile instead of a persisted snapshot, and only the fields the server actually reports are compared, so unreported fields never manufacture drift. Ollama and LM Studio do not implement this; on those backends, model-name match alone is the idempotency signal.
+
+`StartupProber` is implemented by LLM Servers that can tell a server that is reachable but still starting up apart from one that is not running at all: llama-server answers `/health` with 503 Service Unavailable while it loads its model, before turning healthy. The managed start path probes this before every fork and refuses to spawn a duplicate onto an address where an earlier server is still coming up (§6.2) — a still-loading server fails every backend's health check, so without this probe a retry would treat the address as free.
 
 Per-server API keys do not appear in any interface signature: several call paths (`IsServerAlive`, `identifyBackend`, `WaitForHealth`, instance stop/unload) have no `*Config` in scope. Instead each backend struct holds an unexported `apiKey` field, set by `applyAPIKeys` at the end of `LoadConfig` (and thus refreshed on every `Reload`), and attaches it as a `Bearer` header via the helpers in `backend_http.go`. Health-check discrimination is unaffected: a key-protected llama-server still answers its auth-exempt `/health`, and it 401s LM Studio's `/v1/models` probe (a correct rejection); LM Studio's own probes carry the key so they keep working when its token requirement is enabled.
 
@@ -563,14 +569,15 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 
 **`ManagedLLMServer` (llama.cpp):**
 
-1. Resolve the backend; verify binary exists via `exec.LookPath`.
-2. Build server arguments via `ManagedLLMServer.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `-m`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
-3. Open the log file for stdout/stderr redirection.
-4. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
-5. Call `cmd.Start()` (non-blocking).
-6. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
-7. Wait for backend health check to succeed (up to 15 seconds).
-8. Print confirmation. The active Model and parameters are observable on subsequent invocations via the LLM Server's own API.
+1. Probe the target address via `StartupProber.StartingUp()` (§5.3): if a server there is still starting up (llama-server answers `/health` with 503 while it loads its model), refuse to fork a duplicate — it would only die with "address already in use" — and fail with an error naming the loading server's PID (via `lsof`) and log path. The loading server is deliberately left alone; this refusal also applies to `load --restart`.
+2. Resolve the backend; verify binary exists via `exec.LookPath`.
+3. Build server arguments via `ManagedLLMServer.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `-m`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
+4. Open the log file for stdout/stderr redirection.
+5. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
+6. Call `cmd.Start()` (non-blocking).
+7. Wait 500ms to detect early exit (port conflict, binary not found, etc.).
+8. Wait for backend health check to succeed (up to 15 seconds on `start`, 30 on `load`). On timeout the spawned process is **left running** — a large Model on a cold disk can legitimately need longer — and the error names its PID and log path with recovery guidance. A retry while it is still loading hits the step-1 refusal; a retry after it turns healthy is the idempotent no-op ([ADR-0007](docs/adr/0007-idempotent-load-with-drift-notice.md)).
+9. Print confirmation. The active Model and parameters are observable on subsequent invocations via the LLM Server's own API.
 
 **Plain `LLMServer` (Ollama, LM Studio):**
 
@@ -738,7 +745,8 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 | Server already running, same Profile name, parameters drifted | Print drift notice to stderr; no-op unless `--restart`. Exit 0. |
 | No server running (on `stop`/`unload`) | Print message, exit 1. |
 | Failed to start process | Print OS error, exit 3. |
-| Server health timeout | Print timeout message, exit 3. |
+| Server health timeout | The spawned server is left running — it may still be loading a large Model. Print timeout message naming its PID and log path plus recovery guidance (watch the log, retry once healthy, or kill the PID), exit 3. |
+| Managed start while a server is still starting up at the target address (health 503) | Refuse to fork a duplicate (it would die on the bind); print the loading server's PID and log path, exit 3. Applies to retries after a health timeout, including `load --restart`. |
 | Model load/unload API error | Print server response, exit 3. |
 | SIGTERM timeout (on `stop`) | Escalate to SIGKILL, warn, exit 0 (server is stopped). |
 | `lsof` not on PATH (stop path) | Print message that the listening PID could not be determined, exit 3. |

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -307,6 +308,136 @@ func TestLoadProfile_SameBackendSameModelIsNoOp(t *testing.T) {
 	}
 	if inst == nil || inst.ActiveModel != "/models/test-7b.gguf" {
 		t.Errorf("instance = %+v, want ActiveModel /models/test-7b.gguf", inst)
+	}
+}
+
+// TestWaitForHealth covers the poll loop against llama-server's startup
+// behaviour: /health answers 503 while the model loads, so a wait that
+// never sees a healthy response times out with the address and window in
+// the error, while one that flips healthy mid-wait returns promptly.
+func TestWaitForHealth(t *testing.T) {
+	t.Parallel()
+
+	t.Run("still-loading 503 until the deadline times out", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"error":{"code":503,"message":"Loading model","type":"unavailable_error"}}`))
+		}))
+		defer srv.Close()
+
+		err := WaitForHealth(&LlamaCpp{}, addrFromURL(t, srv.URL), 1200*time.Millisecond)
+		if err == nil || !strings.Contains(err.Error(), "did not become healthy") {
+			t.Errorf("err = %v, want health timeout", err)
+		}
+	})
+
+	t.Run("flips healthy mid-wait and returns promptly", func(t *testing.T) {
+		t.Parallel()
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if requests.Add(1) < 2 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer srv.Close()
+
+		start := time.Now()
+		err := WaitForHealth(&LlamaCpp{}, addrFromURL(t, srv.URL), 10*time.Second)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("WaitForHealth took %v, want a prompt return well under the 10s window", elapsed)
+		}
+	})
+}
+
+// TestWaitForHealth_TimeoutErrNamesPIDAndLog pins the contract for a
+// managed start whose health wait expires: the spawned server is left
+// running (killing a legitimately slow model load would be worse) and
+// the error must name its PID and log path so the user can watch or
+// stop it.
+func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
+	t.Parallel()
+
+	base := errors.New("server at 127.0.0.1:8080 did not become healthy within 30s")
+	inst := &RunningInstance{
+		PID:     4242,
+		Backend: "llamacpp",
+		Host:    "127.0.0.1",
+		Port:    8080,
+		LogFile: "/logs/llamacpp-20260719-120000.log",
+	}
+
+	err := startupTimeoutErr(base, inst)
+	if !errors.Is(err, base) {
+		t.Error("startupTimeoutErr must wrap the original timeout error")
+	}
+	for _, want := range []string{
+		"PID 4242",
+		"/logs/llamacpp-20260719-120000.log",
+		"left running",
+		"llama-launcher logs llamacpp",
+		"kill 4242",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+}
+
+// TestLoadProfile_RefusesDoubleSpawnWhileStartingUp covers the retry
+// after a health-wait timeout: while the earlier-spawned llama-server is
+// still loading its model (health answers 503), a second load — with or
+// without --restart — must neither kill it nor fork a duplicate onto the
+// occupied port; it refuses with guidance instead.
+func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
+	// Not parallel: swaps stopInstanceFn and rewrites PATH.
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// llama-server answers every request with 503 while loading.
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":{"code":503,"message":"Loading model","type":"unavailable_error"}}`))
+	}))
+	defer srv.Close()
+
+	host, port := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	backend := "llamacpp"
+	cfg.Defaults = ProfileParams{Server: &backend, Host: &host, Port: &port}
+
+	profile := &ResolvedProfile{
+		Name:          "test",
+		ModelPath:     "/models/test.gguf",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	stopped := stubStopInstance(t, nil)
+	// Empty PATH: if the refusal regresses, the managed start fails at the
+	// binary lookup with a distinguishable error instead of forking.
+	t.Setenv("PATH", t.TempDir())
+
+	for _, restart := range []bool{false, true} {
+		_, _, err := LoadProfile(cfg, profile, restart, nil)
+		if err == nil || !strings.Contains(err.Error(), "still starting up") {
+			t.Errorf("restart=%v: err = %v, want still-starting-up refusal", restart, err)
+			continue
+		}
+		if strings.Contains(err.Error(), "server binary not found") {
+			t.Errorf("restart=%v: refusal must fire before the spawn attempt, got %v", restart, err)
+		}
+	}
+	if len(*stopped) != 0 {
+		t.Errorf("stopped addresses = %v, want none — a still-loading server is never killed", *stopped)
 	}
 }
 
