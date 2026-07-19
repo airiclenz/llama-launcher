@@ -493,7 +493,7 @@ which fail without the fix).
   'TestDiscover|TestHealthCheck'` passes.
 - **Docs:** `CHANGELOG.md` (Security).
 
-## 14. Fix the `endpoints`→`servers` migration message
+## 14. Fix the `endpoints`→`servers` migration message — ✅ DONE (2026-07-19)
 
 - **Severity:** Medium. The error tells users to do something that cannot be expressed,
   and the mapping form silently drops a custom address, making the instance invisible.

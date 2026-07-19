@@ -532,6 +532,12 @@ profiles:
 	if !strings.Contains(err.Error(), "endpoints") {
 		t.Errorf("error = %q, want it to mention endpoints", err)
 	}
+	if !strings.Contains(err.Error(), "'host'/'port'") || !strings.Contains(err.Error(), "defaults") {
+		t.Errorf("error = %q, want it to name the host/port-in-defaults migration path", err)
+	}
+	if strings.Contains(err.Error(), "merged into") {
+		t.Errorf("error = %q, must not instruct moving entries into the servers section", err)
+	}
 }
 
 func TestValidate_NoServersEnabled(t *testing.T) {

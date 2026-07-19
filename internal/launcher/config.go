@@ -29,7 +29,7 @@ var ErrConfigNotFound = errors.New("config file not found")
 type Config struct {
 	Servers            map[string]ServerConfig `yaml:"servers"`
 	DefaultBackend     string                  `yaml:"default_backend"` // deprecated: use defaults.server
-	Endpoints          map[string]string       `yaml:"endpoints"`       // deprecated: merge into servers
+	Endpoints          map[string]string       `yaml:"endpoints"`       // deprecated: addresses now come from host/port in defaults or per profile
 	ModelsDir          string                  `yaml:"models_dir"`
 	LogDir             string                  `yaml:"log_dir"`
 	LogRetention       *int                    `yaml:"log_retention"`
@@ -351,7 +351,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: 'default_backend' is no longer supported — use 'server' in the defaults section instead\n  Move to:\n    defaults:\n      server: %s", c.DefaultBackend)
 	}
 	if len(c.Endpoints) > 0 {
-		return fmt.Errorf("config: 'endpoints' has been merged into 'servers' — move entries to the servers section")
+		return fmt.Errorf("config: 'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n  Move to:\n    defaults:\n      host: <host>\n      port: <port>")
 	}
 	if len(c.Servers) == 0 {
 		return fmt.Errorf("config: no servers defined")
@@ -446,7 +446,7 @@ func (c *Config) validateAll() []string {
 			"'default_backend' is no longer supported — use 'server' in the defaults section instead\n     Move to:\n       defaults:\n         server: %s", c.DefaultBackend))
 	}
 	if len(c.Endpoints) > 0 {
-		problems = append(problems, "'endpoints' has been merged into 'servers' — move entries to the servers section")
+		problems = append(problems, "'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n     Move to:\n       defaults:\n         host: <host>\n         port: <port>")
 	}
 
 	if len(c.Servers) == 0 {
