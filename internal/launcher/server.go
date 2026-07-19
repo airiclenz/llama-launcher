@@ -361,6 +361,9 @@ type activationOps interface {
 	// healthy reports whether b's own server answers at addr
 	// (backend-discriminating health check).
 	healthy(b LLMServer, addr string) bool
+	// starting reports whether a still-starting (Starting, ADR-0010)
+	// server of b's answers at addr.
+	starting(b LLMServer, addr string) bool
 	// loadedModel returns the model currently loaded at addr; empty when
 	// nothing is loaded or b cannot list models.
 	loadedModel(b LLMServer, addr string) string
@@ -389,6 +392,8 @@ type activationOps interface {
 type realOps struct{}
 
 func (realOps) healthy(b LLMServer, addr string) bool { return b.HealthCheck(addr) == nil }
+
+func (realOps) starting(b LLMServer, addr string) bool { return startingUp(b, addr) }
 
 func (realOps) loadedModel(b LLMServer, addr string) string { return liveLoadedModel(b, addr) }
 

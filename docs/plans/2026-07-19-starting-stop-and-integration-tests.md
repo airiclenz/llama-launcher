@@ -32,7 +32,7 @@
   - `stopServerAt` (server.go:198): the post-stop "did it die" check is currently `b.HealthCheck(addr) != nil` → success. A survived Starting server also fails the health check (still 503) and would be reported as stopped. New rule: stopped ⇔ not healthy **and** not `StartingUp` (only consult `StartingUp` when the backend implements `StartupProber`).
   - Fake-driven tests via the ADR-0009 seam (`server_test.go`): stop of a Starting instance succeeds and reports the PID; a survived-503 server yields the "still reachable" error.
 
-- [ ] **3. Orchestration seam learns "starting"** — `internal/launcher/server.go`
+- [x] **3. Orchestration seam learns "starting"** — `internal/launcher/server.go` — ✅ DONE (2026-07-19)
   - Add `starting(b LLMServer, addr string) bool` to `activationOps` (server.go:331) with a one-line `realOps` delegation (per ADR-0009, `realOps` stays logic-free — put the type-assert-and-probe in a package function).
   - Extend the fake in `server_test.go` accordingly.
 
