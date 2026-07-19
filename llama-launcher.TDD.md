@@ -585,12 +585,12 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 
 1. Probe the target address via `StartupProber.StartingUp()` (§5.3): if a server there is still starting up (llama-server answers `/health` with 503 while it loads its model), refuse to fork a duplicate — it would only die with "address already in use" — and fail with an error naming the loading server's PID (via `lsof`) and log path. The loading server is deliberately left alone; this refusal also applies to `load --restart`.
 2. Resolve the backend; verify binary exists via `exec.LookPath`.
-3. Build server arguments via `ManagedLLMServer.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `-m`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
+3. Build server arguments via `ManagedLLMServer.BuildServerArgs()` and environment via `BuildServerEnv()`. For llamacpp the Model path is in `--model`, so the Model is baked into the server's start arguments ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
 4. Open the log file for stdout/stderr redirection.
 5. Create `exec.Cmd` with `SysProcAttr{Setsid: true}` to detach the child process.
 6. Call `cmd.Start()` (non-blocking), then reap the child with a `cmd.Wait()` goroutine that reports the exit through a buffered channel.
 7. Detect early exit (port conflict, bad arguments, etc.) by selecting on that channel against a 500 ms (`startupGracePeriod`) timer: an exit within the window returns the "server exited immediately after start" error with the log tail, while a still-running child leaves the wait goroutine parked to reap it later. Reaping is required — an unreaped child that dies becomes a zombie that still satisfies `kill(pid, 0)`, so a liveness-only check would report a dead server as alive.
-8. Wait for backend health check to succeed (up to 15 seconds on `start`, 30 on `load`). On timeout the spawned process is **left running** — a large Model on a cold disk can legitimately need longer — and the error names its PID and log path with recovery guidance. A retry while it is still loading hits the step-1 refusal; a retry after it turns healthy is the idempotent no-op ([ADR-0007](docs/adr/0007-idempotent-load-with-drift-notice.md)).
+8. Wait for backend health check to succeed (up to 15 seconds on `start`, 30 on `load`). On timeout the spawned process is **left running** — a large Model on a cold disk can legitimately need longer — and the error names its PID and log path with recovery guidance. A retry while it is still loading hits the step-1 refusal; a retry after it turns healthy is the idempotent no-op ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)).
 9. Print confirmation. The active Model and parameters are observable on subsequent invocations via the LLM Server's own API.
 
 **Plain `LLMServer` (Ollama, LM Studio):**

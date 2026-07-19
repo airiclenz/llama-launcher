@@ -22,7 +22,7 @@ _Avoid_: Preset, config entry, model config (too narrow — a Profile is more th
 The orchestration the launcher performs when a user selects a Profile: resolve it, start the LLM Server if needed, load the Model if needed, update state. The user-facing CLI verb is `load` (`llml load <profile>`), but inside the codebase this whole operation is *activation* to avoid colliding with the lower-level Model load. One Profile is activated at a time per LLM Server.
 
 **Load** / **Unload** (a Model into an LLM Server):
-The API-level operation of putting Model weights into a running LLM Server's memory (or removing them). For LLM Servers with a load/unload HTTP API (Ollama, LM Studio), this is an HTTP call. For `llamacpp`, there is no API load — the Model is baked into the server's start arguments, so "loading a Model" means starting (or restarting) the LLM Server with that Model in `-m`.
+The API-level operation of putting Model weights into a running LLM Server's memory (or removing them). For LLM Servers with a load/unload HTTP API (Ollama, LM Studio), this is an HTTP call. For `llamacpp`, there is no API load — the Model is baked into the server's start arguments, so "loading a Model" means starting (or restarting) the LLM Server with that Model in `--model`.
 
 **Start** / **Stop** (an LLM Server):
 Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp`; for `ollama`, spawning `ollama serve` to start and signalling the process listening at the instance's address to stop — its CLI has no server-stop command, `ollama stop MODEL` only unloads a model; `lms server start` / `lms server stop` for `lmstudio`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).

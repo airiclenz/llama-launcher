@@ -1,6 +1,6 @@
 # llamacpp uses restart-per-Profile, not multi-Model hosting
 
-When a user activates a Profile that targets `llamacpp`, llml stops the existing `llama-server` (if any) and starts a fresh one with that Profile's Model and hardware parameters baked into the start arguments (`-m`, `-c`, `-ngl`, ...). llml does *not* use `llama-server`'s `/models/load` HTTP API, even though that API exists and would allow a single `llama-server` to hold several Models simultaneously.
+When a user activates a Profile that targets `llamacpp`, llml stops the existing `llama-server` (if any) and starts a fresh one with that Profile's Model and hardware parameters baked into the start arguments (`--model`, `-c`, `-ngl`, ...). llml does *not* use `llama-server`'s `/models/load` HTTP API, even though that API exists and would allow a single `llama-server` to hold several Models simultaneously.
 
 ## Why
 
