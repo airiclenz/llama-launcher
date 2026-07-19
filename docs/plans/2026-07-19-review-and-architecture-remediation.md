@@ -175,7 +175,7 @@ contract — `paramDrift`'s own tests are untouched as required.
   'TestLiveParamDrift|TestParamDrift'` passes.
 - **Docs:** `CHANGELOG.md` (Fixed).
 
-## 4. Harden the MCP `tail_log` tool against the read-only bypass and arg injection
+## 4. Harden the MCP `tail_log` tool against the read-only bypass and arg injection — ✅ DONE (2026-07-19)
 
 - **Severity:** High (security). `tail_log` is a *read* tool exposed even under
   `--read-only`; it must not be able to mutate or hang the host.

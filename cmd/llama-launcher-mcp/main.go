@@ -91,6 +91,9 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "tail_log",
 		Description: "Return the tail of a running instance's log. Target is optional when exactly one server is running; otherwise pass a backend name or host:port.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args targetArgs) (*mcp.CallToolResult, any, error) {
+		if err := validateTarget(args.Target); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
 		return cfg.run(ctx, argsFor("logs", args.Target)...), nil, nil
 	})
 

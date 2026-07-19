@@ -864,6 +864,8 @@ Each tool maps 1:1 to an existing subcommand (`internal/launcher/cli.go`):
 
 The mutating tools are registered only when `--read-only` is not set. Judgment that needs context (e.g. "never swap mid-simulation") stays with the agent via the skill; the adapter exposes the tools plainly.
 
+**Input validation.** `tail_log`'s free-form `target` is vetted in the adapter (`validateTarget`, `cmd/llama-launcher-mcp/validate.go`) before it is forwarded as a positional argument. A positive allowlist applies: empty (the CLI auto-selects the single running instance), a known backend name (`llamacpp`, `lmstudio`, `ollama` — pinned in the adapter, which does not import `internal/launcher`), or a `host:port` whose port parses as 1–65535. Anything else — flags such as `-f`/`--days`, the `clean` subcommand, shell metacharacters — is returned as a tool error without invoking the CLI. The CLI's own argument grammar is deliberately not relied on as a security boundary here, because `tail_log` is a read tool that stays exposed under `--read-only` and must not be able to reach a mutating (`logs clean`) or blocking (`logs -f`) CLI path.
+
 **Result mapping.** stdout is returned as the tool's text content. A non-zero exit with empty stdout is flagged as a tool error carrying stderr. A non-zero exit that still printed stdout (e.g. `status --json` reports exit 1 when nothing is running but still emits the JSON array, per [§3.3](#33-exit-codes)) is returned as normal content so the caller keeps the data.
 
 ### 15.3 Access control
