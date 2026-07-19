@@ -1,6 +1,6 @@
 # Stop is unconditional, regardless of who started the LLM Server
 
-`llama-launcher` does not distinguish between LLM Servers it started and LLM Servers that were already running. Any `stop` (whether triggered by the user via `llml stop` or implicitly via `auto_stop_server: true` when switching backends) terminates the server using whichever mechanism that LLM Server type supports (signal to PID for `llamacpp`, `lms server stop` for `lmstudio`, `ollama stop` for `ollama`).
+`llama-launcher` does not distinguish between LLM Servers it started and LLM Servers that were already running. Any `stop` (whether triggered by the user via `llml stop` or implicitly via `auto_stop_server: true` when switching backends) terminates the server using whichever mechanism that LLM Server type supports (signal to PID for `llamacpp`, `lms server stop` for `lmstudio`, a pgrep/SIGTERM sweep of `ollama serve` processes for `ollama` — its CLI has no server-stop command; `ollama stop MODEL` only unloads a model).
 
 ## Why
 
