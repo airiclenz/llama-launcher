@@ -68,33 +68,7 @@ func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
 // reading /v1/models. The OpenAI-style endpoint returns one entry whose `id`
 // is the model path or alias the server was launched with.
 func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", b.apiKey)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if err := authFailedErr(resp.StatusCode); err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("/v1/models returned status %d", resp.StatusCode)
-	}
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&result); err != nil {
-		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
-	}
-	models := make([]RunningModelInfo, 0, len(result.Data))
-	for _, m := range result.Data {
-		if m.ID == "" {
-			continue
-		}
-		models = append(models, RunningModelInfo{Name: m.ID})
-	}
-	return models, nil
+	return openAIModelList(addr, b.apiKey)
 }
 
 // QueryLiveParams reads /props on a running llama-server and translates the

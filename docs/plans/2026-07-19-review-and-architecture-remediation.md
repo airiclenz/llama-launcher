@@ -568,7 +568,21 @@ These make the orchestration testable and remove duplication. They are larger an
 require agreeing an interface first — those are DESIGN-CALL. Run them after Phase 1/2 so
 they build on the corrected behaviour.
 
-## 16. Sink the duplicated adapter HTTP logic into `backend_http.go`
+## 16. Sink the duplicated adapter HTTP logic into `backend_http.go` — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Helpers landed as `openAIModelList(addr, apiKey)` and
+`expectOK(resp, statusErr)`; error extraction stays adapter-owned via
+`lmStudioStatusErr`/`ollamaStatusErr` factories, so every error string is
+byte-identical. One mechanism change: Ollama load/unload previously drained
+the response with `io.Copy(io.Discard, …)` (left uncapped by item 13's
+NOTES because it never buffered); the shared `expectOK` now does the same
+bounded 512 KB read as the other adapters — not observable, and it extends
+the item-13 cap to those paths. Under the item's "where it does not
+obscure" clause, health checks (discrimination logic, explicitly off
+limits), `QueryLiveParams` (404 → nil,nil special case), and Ollama's
+`ListRunningModels` (different endpoint/shape, and no non-200 check — a
+shared helper would have added one, an observable change) keep their own
+bodies. CHANGELOG untouched per the item (no observable behaviour).
 
 - **Rating:** Strong (low risk). No ADR touched — this is HTTP plumbing, not behaviour.
 - **Where:** `internal/launcher/backend_llamacpp.go:56-84` and

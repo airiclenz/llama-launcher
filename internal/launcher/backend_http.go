@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -76,6 +77,57 @@ func authedPostJSON(timeout time.Duration, url, apiKey string, body []byte) (*ht
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	return (&http.Client{Timeout: timeout}).Do(req)
+}
+
+// expectOK consumes and closes resp's body (reading at most maxResponseBytes)
+// and maps the status to an error: nil for 200 OK, the actionable api_key
+// error for an authentication failure, and statusErr(status, body) for any
+// other status — body being the bounded prefix read, so the caller can
+// extract a server-reported message from it.
+func expectOK(resp *http.Response, statusErr func(statusCode int, body []byte) error) error {
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(boundedBody(resp.Body))
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return statusErr(resp.StatusCode, body)
+	}
+	return nil
+}
+
+// openAIModelList reads the OpenAI-style /v1/models endpoint at addr and
+// returns one entry per model with a non-empty id, skipping the rest.
+// llama-server and LM Studio expose the same response shape
+// ({"data":[{"id":...}]}), so both adapters delegate here.
+func openAIModelList(addr, apiKey string) ([]RunningModelInfo, error) {
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", apiKey)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("/v1/models returned status %d", resp.StatusCode)
+	}
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
+	}
+	models := make([]RunningModelInfo, 0, len(result.Data))
+	for _, m := range result.Data {
+		if m.ID == "" {
+			continue
+		}
+		models = append(models, RunningModelInfo{Name: m.ID})
+	}
+	return models, nil
 }
 
 // redactAPIKeyArgs returns a copy of args with the value following any

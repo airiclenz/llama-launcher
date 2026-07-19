@@ -62,15 +62,15 @@ func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 	if err != nil {
 		return fmt.Errorf("loading model via Ollama API: %w", err)
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	if err := authFailedErr(resp.StatusCode); err != nil {
-		return err
+	return expectOK(resp, ollamaStatusErr("load"))
+}
+
+// ollamaStatusErr returns the non-200 status mapper for Ollama's /api/generate
+// load/unload calls; only the status is surfaced, not the response body.
+func ollamaStatusErr(verb string) func(statusCode int, body []byte) error {
+	return func(statusCode int, _ []byte) error {
+		return fmt.Errorf("Ollama %s returned status %d", verb, statusCode)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Ollama load returned status %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func (b *Ollama) UnloadModel(addr string, modelID string) error {
@@ -83,15 +83,7 @@ func (b *Ollama) UnloadModel(addr string, modelID string) error {
 	if err != nil {
 		return fmt.Errorf("unloading model via Ollama API: %w", err)
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	if err := authFailedErr(resp.StatusCode); err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Ollama unload returned status %d", resp.StatusCode)
-	}
-	return nil
+	return expectOK(resp, ollamaStatusErr("unload"))
 }
 
 func (b *Ollama) TryStart(cfg *Config, addr string) error {

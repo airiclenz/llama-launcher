@@ -109,19 +109,19 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 	if err != nil {
 		return fmt.Errorf("loading model via LM Studio API: %w", err)
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(boundedBody(resp.Body))
-	if err := authFailedErr(resp.StatusCode); err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg := extractLMStudioError(respBody)
-		if msg != "" {
+	return expectOK(resp, lmStudioStatusErr("load"))
+}
+
+// lmStudioStatusErr returns the non-200 status mapper for LM Studio's model
+// load/unload endpoints: it prefers the server-reported error message and
+// falls back to a generic "<verb> returned status" error.
+func lmStudioStatusErr(verb string) func(statusCode int, body []byte) error {
+	return func(statusCode int, body []byte) error {
+		if msg := extractLMStudioError(body); msg != "" {
 			return fmt.Errorf("LM Studio: %s", msg)
 		}
-		return fmt.Errorf("LM Studio load returned status %d", resp.StatusCode)
+		return fmt.Errorf("LM Studio %s returned status %d", verb, statusCode)
 	}
-	return nil
 }
 
 // extractLMStudioError pulls the human-readable message out of an LM Studio
@@ -148,19 +148,7 @@ func (b *LMStudio) UnloadModel(addr string, modelID string) error {
 	if err != nil {
 		return fmt.Errorf("unloading model via LM Studio API: %w", err)
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(boundedBody(resp.Body))
-	if err := authFailedErr(resp.StatusCode); err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg := extractLMStudioError(respBody)
-		if msg != "" {
-			return fmt.Errorf("LM Studio: %s", msg)
-		}
-		return fmt.Errorf("LM Studio unload returned status %d", resp.StatusCode)
-	}
-	return nil
+	return expectOK(resp, lmStudioStatusErr("unload"))
 }
 
 func (b *LMStudio) TryStart(_ *Config, addr string) error {
@@ -187,33 +175,7 @@ func (b *LMStudio) TryStart(_ *Config, addr string) error {
 // the OpenAI-compatible /v1/models endpoint. LM Studio omits unloaded models
 // from this list (in contrast to its /api/v0/models, which also lists them).
 func (b *LMStudio) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", b.apiKey)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if err := authFailedErr(resp.StatusCode); err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("/v1/models returned status %d", resp.StatusCode)
-	}
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&result); err != nil {
-		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
-	}
-	models := make([]RunningModelInfo, 0, len(result.Data))
-	for _, m := range result.Data {
-		if m.ID == "" {
-			continue
-		}
-		models = append(models, RunningModelInfo{Name: m.ID})
-	}
-	return models, nil
+	return openAIModelList(addr, b.apiKey)
 }
 
 func (b *LMStudio) TryStop(addr string) error {
