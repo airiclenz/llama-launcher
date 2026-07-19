@@ -15,15 +15,14 @@ import (
 // DiscoverRunningInstances). Optional fields (PID, StartedAt, LogFile) are
 // filled lazily and may be zero when the launcher has not needed them.
 type RunningInstance struct {
-	Backend        string
-	Host           string
-	Port           int
-	PID            int
-	StartedAt      time.Time
-	LogFile        string
-	ActiveProfile  string
-	ActiveModel    string
-	ResolvedParams ProfileParams
+	Backend       string
+	Host          string
+	Port          int
+	PID           int
+	StartedAt     time.Time
+	LogFile       string
+	ActiveProfile string
+	ActiveModel   string
 }
 
 func (r *RunningInstance) Addr() string {
@@ -132,14 +131,6 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 			// at the point it enters RunningInstance, so all of them are
 			// covered once.
 			inst.ActiveModel = sanitizeServerString(models[0].Name)
-		}
-	}
-	if lp, ok := b.(LiveParamsQuerier); ok {
-		if params, err := lp.QueryLiveParams(addr); err == nil && params != nil {
-			inst.ResolvedParams = *params
-			if params.ContextSize != nil {
-				inst.ResolvedParams.ContextSize = params.ContextSize
-			}
 		}
 	}
 	inst.ActiveProfile = matchProfileName(cfg, inst)

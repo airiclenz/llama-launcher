@@ -146,7 +146,9 @@ func TestDiscoverRunningInstances_NoBackendsReachable(t *testing.T) {
 
 func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 	t.Parallel()
-	// Start a fake llama.cpp that satisfies health + /v1/models + /props.
+	// Start a fake llama.cpp that satisfies health + /v1/models. Discovery
+	// must not probe /props — live params are queried on demand by
+	// liveParamDrift, not collected per instance on every discovery pass.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
@@ -157,7 +159,8 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 				"data": []map[string]interface{}{{"id": "/models/x.gguf"}},
 			})
 		case "/props":
-			w.Write([]byte(`{"default_generation_settings":{"n_ctx":4096}}`))
+			t.Error("discovery probed /props; live params must not be collected during discovery")
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -186,9 +189,6 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 	}
 	if inst.ActiveModel != "/models/x.gguf" {
 		t.Errorf("ActiveModel = %q, want /models/x.gguf", inst.ActiveModel)
-	}
-	if inst.ResolvedParams.ContextSize == nil || *inst.ResolvedParams.ContextSize != 4096 {
-		t.Errorf("ContextSize = %v, want 4096", inst.ResolvedParams.ContextSize)
 	}
 }
 

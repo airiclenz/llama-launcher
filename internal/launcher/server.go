@@ -30,20 +30,6 @@ var ErrNotRunning = errors.New("no server running")
 // auto-stop decisions without signalling real processes.
 var stopInstanceFn = StopInstance
 
-// IsServerAlive returns true when the backend's health check succeeds at the
-// instance's address (see ADR-0001: liveness is decided by health check, not
-// by PID).
-func IsServerAlive(inst *RunningInstance) bool {
-	if inst == nil {
-		return false
-	}
-	b, err := GetLLMServer(inst.Backend)
-	if err != nil {
-		return false
-	}
-	return b.HealthCheck(inst.Addr()) == nil
-}
-
 // StartServer launches a managed server or connects to an external one.
 func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
 	b, err := GetLLMServer(profile.Backend)
@@ -621,7 +607,6 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, healthy bool, b L
 
 	inst.ActiveProfile = profile.Name
 	inst.ActiveModel = profile.ModelPath
-	inst.ResolvedParams = profile.ProfileParams
 
 	return inst, true, nil
 }
@@ -658,7 +643,6 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, hea
 
 	inst.ActiveProfile = profile.Name
 	inst.ActiveModel = profile.ModelPath
-	inst.ResolvedParams = profile.ProfileParams
 
 	return inst, true, nil
 }

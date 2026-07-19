@@ -342,26 +342,95 @@ func TestMemoryTemplate_SwapDisabledBarIsEmpty(t *testing.T) {
 	}
 }
 
-func TestMemoryTemplate_LegacyByteCompat(t *testing.T) {
+// TestMemoryTemplate_ValuePlaceholders pins the byte and percentage
+// placeholder rendering (humanised bytes, integer percentages, zero
+// denominators) to concrete strings so the legacy readout format stays
+// stable.
+func TestMemoryTemplate_ValuePlaceholders(t *testing.T) {
 	t.Parallel()
 
-	// Placeholder-only templates must render exactly as the pre-compiled
-	// FormatMemoryLine always has.
 	stats := memTestStats()
-	for _, template := range []string{
-		"RAM: {free_ram} free · Swap: {swap_used} used", // pre-1.5 default
-		"Mem {used_ram}/{total_ram} · Swap {swap_used}",
-		"{free_ram_pct} free / {used_ram_pct} used",
-		"GPU {gpu_util_pct} · {gpu_used_ram} / {gpu_alloc_ram}",
-		"free={free_ram} unknown={foo}",
-	} {
-		tpl := CompileMemoryTemplate(template, builtinBarDefaults())
-		if got, want := tpl.Render(stats), FormatMemoryLine(stats, template); got != want {
-			t.Errorf("template %q: Render = %q, want %q", template, got, want)
-		}
-		if tpl.Styled() {
-			t.Errorf("template %q should not report Styled", template)
-		}
+	noSwap := stats
+	noSwap.SwapTotal = 0
+	noSwap.SwapUsed = 0
+	noGPU := stats
+	noGPU.GPUUtilPct = 0
+	noGPU.GPUUsedRAM = 0
+	noGPU.GPUAllocRAM = 0
+
+	cases := []struct {
+		name     string
+		stats    MemStats
+		template string
+		want     string
+	}{
+		{
+			name:     "plain legacy template",
+			stats:    stats,
+			template: "RAM: {free_ram} free · Swap: {swap_used} used", // pre-1.5 default
+			want:     "RAM: 12GB free · Swap: 1.5GB used",
+		},
+		{
+			name:     "used/total template",
+			stats:    stats,
+			template: "Mem {used_ram}/{total_ram} · Swap {swap_used}",
+			want:     "Mem 20GB/32GB · Swap 1.5GB",
+		},
+		{
+			name:     "unknown placeholder passes through",
+			stats:    stats,
+			template: "free={free_ram} unknown={foo}",
+			want:     "free=12GB unknown={foo}",
+		},
+		{
+			name:     "ram percentages round to integer",
+			stats:    stats,
+			template: "{free_ram_pct} free / {used_ram_pct} used",
+			want:     "38% free / 63% used",
+		},
+		{
+			name:     "swap percentage and free swap",
+			stats:    stats,
+			template: "swap {swap_used_pct} of {swap_total} ({free_swap} free)",
+			want:     "swap 38% of 4GB (2.5GB free)",
+		},
+		{
+			name:     "compressed ram",
+			stats:    stats,
+			template: "compressed: {compressed_ram}",
+			want:     "compressed: 2GB",
+		},
+		{
+			name:     "swap disabled returns 0% rather than dividing by zero",
+			stats:    noSwap,
+			template: "swap {swap_used_pct} · free {free_swap}",
+			want:     "swap 0% · free 0B",
+		},
+		{
+			name:     "gpu placeholders",
+			stats:    stats,
+			template: "GPU {gpu_util_pct} · {gpu_used_ram} / {gpu_alloc_ram}",
+			want:     "GPU 17% · 512MB / 15GB",
+		},
+		{
+			name:     "gpu unavailable renders 0%/0B",
+			stats:    noGPU,
+			template: "GPU {gpu_util_pct} ({gpu_used_ram})",
+			want:     "GPU 0% (0B)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tpl := CompileMemoryTemplate(tc.template, builtinBarDefaults())
+			if got := tpl.Render(tc.stats); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+			if tpl.Styled() {
+				t.Errorf("template %q should not report Styled", tc.template)
+			}
+		})
 	}
 }
 

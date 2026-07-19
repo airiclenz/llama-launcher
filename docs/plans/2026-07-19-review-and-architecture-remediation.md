@@ -519,7 +519,19 @@ which fail without the fix).
 
 # Phase 2 — Dead-code / decay cleanup
 
-## 15. Remove state-file-era dead code — DESIGN-CALL
+## 15. Remove state-file-era dead code — DESIGN-CALL — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Design question answered by the user: `ResolvedParams` is
+dead — field and discovery probe deleted (no done item had grown a read; the
+only reads were discovery_test.go's). Deviation from "delete … with their
+tests": the two sysmem helpers' tests were converted, not dropped, where they
+pinned live behaviour only they covered — `TestFormatMemoryLine`'s table moved
+to memformat_test.go as `TestMemoryTemplate_ValuePlaceholders` driving
+`CompileMemoryTemplate` directly (replacing `TestMemoryTemplate_LegacyByteCompat`,
+which had become a tautology once its oracle, the deleted wrapper, was the same
+expression), and `TestPercentString` became `TestPercentValue` over the still-live
+`percentValue`. `TestDiscoverRunningInstances_FindsReachable` now fails if
+discovery probes `/props`, guarding the removed wasted round-trip.
 
 - **Severity:** Medium. Left-over from the v1.3.1 state-file removal; one piece costs a
   wasted HTTP round-trip on every discovery pass.

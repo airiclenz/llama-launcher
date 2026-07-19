@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Removed
+
+- **Dead state-file-era code is gone — including a wasted `/props` request on every discovery pass.** `RunningInstance.ResolvedParams` was populated by discovery (an extra `GET /props` per llamacpp instance on every CLI command and every open-menu refresh tick) and by the load paths, but nothing ever read it: since the state-file removal in 1.3.1, parameter drift is derived live and on demand (ADR-0007), independently of discovery. The field and its discovery-time probe are removed — `QueryLiveParams` itself is untouched, drift detection still uses it — so discovery now costs one round-trip less per llamacpp instance. Also removed: the never-called `IsServerAlive` helper (liveness has long been decided by each backend's health check directly) and the test-only `FormatMemoryLine`/`percentString` memory-formatting wrappers (the compiled-template engine and `percentValue` they wrapped remain, with their coverage preserved).
+
 ### Fixed
 
 - **The `endpoints` migration error no longer instructs an impossible move.** A config still carrying the pre-1.4 `endpoints:` section was told "'endpoints' has been merged into 'servers' — move entries to the servers section", but a servers entry only accepts `enabled`/`api_key`: a scalar address fails the bool decode, and an `addr:` key in the mapping form is silently dropped, after which discovery probes the default address and the custom-port instance is never found. The error (and the matching `config check` problem line) now names the real migration target: a non-default address is set via `host`/`port` in the `defaults` section or on a profile.

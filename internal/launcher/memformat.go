@@ -337,8 +337,8 @@ func (t *MemoryTemplate) Render(s MemStats) string {
 	return b.String()
 }
 
-// fieldString renders a field the way FormatMemoryLine always has:
-// humanised bytes for byte fields, "N%" for percentage fields.
+// fieldString renders a field as humanised bytes for byte fields and
+// "N%" for percentage fields.
 func fieldString(s MemStats, f memField) string {
 	if f.isPct() {
 		return fmt.Sprintf("%d%%", fieldPct(s, f))
@@ -375,7 +375,7 @@ func fieldBytes(s MemStats, f memField) uint64 {
 }
 
 // fieldPct returns the rounded 0–100 percentage for a percentage field.
-// Zero denominators (swap disabled) yield 0, matching percentString.
+// Zero denominators (swap disabled) yield 0, via percentValue.
 func fieldPct(s MemStats, f memField) uint64 {
 	switch f {
 	case fieldFreeRAMPct:
