@@ -20,7 +20,7 @@
 
 ## Part A — ADR-0010: Starting instances (do first; Part B Item 12 depends on it)
 
-- [ ] **1. Discovery reports Starting instances** — `internal/launcher/discovery.go`
+- [x] **1. Discovery reports Starting instances** — `internal/launcher/discovery.go` — ✅ DONE (2026-07-19)
   - Add `Starting bool` to `RunningInstance` (field comment: see ADR-0010).
   - `probeInstance` (discovery.go:112): when `HealthCheck` fails, check `b.(StartupProber)` and `StartingUp(addr)`; on true return an instance with `Starting: true`, skipping `ListRunningModels` (the server cannot answer) — `ActiveModel`/`ActiveProfile` stay empty (`matchProfileName` with an empty model and several profiles sharing the address is ambiguous anyway; empty is correct).
   - `instancesSignature` (discovery.go:146) must include the Starting flag so the menu's refresh tick notices the Starting→healthy transition.
