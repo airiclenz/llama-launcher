@@ -84,10 +84,16 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 }
 
 // QueryLiveParams reads /props on a running llama-server and translates the
-// fields llama-server exposes into a ProfileParams. Only fields that /props
-// reports are populated; the rest remain nil so paramDrift will skip them.
-// /props is available on recent llama.cpp builds; older builds return 404 and
-// this function returns (nil, nil), which paramDrift treats as "no drift".
+// fields the launcher can meaningfully diff into a ProfileParams:
+// context_size (from default_generation_settings.n_ctx, which llama-server
+// reports *per slot*, so it is scaled by total_slots back to the profile's
+// total -c value) and parallel (from total_slots). All other fields remain
+// nil so liveParamDrift skips them. Sampling parameters are deliberately not
+// read: the launcher never passes sampling flags to llama-server, so a
+// mismatch against the server's own defaults is not drift a --restart could
+// fix. /props is available on recent llama.cpp builds; older builds return
+// 404 and this function returns (nil, nil), which liveParamDrift treats as
+// "no drift".
 func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/props", b.apiKey)
 	if err != nil {
@@ -105,29 +111,22 @@ func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 	}
 	var raw struct {
 		DefaultGenerationSettings struct {
-			NCtx          *int     `json:"n_ctx"`
-			Temperature   *float64 `json:"temperature"`
-			RepeatPenalty *float64 `json:"repeat_penalty"`
-			TopK          *int     `json:"top_k"`
-			TopP          *float64 `json:"top_p"`
-			MinP          *float64 `json:"min_p"`
+			NCtx *int `json:"n_ctx"`
 		} `json:"default_generation_settings"`
-		TotalSlots *int   `json:"total_slots"`
-		ModelPath  string `json:"model_path"`
+		TotalSlots *int `json:"total_slots"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing /props response: %w", err)
 	}
-	out := &ProfileParams{
-		ContextSize:   raw.DefaultGenerationSettings.NCtx,
-		Temperature:   raw.DefaultGenerationSettings.Temperature,
-		RepeatPenalty: raw.DefaultGenerationSettings.RepeatPenalty,
-		TopK:          raw.DefaultGenerationSettings.TopK,
-		TopP:          raw.DefaultGenerationSettings.TopP,
-		MinP:          raw.DefaultGenerationSettings.MinP,
-		Parallel:      raw.TotalSlots,
+	contextSize := raw.DefaultGenerationSettings.NCtx
+	if contextSize != nil && raw.TotalSlots != nil && *raw.TotalSlots > 1 {
+		total := *contextSize * *raw.TotalSlots
+		contextSize = &total
 	}
-	return out, nil
+	return &ProfileParams{
+		ContextSize: contextSize,
+		Parallel:    raw.TotalSlots,
+	}, nil
 }
 
 func (b *LlamaCpp) BuildServerEnv(_ *Config, _ *ResolvedProfile) []string { return nil }

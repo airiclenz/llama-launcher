@@ -405,9 +405,13 @@ func liveLoadedModel(b LLMServer, addr string) string {
 }
 
 // liveParamDrift returns the drift list between a backend's live parameters
-// and the freshly resolved profile. Backends that do not implement
-// LiveParamsQuerier (Ollama, LM Studio) contribute no drift — model-name
-// match is the only idempotency signal there. See ADR-0007.
+// and the freshly resolved profile. Only fields the live probe actually
+// reports are compared: a nil field on the live side means "not reported by
+// the server", never "drifted to unset", so unreported fields cannot
+// manufacture drift — a drift notice must mean real drift (ADR-0007).
+// Backends that do not implement LiveParamsQuerier (Ollama, LM Studio)
+// contribute no drift — model-name match is the only idempotency signal
+// there.
 func liveParamDrift(b LLMServer, addr string, fresh ProfileParams) []string {
 	lp, ok := b.(LiveParamsQuerier)
 	if !ok {
@@ -417,7 +421,67 @@ func liveParamDrift(b LLMServer, addr string, fresh ProfileParams) []string {
 	if err != nil || live == nil {
 		return nil
 	}
-	return paramDrift(*live, fresh)
+	return paramDrift(*live, maskUnreported(*live, fresh))
+}
+
+// maskUnreported returns fresh with every field nilled out that the live
+// probe left nil, so paramDrift compares only the fields the server actually
+// reported. Slot-identity fields (Server, Host, Port) are already excluded
+// by paramDrift and need no masking.
+func maskUnreported(live, fresh ProfileParams) ProfileParams {
+	masked := fresh
+	if live.GPULayers == nil {
+		masked.GPULayers = nil
+	}
+	if live.Threads == nil {
+		masked.Threads = nil
+	}
+	if live.ThreadsBatch == nil {
+		masked.ThreadsBatch = nil
+	}
+	if live.BatchSize == nil {
+		masked.BatchSize = nil
+	}
+	if live.ContextSize == nil {
+		masked.ContextSize = nil
+	}
+	if live.FlashAttn == nil {
+		masked.FlashAttn = nil
+	}
+	if live.ContBatching == nil {
+		masked.ContBatching = nil
+	}
+	if live.Parallel == nil {
+		masked.Parallel = nil
+	}
+	if live.Mlock == nil {
+		masked.Mlock = nil
+	}
+	if live.NoMmap == nil {
+		masked.NoMmap = nil
+	}
+	if live.Embedding == nil {
+		masked.Embedding = nil
+	}
+	if live.Jinja == nil {
+		masked.Jinja = nil
+	}
+	if live.Temperature == nil {
+		masked.Temperature = nil
+	}
+	if live.RepeatPenalty == nil {
+		masked.RepeatPenalty = nil
+	}
+	if live.TopK == nil {
+		masked.TopK = nil
+	}
+	if live.TopP == nil {
+		masked.TopP = nil
+	}
+	if live.MinP == nil {
+		masked.MinP = nil
+	}
+	return masked
 }
 
 // paramDrift returns a human-readable list of fields that differ between

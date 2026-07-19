@@ -50,8 +50,7 @@ func TestLlamaCppQueryLiveParams(t *testing.T) {
 				"total_slots": 2,
 				"default_generation_settings": {
 					"n_ctx": 8192,
-					"temperature": 0.7,
-					"top_k": 40
+					"params": {"temperature": 0.7, "top_k": 40}
 				}
 			}`))
 		}))
@@ -64,17 +63,21 @@ func TestLlamaCppQueryLiveParams(t *testing.T) {
 		if params == nil {
 			t.Fatal("expected non-nil params")
 		}
-		if params.ContextSize == nil || *params.ContextSize != 8192 {
-			t.Errorf("ContextSize = %v, want 8192", params.ContextSize)
+		// /props reports n_ctx per slot; the total is n_ctx * total_slots.
+		if params.ContextSize == nil || *params.ContextSize != 16384 {
+			t.Errorf("ContextSize = %v, want 16384", params.ContextSize)
 		}
 		if params.Parallel == nil || *params.Parallel != 2 {
 			t.Errorf("Parallel = %v, want 2", params.Parallel)
 		}
-		if params.Temperature == nil || *params.Temperature != 0.7 {
-			t.Errorf("Temperature = %v, want 0.7", params.Temperature)
+		// Sampling parameters are deliberately not read: the launcher never
+		// passes sampling flags to llama-server, so comparing them would
+		// flag drift a --restart cannot fix.
+		if params.Temperature != nil {
+			t.Errorf("Temperature = %v, want nil (not read)", params.Temperature)
 		}
-		if params.TopK == nil || *params.TopK != 40 {
-			t.Errorf("TopK = %v, want 40", params.TopK)
+		if params.TopK != nil {
+			t.Errorf("TopK = %v, want nil (not read)", params.TopK)
 		}
 	})
 

@@ -377,3 +377,136 @@ func TestParamDrift(t *testing.T) {
 		}
 	})
 }
+
+func TestLiveParamDrift(t *testing.T) {
+	t.Parallel()
+
+	intPtr := func(n int) *int { return &n }
+	boolPtr := func(b bool) *bool { return &b }
+	floatPtr := func(f float64) *float64 { return &f }
+
+	// defaultBlockParams mirrors the shipped defaults block in
+	// defaults/config.yaml: every llamacpp parameter set.
+	defaultBlockParams := func() ProfileParams {
+		return ProfileParams{
+			GPULayers:     intPtr(99),
+			Threads:       intPtr(8),
+			ThreadsBatch:  intPtr(8),
+			BatchSize:     intPtr(512),
+			ContextSize:   intPtr(4096),
+			FlashAttn:     boolPtr(true),
+			ContBatching:  boolPtr(true),
+			Parallel:      intPtr(1),
+			Mlock:         boolPtr(false),
+			NoMmap:        boolPtr(false),
+			Embedding:     boolPtr(false),
+			Jinja:         boolPtr(false),
+			Temperature:   floatPtr(0.7),
+			RepeatPenalty: floatPtr(1.1),
+			TopK:          intPtr(40),
+			TopP:          floatPtr(0.95),
+			MinP:          floatPtr(0.05),
+		}
+	}
+
+	propsServer := func(t *testing.T, body string) string {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/props" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return addrFromURL(t, srv.URL)
+	}
+
+	b := &LlamaCpp{}
+
+	t.Run("unreported fields produce no drift on an idempotent load", func(t *testing.T) {
+		t.Parallel()
+		// Current llama-server /props: n_ctx (per slot) + total_slots, with
+		// sampling nested under default_generation_settings.params; none of
+		// gpu_layers/threads/flash_attn/... are reported. The server-default
+		// sampling values (temp 0.8, repeat 1.0) deliberately differ from the
+		// profile (0.7, 1.1): the launcher never passes sampling flags to
+		// llama-server, so they must not be flagged as drift.
+		addr := propsServer(t, `{
+			"default_generation_settings": {
+				"n_ctx": 4096,
+				"params": {"temperature": 0.8, "top_k": 40, "top_p": 0.95, "min_p": 0.05, "repeat_penalty": 1.0}
+			},
+			"total_slots": 1,
+			"model_path": "/models/x.gguf"
+		}`)
+		if d := liveParamDrift(b, addr, defaultBlockParams()); len(d) != 0 {
+			t.Errorf("want no drift, got %v", d)
+		}
+	})
+
+	t.Run("per-slot n_ctx does not drift when parallel > 1", func(t *testing.T) {
+		t.Parallel()
+		// llama-server reports n_ctx per slot: -c 4096 -np 2 shows n_ctx 2048.
+		addr := propsServer(t, `{
+			"default_generation_settings": {"n_ctx": 2048},
+			"total_slots": 2
+		}`)
+		fresh := defaultBlockParams()
+		fresh.ContextSize = intPtr(4096)
+		fresh.Parallel = intPtr(2)
+		if d := liveParamDrift(b, addr, fresh); len(d) != 0 {
+			t.Errorf("want no drift for per-slot n_ctx, got %v", d)
+		}
+	})
+
+	t.Run("old-style top-level sampling is ignored", func(t *testing.T) {
+		t.Parallel()
+		// Pre-refactor llama-server builds reported sampling at the top level
+		// of default_generation_settings; those are excluded from the live
+		// diff for the same reason as the nested form.
+		addr := propsServer(t, `{
+			"default_generation_settings": {"n_ctx": 4096, "temperature": 0.8, "top_k": 50},
+			"total_slots": 1
+		}`)
+		if d := liveParamDrift(b, addr, defaultBlockParams()); len(d) != 0 {
+			t.Errorf("want no drift, got %v", d)
+		}
+	})
+
+	t.Run("genuine context_size drift is reported", func(t *testing.T) {
+		t.Parallel()
+		addr := propsServer(t, `{
+			"default_generation_settings": {"n_ctx": 4096},
+			"total_slots": 1
+		}`)
+		fresh := defaultBlockParams()
+		fresh.ContextSize = intPtr(8192)
+		d := liveParamDrift(b, addr, fresh)
+		if len(d) != 1 || d[0] != "context_size: 4096 → 8192" {
+			t.Errorf("unexpected drift: %v", d)
+		}
+	})
+
+	t.Run("genuine parallel drift is reported", func(t *testing.T) {
+		t.Parallel()
+		addr := propsServer(t, `{
+			"default_generation_settings": {"n_ctx": 4096},
+			"total_slots": 2
+		}`)
+		fresh := defaultBlockParams()
+		fresh.ContextSize = intPtr(8192)
+		fresh.Parallel = intPtr(1)
+		d := liveParamDrift(b, addr, fresh)
+		if len(d) != 1 || d[0] != "parallel: 2 → 1" {
+			t.Errorf("unexpected drift: %v", d)
+		}
+	})
+
+	t.Run("backend without LiveParamsQuerier contributes no drift", func(t *testing.T) {
+		t.Parallel()
+		if d := liveParamDrift(&Ollama{}, "127.0.0.1:1", defaultBlockParams()); d != nil {
+			t.Errorf("want nil drift for non-querier backend, got %v", d)
+		}
+	})
+}

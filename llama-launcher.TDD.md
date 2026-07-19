@@ -482,7 +482,7 @@ The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle
 
 `ModelLister` is implemented by LLM Servers that report their currently-loaded Models: llamacpp via `/v1/models`, Ollama via `/api/ps`, LM Studio via `/v1/models`. Discovery uses it on every invocation to know what is actually loaded (instead of relying on a persisted snapshot that can drift from reality when a Model is loaded externally).
 
-`LiveParamsQuerier` is implemented by LLM Servers that report their currently-active parameters: llamacpp via `/props` (n_ctx, total_slots, default generation settings). Used by ADR-0007 drift detection — the launcher compares live params against the freshly resolved Profile instead of a persisted snapshot. Ollama and LM Studio do not implement this; on those backends, model-name match alone is the idempotency signal.
+`LiveParamsQuerier` is implemented by LLM Servers that report their currently-active parameters: llamacpp via `/props` (per-slot n_ctx scaled by total_slots into the profile's total `context_size`, plus total_slots as `parallel`; sampling settings are deliberately not read — the launcher passes no sampling flags, so they cannot drift). Used by ADR-0007 drift detection — the launcher compares live params against the freshly resolved Profile instead of a persisted snapshot, and only the fields the server actually reports are compared, so unreported fields never manufacture drift. Ollama and LM Studio do not implement this; on those backends, model-name match alone is the idempotency signal.
 
 Per-server API keys do not appear in any interface signature: several call paths (`IsServerAlive`, `identifyBackend`, `WaitForHealth`, instance stop/unload) have no `*Config` in scope. Instead each backend struct holds an unexported `apiKey` field, set by `applyAPIKeys` at the end of `LoadConfig` (and thus refreshed on every `Reload`), and attaches it as a `Bearer` header via the helpers in `backend_http.go`. Health-check discrimination is unaffected: a key-protected llama-server still answers its auth-exempt `/health`, and it 401s LM Studio's `/v1/models` probe (a correct rejection); LM Studio's own probes carry the key so they keep working when its token requirement is enabled.
 
@@ -774,7 +774,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestOllamaUnloadModel` | Success (verifies keep_alive=0), error status. |
 | `TestOllamaListRunningModels` | Success with models, empty list, malformed JSON. |
 | `TestLlamaCppListRunningModels` | `/v1/models` parsing — single-entry `data` array with `id` populated. |
-| `TestLlamaCppQueryLiveParams` | `/props` parsing populates `ContextSize`, `Parallel`, generation settings; `404` returns `(nil, nil)` so paramDrift treats it as "no drift". |
+| `TestLlamaCppQueryLiveParams` | `/props` parsing populates `ContextSize` (per-slot n_ctx × total_slots) and `Parallel`, leaves sampling fields nil; `404` returns `(nil, nil)` so liveParamDrift treats it as "no drift". |
 
 ### 12.2 Server & Config Tests
 

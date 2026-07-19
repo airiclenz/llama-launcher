@@ -128,7 +128,20 @@ active-file protection now applies on the automatic path.
 - **Docs:** `CHANGELOG.md` (Fixed); `README.md` / TDD `log_retention` comments if the
   `0` semantics change.
 
-## 3. Stop the spurious drift notice on every idempotent llamacpp load
+## 3. Stop the spurious drift notice on every idempotent llamacpp load — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Verified `/props` against the source of the installed
+llama-server build (b10068, commit 571d0d540, `tools/server/server-context.cpp`):
+sampling is nested under `default_generation_settings.params` and `n_ctx` is
+per-slot (`meta->slot_n_ctx`). Took the item's "leave sampling out of the live
+diff" branch instead of decoding the nested params: `BuildServerArgs` never
+passes sampling flags to llama-server, so comparing live sampling (server
+defaults 0.8/1.0) against the shipped config (0.7/1.1) would keep the notice
+spurious and un-fixable by `--restart`. `QueryLiveParams` now returns only
+`context_size` (normalised to `n_ctx * total_slots`) and `parallel`; the
+live-nil skip is a `maskUnreported()` helper feeding the unchanged `paramDrift`.
+`TestLlamaCppQueryLiveParams` (discovery_test.go) was updated to the new
+contract — `paramDrift`'s own tests are untouched as required.
 
 - **Severity:** High. Restores ADR-0007's promise: a no-op `load` of an unchanged profile
   is silent; a drift notice means real drift.

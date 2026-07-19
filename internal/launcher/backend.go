@@ -75,6 +75,8 @@ type RunningModelInfo struct {
 // currently active parameters at runtime. Used by ADR-0007 drift detection
 // (LoadProfile compares the live params against the freshly resolved profile).
 // Returning (nil, nil) means the server is reachable but exposes no params.
+// Fields the server does not report must stay nil — drift detection skips
+// them rather than treating them as "unset".
 type LiveParamsQuerier interface {
 	QueryLiveParams(addr string) (*ProfileParams, error)
 }
