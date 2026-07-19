@@ -64,7 +64,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	}
 
 	args := mb.BuildServerArgs(cfg, profile)
-	logPath, err := createLogPath(cfg.LogDir, profile.Backend, cfg.LogRetention)
+	logPath, err := createLogPath(cfg, profile.Backend)
 	if err != nil {
 		return nil, err
 	}
@@ -664,15 +664,13 @@ func TailLog(logPath string, follow bool) error {
 	return cmd.Run()
 }
 
-func createLogPath(logDir, name string, retentionDays *int) (string, error) {
-	if retentionDays != nil {
-		autoCleanupLogs(logDir, *retentionDays)
-	}
-	if err := os.MkdirAll(logDir, 0o700); err != nil {
+func createLogPath(cfg *Config, name string) (string, error) {
+	autoCleanupLogs(cfg)
+	if err := os.MkdirAll(cfg.LogDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating log directory: %w", err)
 	}
 	ts := time.Now().Format("20060102-150405")
-	return filepath.Join(logDir, fmt.Sprintf("%s-%s.log", name, ts)), nil
+	return filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", name, ts)), nil
 }
 
 func readLastLines(path string, n int) string {

@@ -188,7 +188,7 @@ models_dir: ~/Models
 log_dir: ~/.config/llama-launcher/logs
 
 # Automatically delete log files older than N days on server start.
-# Runs silently before each new log file is created. Unset = no cleanup.
+# Runs silently before each new log file is created. Unset or 0 = no cleanup.
 # log_retention: 7
 
 # Stop other running instances when activating a profile (default: true).
@@ -416,7 +416,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
 | `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
-| `server.go` | LLM Server lifecycle. Unified start path (fork-and-detach for llamacpp; backend-supplied `TryStart` for Ollama/LM Studio), unified stop path that always tries to stop the process whether or not the launcher started it ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). `LoadProfile` orchestration with live idempotency check + drift notice from `GET /props` ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)) and unified `auto_unload` rule across same-server and cross-server cases ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). Instances are keyed by `host:port` and rediscovered live each invocation ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). `createLogPath` triggers automatic cleanup when `log_retention` is set. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
+| `server.go` | LLM Server lifecycle. Unified start path (fork-and-detach for llamacpp; backend-supplied `TryStart` for Ollama/LM Studio), unified stop path that always tries to stop the process whether or not the launcher started it ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). `LoadProfile` orchestration with live idempotency check + drift notice from `GET /props` ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)) and unified `auto_unload` rule across same-server and cross-server cases ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). Instances are keyed by `host:port` and rediscovered live each invocation ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). `createLogPath` triggers automatic cleanup when `log_retention` is set to a positive number of days. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
 | `discovery.go` | `RunningInstance` type and `DiscoverRunningInstances(cfg)` — probes every (backend, address) pair derivable from the config in parallel, returns the reachable set with the loaded Model and (for llamacpp) the live parameters from `/props`. Optional runtime details (PID via `lsof`, start time via `ps -o lstart=`, log path via the deterministic naming convention) are populated lazily by `fillRuntimeDetails`. `instancesSignature` condenses a discovery result into a comparable string (backend, address, loaded model per instance) used by the menu to detect background state changes between refresh ticks. |
 | `log_cleanup.go` | Log file cleanup: `cleanupLogs` enumerates and deletes old `.log` files by filename timestamp, skipping active server logs. `parseLogTimestamp` extracts creation time from the `{backend}-{YYYYMMDD}-{HHMMSS}.log` naming convention. `formatBytes` for human-readable sizes. `autoCleanupLogs` wrapper for silent on-start cleanup. |
 | `progress.go` | Step-by-step progress feedback for lifecycle operations. `ProgressFunc` callback type, `progressTracker` (TUI popup that updates in place), `newCLIProgress` (plain text fallback). |
@@ -720,7 +720,7 @@ The `logs` subcommand tails the log file of a launcher-managed running instance.
 Old log files can be cleaned up manually or automatically:
 
 - **Manual:** `logs clean` deletes files older than 7 days (default). `--days N` overrides the threshold; `--all` removes everything. Reports files removed and space freed.
-- **Automatic:** Setting `log_retention: N` in config causes `createLogPath` to silently delete files older than N days before each new log is created. No output during automatic cleanup.
+- **Automatic:** Setting `log_retention: N` (positive) in config causes `createLogPath` to silently delete files older than N days before each new log is created. No output during automatic cleanup. `0` — like leaving `log_retention` unset — disables it; a zero retention never means "delete everything".
 
 Both paths use `cleanupLogs()`, which determines file age from the filename timestamp (not mtime) and always skips log files belonging to running servers (checked via `DiscoverRunningInstances` + `fillRuntimeDetails` so the live log path of each instance is known and protected).
 

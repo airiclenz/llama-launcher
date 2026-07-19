@@ -1,6 +1,8 @@
 package launcher
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -192,6 +194,117 @@ func TestCleanupLogs_SkipsNonLogFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(txtFile); err != nil {
 		t.Error("non-log file should still exist")
+	}
+}
+
+// TestCleanupLogs_PreservesActiveLogFile guards the TDD §9.1 invariant:
+// cleanup must always skip the log file of a running server, even in the
+// worst case of a delete-all pass. The running server is a real httptest
+// fake that passes the llamacpp health check, so the active log is resolved
+// through the full discovery path (DiscoverRunningInstances +
+// fillRuntimeDetails), exactly as in production.
+func TestCleanupLogs_PreservesActiveLogFile(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	staleFile := filepath.Join(dir, "llamacpp-20200101-000000.log")
+	os.WriteFile(staleFile, []byte("stale"), 0o600)
+
+	// The active log must carry the newest timestamp so findManagedLogFile
+	// resolves it as the running instance's log.
+	activeTs := time.Now().Format(logTimestampFormat)
+	activeFile := filepath.Join(dir, "llamacpp-"+activeTs+".log")
+	os.WriteFile(activeFile, []byte("active"), 0o600)
+
+	host, port := hostPort(t, srv.URL)
+	backend := "llamacpp"
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   dir,
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{Server: &backend, Host: &host, Port: &port}
+
+	result, err := cleanupLogs(cfg, dir, 0, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Removed != 1 {
+		t.Errorf("Removed = %d, want 1", result.Removed)
+	}
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Error("stale file should have been deleted")
+	}
+	if _, err := os.Stat(activeFile); err != nil {
+		t.Error("active file of the running server must be preserved")
+	}
+}
+
+// TestAutoCleanupLogs_DisabledRetention pins the log_retention semantics:
+// unset and 0 both mean cleanup disabled — nothing is deleted, no matter how
+// old the files are.
+func TestAutoCleanupLogs_DisabledRetention(t *testing.T) {
+	t.Parallel()
+
+	zero := 0
+	tests := []struct {
+		name      string
+		retention *int
+	}{
+		{name: "unset retention", retention: nil},
+		{name: "zero retention", retention: &zero},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			oldFile := filepath.Join(dir, "llamacpp-20200101-000000.log")
+			os.WriteFile(oldFile, []byte("old"), 0o600)
+
+			autoCleanupLogs(&Config{LogDir: dir, LogRetention: tt.retention})
+
+			if _, err := os.Stat(oldFile); err != nil {
+				t.Error("disabled retention must not delete any log file")
+			}
+		})
+	}
+}
+
+// TestAutoCleanupLogs_PositiveRetention confirms the guard for disabled
+// cleanup does not break the enabled path: a positive retention still
+// removes stale files and keeps fresh ones.
+func TestAutoCleanupLogs_PositiveRetention(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	staleFile := filepath.Join(dir, "llamacpp-20200101-000000.log")
+	os.WriteFile(staleFile, []byte("stale"), 0o600)
+
+	freshTs := time.Now().Format(logTimestampFormat)
+	freshFile := filepath.Join(dir, "llamacpp-"+freshTs+".log")
+	os.WriteFile(freshFile, []byte("fresh"), 0o600)
+
+	seven := 7
+	autoCleanupLogs(&Config{LogDir: dir, LogRetention: &seven})
+
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Error("stale file should have been deleted")
+	}
+	if _, err := os.Stat(freshFile); err != nil {
+		t.Error("fresh file should still exist")
 	}
 }
 

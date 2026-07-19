@@ -123,6 +123,7 @@ auto_stop_server: true
 auto_unload: true
 
 # Automatically delete log files older than N days on server start.
+# Logs of running servers are never deleted. 0 or unset disables cleanup.
 log_retention: 7
 
 # ──────────────────────────────────────────────────────────────

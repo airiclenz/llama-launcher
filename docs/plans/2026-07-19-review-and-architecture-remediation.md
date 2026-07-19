@@ -89,7 +89,15 @@ stop invocation instead. Tests also blank `PATH` so a regression fails at the
   a no-op. `go test ./internal/launcher/ -run TestLoadProfile` passes; `go build ./...`.
 - **Docs:** note the fix in `CHANGELOG.md` (Fixed).
 
-## 2. Stop auto log-cleanup from deleting active or all logs — DESIGN-CALL
+## 2. Stop auto log-cleanup from deleting active or all logs — DESIGN-CALL — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Design question answered by the user: `log_retention: 0`
+means cleanup DISABLED (nothing is deleted), same as unset; only positive N
+enables age-based deletion. Implemented by guarding `autoCleanupLogs` (returns
+on nil/`<= 0`). Threading `*Config` was done by narrowing `createLogPath` to
+`(cfg *Config, name string)` — it read only `cfg.LogDir`/`cfg.LogRetention`
+anyway — so `autoCleanupLogs(cfg)` calls `cleanupLogs(cfg, …)` and the
+active-file protection now applies on the automatic path.
 
 - **Severity:** High (data loss). Restores the "never delete a running server's log"
   invariant to the automatic path that the manual `logs clean` path already honours.
