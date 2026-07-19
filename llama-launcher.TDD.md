@@ -788,6 +788,11 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 
 ## 12. Testing
 
+Tests come in two layers (historical plan: `backend-tests-plan.md`; the validated Layer-2 spec is `docs/plans/2026-07-19-starting-stop-and-integration-tests.md`):
+
+- **Layer 1 — unit tests** (§12.1–12.4): fake-driven and `httptest`-based, no external processes. Run with `make test` (= `go test ./...`) on every change.
+- **Layer 2 — integration tests** (§12.5): files carrying the `integration` build tag that start and stop **real** backend servers. Invisible to the untagged build; run manually **on the host** with `make test-integration` — by convention the *user* runs this layer and reports back, because agents working on this repository operate in a container and must not start real servers (they verify only that the tagged files compile: `go vet -tags=integration ./internal/launcher/`).
+
 ### 12.1 Unit Tests (httptest)
 
 Backend methods are tested using `net/http/httptest` mock servers. These tests run as part of `go test ./...` with no external dependencies.
@@ -839,20 +844,44 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 
 `helpers_test.go` provides `addrFromURL(t, rawURL) string`, which parses an `httptest.NewServer` URL and returns the `host:port` portion for passing to backend methods that expect an `addr` string.
 
+### 12.5 Integration Tests (Layer 2)
+
+The files `integration_test.go` (shared helpers), `integration_llamacpp_test.go`, `integration_ollama_test.go`, and `integration_lmstudio_test.go` carry `//go:build integration`, so `go test ./...` never compiles them. `make test-integration` runs them (`go test -tags=integration -timeout 5m -v ./internal/launcher/`); `make test-all` runs both layers.
+
+| Test | What it covers |
+|---|---|
+| `TestLlamaCppLifecycle` | Real `llama-server` through the in-package start path (`StartServer` with a constructed `*Config` + `ResolvedProfile`), so Setsid, the reaper goroutine, and the startup-grace crash detection are exercised for real — then `waitForHealthy`, unified `Stop(addr)`, and `waitForUnhealthy`. |
+| `TestLlamaCppStopWhileStarting` | The ADR-0010 flagship: start a real model load, poll until `StartingUp(addr)` reports the 503 window, call `Stop(addr)` mid-load, assert success, and assert port release via an explicit `net.Listen` re-bind probe. Skips when the model turns healthy before a 503 is ever observed (use a larger model). |
+| `TestOllamaLifecycle` | `TryStart` → `HealthCheck` → optional model steps → unified `Stop(addr)` → gone. `TryStart` exports `OLLAMA_HOST=<addr>`, so the suite serves on a free loopback port and never touches a real instance at 11434. The stop goes through `Stop(addr)` because Ollama's `TryStop` is deliberately a no-op (§6.5). |
+| `TestLMStudioLifecycle` | Same shape via `lms`. LM Studio runs exactly one app-owned API server (`TryStart` forwards only `--port`), so the suite starts, moves, and stops *that* instance — running it can interfere with an interactive LM Studio session, which is accepted for a manually-invoked host-side suite. |
+
+Suite conventions (pinned in `integration_test.go`'s package comment): every test skips when its backend binary is not on `PATH` (`mustFindBinary`); no `t.Parallel()` anywhere — real servers contend for ports, GPU memory, and the per-backend singletons; log directories are per-test `t.TempDir()` paths; subtests chain, so a failed step aborts the rest; `waitForUnhealthy` applies the ADR-0010 stop-verification rule (gone ⇔ neither healthy nor still `StartingUp`).
+
+Model selection is via environment variables — the suite skips or trims itself when they are unset:
+
+| Variable | Meaning |
+|---|---|
+| `INTEGRATION_MODEL_LLAMACPP` | Absolute path to a `.gguf` model file. Required by both llamacpp tests (they skip without it); pick a model that loads slowly enough to open a Starting window for the stop-while-Starting test. |
+| `INTEGRATION_MODEL_OLLAMA` | Name of an already-pulled Ollama model (e.g. `qwen3:0.6b`). Gates the load/list/unload steps — `LoadModel` does not pull. |
+| `INTEGRATION_MODEL_LMSTUDIO` | Name of a model already downloaded in LM Studio. Gates the load/list/unload steps — `LoadModel` does not download. |
+
 ## 13. Build and Installation
 
 The version number lives in the root `VERSION` file and is injected at build time via `ldflags` into `launcher.Version`.
 
 ```bash
-make build          # builds ./llama-launcher binary (version injected from VERSION file)
-make build-mcp      # builds ./llama-launcher-mcp, the optional control-plane adapter (§15)
-make install        # builds + copies to ~/.local/bin, adds to PATH if needed
-make clean          # removes binaries
+make build             # builds ./llama-launcher binary (version injected from VERSION file)
+make build-mcp         # builds ./llama-launcher-mcp, the optional control-plane adapter (§15)
+make test              # unit tests: go test ./... (Layer 1, §12.1–12.4)
+make test-integration  # real-backend suite, host only (Layer 2, §12.5)
+make test-all          # both layers
+make clean             # removes binaries
 
-go test ./...       # run all tests
 go test ./internal/launcher/ -run TestMergeParams  # run a single test
 go vet ./...        # static analysis
 ```
+
+Installation is deliberately Homebrew-only: `brew install airiclenz/tap/llama-launcher` for a first install, `brew upgrade llama-launcher` afterwards. `make install` does not copy anything to `~/.local/bin` or anywhere else — it prints that pointer and exits non-zero; use `make build` for local testing.
 
 The binary is statically linked (default for Go on macOS with CGO_ENABLED=0) and has no external dependencies at runtime.
 
@@ -868,7 +897,7 @@ Follow the `coding-standards` skill when writing or modifying code. It is a pers
 
 1. Update the documents `llama-launcher.TDD.md`, `README.md`, `CHANGELOG.md`, and `TODO.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
 2. If the change touches one of the architectural decisions in [docs/adr/](docs/adr/), update or supersede the relevant ADR in the same change.
-3. Run `make install` to build and install the updated binary.
+3. Run `make build` and exercise the freshly built `./llama-launcher` locally; installed copies come from Homebrew once a release is tagged (`brew upgrade llama-launcher`, §13).
 
 ## 15. Optional MCP Control-Plane Adapter
 
