@@ -321,7 +321,20 @@ supported for lmstudio — one field beyond the three the item names.
   ./cmd/llama-launcher-mcp/` passes.
 - **Docs:** `CHANGELOG.md` (Fixed); TDD §15.2 result-mapping wording.
 
-## 9. Repair and unify the LLM Server stop path
+## 9. Repair and unify the LLM Server stop path — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): `ollama stop` arity confirmed against the installed
+Ollama 0.32.1: with no argument it fails with "Error: accepts 1 arg(s),
+received 0" (exit 1); usage is `ollama stop MODEL` — a model unload, not a
+server stop. The arg-less call was removed; the pgrep/SIGTERM sweep is now
+Ollama's TryStop mechanism. `EnsureStopped` (single caller: `StopInstance`)
+was folded into an unexported `stopServerAt`; TryStop's error — previously
+discarded — now surfaces, but only when the address is still serving
+afterwards, so a hook that errors after the PID signal already worked (e.g.
+`lms server stop` with the server gone) stays silent. ADR-0001's parenthetical
+still names "`ollama stop`" as Ollama's stop mechanism — left untouched: the
+item's docs scope is CHANGELOG + TDD §6.5 and the ADR's decision itself
+(stop is unconditional) is unaffected.
 
 - **Severity:** Medium. The graceful-stop mechanism for Ollama is dead, and `StopInstance`
   contradicts its own docstring while duplicating `EnsureStopped`.

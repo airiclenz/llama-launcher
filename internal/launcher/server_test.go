@@ -2,9 +2,11 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -305,6 +307,86 @@ func TestLoadProfile_SameBackendSameModelIsNoOp(t *testing.T) {
 	}
 	if inst == nil || inst.ActiveModel != "/models/test-7b.gguf" {
 		t.Errorf("instance = %+v, want ActiveModel /models/test-7b.gguf", inst)
+	}
+}
+
+// TestIdentifyBackend covers the stop path's backend identification: a
+// llamacpp-shaped /health response claims the address for llamacpp, and an
+// address nothing answers on yields ErrNotRunning.
+func TestIdentifyBackend(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fake llamacpp server is identified", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+				return
+			}
+			// 404 elsewhere fails the Ollama ("/") and LM Studio
+			// ("/v1/models") health checks, so only llamacpp matches.
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		backend, err := identifyBackend(addrFromURL(t, srv.URL))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if backend != "llamacpp" {
+			t.Errorf("backend = %q, want %q", backend, "llamacpp")
+		}
+	})
+
+	t.Run("dead address yields ErrNotRunning", func(t *testing.T) {
+		t.Parallel()
+		if _, err := identifyBackend(deadAddr(t)); !errors.Is(err, ErrNotRunning) {
+			t.Errorf("err = %v, want ErrNotRunning", err)
+		}
+	})
+}
+
+// TestStopInstance covers the decision layer ahead of any signalling: bad
+// input and nothing-running both fail before a PID is ever looked up.
+func TestStopInstance(t *testing.T) {
+	t.Parallel()
+
+	t.Run("invalid address", func(t *testing.T) {
+		t.Parallel()
+		_, err := StopInstance("garbage", nil)
+		if err == nil || !strings.Contains(err.Error(), "invalid address") {
+			t.Errorf("err = %v, want invalid-address error", err)
+		}
+	})
+
+	t.Run("dead address yields ErrNotRunning", func(t *testing.T) {
+		t.Parallel()
+		if _, err := StopInstance(deadAddr(t), nil); !errors.Is(err, ErrNotRunning) {
+			t.Errorf("err = %v, want ErrNotRunning", err)
+		}
+	})
+}
+
+// TestTerminatePID exercises the escalation's first rung against a real
+// child: a process that honours SIGTERM is gone when terminatePID returns.
+func TestTerminatePID(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting sleep: %v", err)
+	}
+	pid := cmd.Process.Pid
+	// Reap the child as soon as it exits: a zombie still counts as alive for
+	// IsProcessAlive (kill(pid, 0) succeeds), which would stall the wait loop.
+	go cmd.Wait()
+	t.Cleanup(func() { cmd.Process.Kill() })
+
+	terminatePID(pid, nil)
+
+	if IsProcessAlive(pid) {
+		t.Errorf("PID %d still alive after terminatePID", pid)
 	}
 }
 

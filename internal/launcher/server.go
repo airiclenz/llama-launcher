@@ -143,9 +143,11 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (
 
 // StopInstance stops whatever LLM-server instance is listening at addr. Stop
 // is unconditional (ADR-0001): the launcher does not distinguish servers it
-// started from servers that were already running. The backend's TryStop is
-// called first; if the address remains reachable, the listening PID is
-// discovered via lsof and signalled directly.
+// started from servers that were already running. Both stop mechanisms run
+// exactly once, in the documented order (TDD §6.5): the listening PID is
+// discovered via lsof and signalled (SIGTERM → SIGKILL → port-release wait),
+// then the backend's native stop hook runs best-effort. Returns ErrNotRunning
+// when no known backend answers at addr.
 func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
 	host, port, ok := splitHostPort(addr)
 	if !ok {
@@ -155,11 +157,8 @@ func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) 
 	if err != nil {
 		return nil, err
 	}
-	pid, _ := findListeningPID(addr)
-	if pid > 0 && IsProcessAlive(pid) {
-		terminatePID(pid, progress)
-	}
-	if err := EnsureStopped(backend, addr, progress); err != nil {
+	pid, err := stopServerAt(backend, addr, progress)
+	if err != nil {
 		return nil, err
 	}
 	return &RunningInstance{
@@ -182,32 +181,36 @@ func identifyBackend(addr string) (string, error) {
 	return "", ErrNotRunning
 }
 
-// EnsureStopped terminates whatever process is listening at addr. It first
-// asks the backend's CLI stop hook (a no-op for backends without one), and if
-// the address is still reachable it locates the listening PID via lsof and
-// signals it directly. Returns nil when the address is no longer healthy.
-func EnsureStopped(backend, addr string, progress ProgressFunc) error {
+// stopServerAt runs both stop mechanisms against addr exactly once, in the
+// documented order (TDD §6.5): signal the listening PID first (with the
+// SIGTERM → SIGKILL → port-release escalation), then invoke the backend's
+// native stop hook. The hook is best-effort — its error surfaces only when
+// the address is still serving afterwards. Returns the signalled PID (0 when
+// none was found) and an error when the server survived both mechanisms.
+func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
 	b, err := GetLLMServer(backend)
 	if err != nil {
-		return err
+		return 0, err
+	}
+
+	pid, pidErr := findListeningPID(addr)
+	if pid > 0 && IsProcessAlive(pid) {
+		terminatePID(pid, progress)
 	}
 
 	reportStep(progress, "Disconnecting")
-	b.TryStop(addr)
+	stopErr := b.TryStop(addr)
+
 	if b.HealthCheck(addr) != nil {
-		return nil
+		return pid, nil
 	}
-
-	pid, perr := findListeningPID(addr)
-	if perr != nil || pid <= 0 {
-		return fmt.Errorf("server at %s is still reachable and its PID could not be determined: %v", addr, perr)
+	if stopErr != nil {
+		return pid, fmt.Errorf("server at %s is still reachable; %s stop hook failed: %v", addr, b.DisplayName(), stopErr)
 	}
-
-	terminatePID(pid, progress)
-	if b.HealthCheck(addr) == nil {
-		return fmt.Errorf("server at %s is still reachable after signalling PID %d", addr, pid)
+	if pid <= 0 {
+		return pid, fmt.Errorf("server at %s is still reachable and its PID could not be determined: %v", addr, pidErr)
 	}
-	return nil
+	return pid, fmt.Errorf("server at %s is still reachable after signalling PID %d", addr, pid)
 }
 
 func terminatePID(pid int, progress ProgressFunc) {

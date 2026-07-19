@@ -127,16 +127,12 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 	return nil
 }
 
+// TryStop terminates any running `ollama serve` process via a pgrep/SIGTERM
+// sweep. Ollama's CLI has no server-stop command — `ollama stop MODEL`
+// requires a model argument and only unloads that model (verified against
+// Ollama 0.32.1) — so signalling the serve process is Ollama's native stop
+// mechanism.
 func (b *Ollama) TryStop(_ string) error {
-	binary, err := exec.LookPath("ollama")
-	if err != nil {
-		return nil
-	}
-	cmd := exec.Command(binary, "stop")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("stopping Ollama: %w", err)
-	}
-
 	out, err := exec.Command("pgrep", "-f", "ollama serve").Output()
 	if err != nil || len(out) == 0 {
 		return nil

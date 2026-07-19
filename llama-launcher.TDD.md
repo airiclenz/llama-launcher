@@ -414,7 +414,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `backend.go` | `LLMServer` and `ManagedLLMServer` interface definitions (see [§5.3](#53-llmserver-interface)), `ResolvedProfile` struct, LLM Server registry (register/get), `applyAPIKeys` (pushes per-server API keys from the config onto backends implementing the package-private `apiKeyConfigurable`). |
 | `backend_http.go` | Shared HTTP helpers for backend API calls: `authedGet` / `authedPostJSON` attach `Authorization: Bearer <key>` when a per-server API key is configured, `authFailedErr` maps 401/403 to an actionable "check api_key" error, `redactAPIKeyArgs` masks `--api-key` values for display surfaces. |
 | `backend_llamacpp.go` | llama.cpp implementation: server arg assembly, Model path resolution, restart-per-Profile semantics ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)) — `LoadModel`/`UnloadModel` are no-ops. Registers via `init()`. |
-| `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via `ollama stop`. Registers via `init()`. |
+| `backend_ollama.go` | Ollama implementation: HTTP API Model load/unload, auto-start via `ollama serve`, stop via a pgrep/SIGTERM sweep of `ollama serve` processes (Ollama's CLI has no server-stop command — `ollama stop MODEL` only unloads a model). Registers via `init()`. |
 | `backend_lmstudio.go` | LM Studio implementation: HTTP API Model load/unload, `lms` CLI for server start/stop. Registers via `init()`. |
 | `server.go` | LLM Server lifecycle. Unified start path (fork-and-detach for llamacpp; backend-supplied `TryStart` for Ollama/LM Studio), unified stop path that always tries to stop the process whether or not the launcher started it ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)). `LoadProfile` orchestration with live idempotency check + drift notice from `GET /props` ([ADR-0007](docs/adr/0007-profile-activation-idempotency.md)) and unified `auto_unload` rule across same-server and cross-server cases ([ADR-0004](docs/adr/0004-auto-unload-is-one-rule.md)). Instances are keyed by `host:port` and rediscovered live each invocation ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). `createLogPath` triggers automatic cleanup when `log_retention` is set to a positive number of days. Lifecycle functions accept an optional `ProgressFunc` callback to report step transitions. |
 | `discovery.go` | `RunningInstance` type and `DiscoverRunningInstances(cfg)` — probes every (backend, address) pair derivable from the config in parallel, returns the reachable set with the loaded Model and (for llamacpp) the live parameters from `/props`. Optional runtime details (PID via `lsof`, start time via `ps -o lstart=`, log path via the deterministic naming convention) are populated lazily by `fillRuntimeDetails`. `instancesSignature` condenses a discovery result into a comparable string (backend, address, loaded model per instance) used by the menu to detect background state changes between refresh ticks. |
@@ -474,7 +474,7 @@ type LiveParamsQuerier interface {
 
 The interface name `LLMServer` matches the domain language in [CONTEXT.md](CONTEXT.md).
 
-The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle: each LLM Server type encapsulates its own start mechanism (fork-and-detach for llamacpp; `ollama serve` for Ollama; `lms server start` for LM Studio) and stop mechanism (signal-to-PID, `ollama stop`, `lms server stop`). The launcher does not branch on "did we start this?" — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
+The `LLMServer.TryStart` / `LLMServer.TryStop` pair drives the unified lifecycle: each LLM Server type encapsulates its own start mechanism (fork-and-detach for llamacpp; `ollama serve` for Ollama; `lms server start` for LM Studio) and stop mechanism (signal-to-PID for llamacpp; a pgrep/SIGTERM sweep of `ollama serve` for Ollama; `lms server stop` for LM Studio). The launcher does not branch on "did we start this?" — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
 
 `ManagedLLMServer` extends `LLMServer` for LLM Server types where the launcher knows how to fork the server process directly (currently only llamacpp). The server lifecycle code uses `if mb, ok := b.(ManagedLLMServer)` to decide whether to assemble argv and fork, or to call `LLMServer.TryStart`.
 
@@ -599,12 +599,12 @@ The `auto_unload` flag governs whether an unload is *implicit* during a Profile 
 
 `stop [target]` is unconditional ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)) — the launcher does not distinguish servers it started from servers that were already running.
 
-The launcher attempts both available mechanisms, in order:
+The launcher attempts both available mechanisms, each exactly once, in order (a single routine behind `StopInstance` runs both — there is no second pass):
 
 1. Discover the listening PID via `lsof -nP -iTCP@host:port -sTCP:LISTEN -t` (host-specific first, then a port-only fallback for servers bound to `0.0.0.0`). If found and alive, send `SIGTERM` to the process and its process group (`kill(-pid, SIGTERM)`). Poll for exit (100ms intervals, up to 15 seconds). If still alive, send `SIGKILL`, then wait up to 5 seconds for the process to die, then 500ms for the OS to release the TCP port.
-2. Call `LLMServer.TryStop(addr)` so the backend can run its native shutdown command (`ollama stop`, `lms server stop`). This is best-effort and idempotent — errors are reported but do not block.
+2. Call `LLMServer.TryStop(addr)` so the backend can run its native shutdown mechanism (`lms server stop` for LM Studio; a pgrep/SIGTERM sweep of `ollama serve` for Ollama, whose CLI has no server-stop command — `ollama stop MODEL` only unloads a model; a no-op for llamacpp). This is best-effort and idempotent — a hook failure surfaces only if the address is still serving afterwards; it never blocks a stop that already succeeded.
 
-Then print confirmation. There is no state file to remove.
+The stop fails with an error only when the address still answers its backend's health check after both steps. Then print confirmation. There is no state file to remove.
 
 **Technical reasoning — process group signals:**
 
