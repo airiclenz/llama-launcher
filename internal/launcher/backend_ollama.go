@@ -15,22 +15,21 @@ import (
 )
 
 type Ollama struct {
+	apiKeyHolder
 	lastPID     int
 	lastLogFile string
-	apiKey      string
 }
 
 func init() {
 	RegisterLLMServer(&Ollama{})
 }
 
-func (b *Ollama) Name() string         { return "ollama" }
-func (b *Ollama) DisplayName() string  { return "Ollama" }
-func (b *Ollama) DefaultAddr() string  { return "localhost:11434" }
-func (b *Ollama) setAPIKey(key string) { b.apiKey = key }
+func (b *Ollama) Name() string        { return "ollama" }
+func (b *Ollama) DisplayName() string { return "Ollama" }
+func (b *Ollama) DefaultAddr() string { return "localhost:11434" }
 
 func (b *Ollama) HealthCheck(addr string) error {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/", b.apiKey())
 	if err != nil {
 		return err
 	}
@@ -62,7 +61,7 @@ func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 		"keep_alive": "24h",
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := authedPostJSON(modelLoadTimeout, "http://"+addr+"/api/generate", b.apiKey, body)
+	resp, err := authedPostJSON(modelLoadTimeout, "http://"+addr+"/api/generate", b.apiKey(), body)
 	if err != nil {
 		return fmt.Errorf("loading model via Ollama API: %w", err)
 	}
@@ -83,7 +82,7 @@ func (b *Ollama) UnloadModel(addr string, modelID string) error {
 		"keep_alive": 0,
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := authedPostJSON(30*time.Second, "http://"+addr+"/api/generate", b.apiKey, body)
+	resp, err := authedPostJSON(30*time.Second, "http://"+addr+"/api/generate", b.apiKey(), body)
 	if err != nil {
 		return fmt.Errorf("unloading model via Ollama API: %w", err)
 	}
@@ -153,7 +152,7 @@ func (b *Ollama) LastStartedPID() int        { return b.lastPID }
 func (b *Ollama) LastStartedLogFile() string { return b.lastLogFile }
 
 func (b *Ollama) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	resp, err := authedGet(5*time.Second, "http://"+addr+"/api/ps", b.apiKey)
+	resp, err := authedGet(5*time.Second, "http://"+addr+"/api/ps", b.apiKey())
 	if err != nil {
 		return nil, err
 	}

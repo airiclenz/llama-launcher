@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -116,11 +117,35 @@ type apiKeyConfigurable interface {
 	setAPIKey(key string)
 }
 
+// apiKeyHolder stores a backend's per-server API key behind a RWMutex so a
+// config load on one goroutine can replace the key while parallel discovery
+// probes (HealthCheck and friends) read it. Backends embed it; the embedding
+// provides the synchronized accessors and implements apiKeyConfigurable.
+type apiKeyHolder struct {
+	mu  sync.RWMutex
+	key string
+}
+
+// setAPIKey replaces the stored API key.
+func (h *apiKeyHolder) setAPIKey(key string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.key = key
+}
+
+// apiKey returns the currently stored API key.
+func (h *apiKeyHolder) apiKey() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.key
+}
+
 // applyAPIKeys pushes the configured per-server API keys onto the registered
 // backends. Keys are applied unconditionally — including the empty string —
 // so removing a key from the config takes effect on reload. Called from
-// LoadConfig on the menu/CLI goroutine before any probe goroutines are
-// spawned, so no further synchronization is needed.
+// LoadConfig (and thus on every Reload); the apiKeyHolder embedded in each
+// backend synchronizes the update against probe goroutines that may still be
+// reading the previous key.
 func applyAPIKeys(cfg *Config) {
 	for name, b := range llmServers {
 		if configurable, ok := b.(apiKeyConfigurable); ok {

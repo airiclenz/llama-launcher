@@ -375,7 +375,8 @@ func TestLMStudioAuthHeaders(t *testing.T) {
 	})
 	addr := addrFromURL(t, srv.URL)
 
-	b := &LMStudio{apiKey: "k"}
+	b := &LMStudio{}
+	b.setAPIKey("k")
 	if err := b.HealthCheck(addr); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}

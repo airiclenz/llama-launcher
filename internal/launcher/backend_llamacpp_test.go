@@ -450,7 +450,8 @@ func TestLlamaCppAuthHeaders(t *testing.T) {
 	})
 	addr := addrFromURL(t, srv.URL)
 
-	b := &LlamaCpp{apiKey: "k"}
+	b := &LlamaCpp{}
+	b.setAPIKey("k")
 	if err := b.HealthCheck(addr); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
@@ -483,7 +484,8 @@ func TestLlamaCppAuthFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	b := &LlamaCpp{apiKey: "wrong"}
+	b := &LlamaCpp{}
+	b.setAPIKey("wrong")
 	_, err := b.ListRunningModels(addrFromURL(t, srv.URL))
 	if err == nil || !strings.Contains(err.Error(), "api_key") {
 		t.Errorf("error = %v, want actionable api_key message", err)

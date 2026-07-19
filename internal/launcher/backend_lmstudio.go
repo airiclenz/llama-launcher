@@ -12,22 +12,21 @@ import (
 )
 
 type LMStudio struct {
-	apiKey string
+	apiKeyHolder
 }
 
 func init() {
 	RegisterLLMServer(&LMStudio{})
 }
 
-func (b *LMStudio) Name() string         { return "lmstudio" }
-func (b *LMStudio) DisplayName() string  { return "LM-Studio" }
-func (b *LMStudio) DefaultAddr() string  { return "localhost:1234" }
-func (b *LMStudio) setAPIKey(key string) { b.apiKey = key }
+func (b *LMStudio) Name() string        { return "lmstudio" }
+func (b *LMStudio) DisplayName() string { return "LM-Studio" }
+func (b *LMStudio) DefaultAddr() string { return "localhost:1234" }
 
 func (b *LMStudio) HealthCheck(addr string) error {
 	base := "http://" + addr
 
-	resp, err := authedGet(healthCheckTimeout, base+"/v1/models", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, base+"/v1/models", b.apiKey())
 	if err != nil {
 		return err
 	}
@@ -41,7 +40,7 @@ func (b *LMStudio) HealthCheck(addr string) error {
 
 	// Exclude llamacpp: its /health returns {"status":"ok"}.
 	// LM Studio returns {"error":"..."} for the same path.
-	r, err := authedGet(healthCheckTimeout, base+"/health", b.apiKey)
+	r, err := authedGet(healthCheckTimeout, base+"/health", b.apiKey())
 	if err == nil {
 		healthBody, _ := io.ReadAll(boundedBody(r.Body))
 		r.Body.Close()
@@ -57,7 +56,7 @@ func (b *LMStudio) HealthCheck(addr string) error {
 
 	// Exclude Ollama: /api/tags returns {"models":[...]}.
 	// LM Studio returns 200 for all paths but with {"error":"..."}.
-	r, err = authedGet(healthCheckTimeout, base+"/api/tags", b.apiKey)
+	r, err = authedGet(healthCheckTimeout, base+"/api/tags", b.apiKey())
 	if err == nil {
 		tagsBody, _ := io.ReadAll(boundedBody(r.Body))
 		r.Body.Close()
@@ -105,7 +104,7 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 	}
 
 	body, _ := json.Marshal(payload)
-	resp, err := authedPostJSON(modelLoadTimeout, "http://"+addr+"/api/v1/models/load", b.apiKey, body)
+	resp, err := authedPostJSON(modelLoadTimeout, "http://"+addr+"/api/v1/models/load", b.apiKey(), body)
 	if err != nil {
 		return fmt.Errorf("loading model via LM Studio API: %w", err)
 	}
@@ -157,7 +156,7 @@ func (b *LMStudio) UnloadModel(addr string, modelID string) error {
 		"identifier": modelID,
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := authedPostJSON(30*time.Second, "http://"+addr+"/api/v1/models/unload", b.apiKey, body)
+	resp, err := authedPostJSON(30*time.Second, "http://"+addr+"/api/v1/models/unload", b.apiKey(), body)
 	if err != nil {
 		return fmt.Errorf("unloading model via LM Studio API: %w", err)
 	}
@@ -188,7 +187,7 @@ func (b *LMStudio) TryStart(_ *Config, addr string) error {
 // the OpenAI-compatible /v1/models endpoint. LM Studio omits unloaded models
 // from this list (in contrast to its /api/v0/models, which also lists them).
 func (b *LMStudio) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	return openAIModelList(addr, b.apiKey)
+	return openAIModelList(addr, b.apiKey())
 }
 
 func (b *LMStudio) TryStop(addr string) error {

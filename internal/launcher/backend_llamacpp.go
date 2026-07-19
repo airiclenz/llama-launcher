@@ -12,20 +12,19 @@ import (
 
 // LlamaCpp implements LLMServer for llama.cpp's llama-server.
 type LlamaCpp struct {
-	apiKey string
+	apiKeyHolder
 }
 
 func init() {
 	RegisterLLMServer(&LlamaCpp{})
 }
 
-func (b *LlamaCpp) Name() string         { return "llamacpp" }
-func (b *LlamaCpp) DisplayName() string  { return "LLaMA.cpp" }
-func (b *LlamaCpp) DefaultAddr() string  { return "127.0.0.1:8080" }
-func (b *LlamaCpp) setAPIKey(key string) { b.apiKey = key }
+func (b *LlamaCpp) Name() string        { return "llamacpp" }
+func (b *LlamaCpp) DisplayName() string { return "LLaMA.cpp" }
+func (b *LlamaCpp) DefaultAddr() string { return "127.0.0.1:8080" }
 
 func (b *LlamaCpp) HealthCheck(addr string) error {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey())
 	if err != nil {
 		return err
 	}
@@ -51,7 +50,7 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 // means nothing is running there, and any other status belongs to a
 // healthy or foreign server — both return false.
 func (b *LlamaCpp) StartingUp(addr string) bool {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey())
 	if err != nil {
 		return false
 	}
@@ -94,7 +93,7 @@ func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
 // reading /v1/models. The OpenAI-style endpoint returns one entry whose `id`
 // is the model path or alias the server was launched with.
 func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	return openAIModelList(addr, b.apiKey)
+	return openAIModelList(addr, b.apiKey())
 }
 
 // QueryLiveParams reads /props on a running llama-server and translates the
@@ -111,7 +110,7 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 // 404 and this function returns (nil, nil), which liveParamDrift treats as
 // "no drift".
 func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/props", b.apiKey)
+	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/props", b.apiKey())
 	if err != nil {
 		return nil, err
 	}

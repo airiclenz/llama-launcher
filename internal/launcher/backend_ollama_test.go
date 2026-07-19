@@ -242,7 +242,8 @@ func TestOllamaAuthHeaders(t *testing.T) {
 	})
 	addr := addrFromURL(t, srv.URL)
 
-	b := &Ollama{apiKey: "k"}
+	b := &Ollama{}
+	b.setAPIKey("k")
 	if err := b.HealthCheck(addr); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
