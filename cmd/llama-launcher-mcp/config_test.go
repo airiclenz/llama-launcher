@@ -206,3 +206,33 @@ func TestLimitedWriter(t *testing.T) {
 		})
 	}
 }
+
+// TestRunErrorPathCapsBothStreams composes the exit-code discriminator with
+// the output cap: a failing command that floods stdout and stderr must come
+// back as a tool error whose text stays bounded, with a truncation notice for
+// each capped stream — the path a failing model load with a runaway log hits.
+func TestRunErrorPathCapsBothStreams(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flood-fail")
+	script := "#!/bin/sh\n" +
+		"yes out | head -c " + itoa(2*maxCapturedOutput) + "\n" +
+		"yes err | head -c " + itoa(2*maxCapturedOutput) + " 1>&2\n" +
+		"exit 3\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config{llamaLauncherBin: path}
+
+	res := cfg.run(context.Background(), "load", "x")
+
+	if !res.IsError {
+		t.Fatal("exit 3 must be a tool error regardless of output volume")
+	}
+	got := resultText(t, res)
+	if maxLen := 2*(maxCapturedOutput+len(truncationNotice)) + 2; len(got) > maxLen {
+		t.Errorf("error text length = %d, want <= %d", len(got), maxLen)
+	}
+	if n := strings.Count(got, truncationNotice); n != 2 {
+		t.Errorf("truncation notices = %d, want 2 (one per capped stream)", n)
+	}
+}

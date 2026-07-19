@@ -3,6 +3,7 @@ package launcher
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1272,8 +1273,17 @@ func TestStopServerAt_TryStopFlipsHealthCheck(t *testing.T) {
 func TestStartServer_BinaryNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no llama-server anywhere on PATH
 
+	// A provably-closed port: the StartingUp probe runs before the binary
+	// lookup, so a hardcoded port with a live listener (answering 503) would
+	// divert the test into the double-spawn refusal.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a loopback port: %v", err)
+	}
 	host := "127.0.0.1"
-	port := 18080
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+
 	cfg := &Config{
 		LogDir:  t.TempDir(),
 		Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}},
@@ -1284,8 +1294,68 @@ func TestStartServer_BinaryNotFound(t *testing.T) {
 		ProfileParams: ProfileParams{Host: &host, Port: &port},
 	}
 
-	_, err := StartServer(cfg, profile)
+	_, err = StartServer(cfg, profile)
 	if err == nil || !strings.Contains(err.Error(), "server binary not found") {
 		t.Fatalf("StartServer = %v, want a 'server binary not found' error", err)
+	}
+}
+
+// TestLoadProfile_Orchestration_WaitTimeout pins the managed health-wait
+// failure: when the started server never turns healthy, loadProfile reports
+// started=false and the error carries the recovery guidance — the spawned
+// server's PID, its log path, and the `kill` escape hatch — because the
+// server is deliberately left running (a large model may still be loading).
+func TestLoadProfile_Orchestration_WaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	off := false
+	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+	f := &fakeOps{
+		healthyAddrs: map[string]bool{},
+		waitErr:      errors.New("did not become healthy"),
+	}
+	cfg := &Config{AutoStopServer: &off, AutoUnload: &off}
+
+	_, started, err := loadProfile(f, cfg, profile, false, nil)
+
+	if err == nil {
+		t.Fatal("loadProfile = nil error, want the health-wait timeout surfaced")
+	}
+	for _, want := range []string{"did not become healthy", "PID 4242", "/logs/fake.log", "kill 4242"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to contain %q", err, want)
+		}
+	}
+	if started {
+		t.Error("started = true, want false on a health-wait timeout")
+	}
+	if len(f.loadedModels) != 0 {
+		t.Errorf("loadedModels = %v, want none after a failed wait", f.loadedModels)
+	}
+}
+
+// TestLoadProfile_DriftNoticeContent pins the drift notice's actionable
+// content (ADR-0007: the notice is the user's cue to act): it must name the
+// profile, list the drifted field, and point at `load --restart`. Not
+// parallel: captureStderr redirects the process-global os.Stderr.
+func TestLoadProfile_DriftNoticeContent(t *testing.T) {
+	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+	f := &fakeOps{
+		healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
+		models:       map[string]string{"127.0.0.1:8080": "/models/test-7b.gguf"},
+		drift:        []string{"context_size: 4096 → 8192"},
+		instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
+	}
+
+	errOut := captureStderr(t, func() {
+		if _, _, err := loadProfile(f, &Config{}, profile, false, nil); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	for _, want := range []string{`profile "chat"`, "context_size: 4096 → 8192", "load chat --restart"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("drift notice = %q, want it to contain %q", errOut, want)
+		}
 	}
 }

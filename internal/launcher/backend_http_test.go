@@ -156,6 +156,9 @@ func TestSanitizeServerString(t *testing.T) {
 		{"C0 controls stripped", "a\x00b\tc\nd\re", "abcde"},
 		{"DEL stripped", "a\x7fb", "ab"},
 		{"C1 CSI stripped", "a\u009bb", "ab"},
+		{"bidi override stripped", "user\u202egnp.exe", "usergnp.exe"},
+		{"bidi isolates stripped", "a\u2066b\u2067c\u2068d\u2069e", "abcde"},
+		{"bidi marks stripped", "a\u200eb\u200fc\u061cd", "abcd"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

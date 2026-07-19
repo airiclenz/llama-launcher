@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -188,6 +189,18 @@ func TestCmdStatusJSON_ListsEveryInstanceOfABackend(t *testing.T) {
 	if !seen[addrA] || !seen[addrB] {
 		t.Errorf("addresses %v, want both %q and %q", seen, addrA, addrB)
 	}
+
+	// Pin the full documented key set: the MCP server_status tool promises
+	// these names to remote clients, so a silent rename must fail a test.
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatalf("re-unmarshalling status JSON: %v", err)
+	}
+	for _, key := range []string{"backend", "running", "address", "active_profile", "active_model", "pid", "uptime_seconds"} {
+		if _, ok := raw[0][key]; !ok {
+			t.Errorf("running entry is missing documented key %q: %v", key, raw[0])
+		}
+	}
 }
 
 // TestCmdStatusJSON_AllStoppedEmitsIdleEntryPerBackend asserts that with
@@ -320,12 +333,18 @@ func runCLI(t *testing.T, cfgPath string, args ...string) (string, int) {
 	}
 	os.Stdout, os.Stderr = outW, errW
 
-	// Drain stderr concurrently so a chatty command cannot fill the pipe
-	// buffer and block Run.
-	drained := make(chan struct{})
+	// Drain both pipes concurrently so a chatty command cannot fill either
+	// ~64 KiB pipe buffer and block Run.
+	var out bytes.Buffer
+	outDrained := make(chan struct{})
+	go func() {
+		io.Copy(&out, outR)
+		close(outDrained)
+	}()
+	errDrained := make(chan struct{})
 	go func() {
 		io.Copy(io.Discard, errR)
-		close(drained)
+		close(errDrained)
 	}()
 
 	code := Run(append([]string{"--config", cfgPath}, args...))
@@ -337,12 +356,9 @@ func runCLI(t *testing.T, cfgPath string, args ...string) (string, int) {
 	if err := errW.Close(); err != nil {
 		t.Fatalf("closing stderr writer: %v", err)
 	}
-	<-drained
-	out, err := io.ReadAll(outR)
-	if err != nil {
-		t.Fatalf("reading captured stdout: %v", err)
-	}
-	return string(out), code
+	<-outDrained
+	<-errDrained
+	return out.String(), code
 }
 
 // TestRun_StatusJSONNothingRunning pins the exit-code + payload contract the
