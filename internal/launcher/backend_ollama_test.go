@@ -69,6 +69,25 @@ func TestOllamaHealthCheck(t *testing.T) {
 			t.Errorf("error = %q, want it to contain 'unhealthy'", err)
 		}
 	})
+
+	t.Run("rejects a body whose Ollama marker sits past the read cap", func(t *testing.T) {
+		t.Parallel()
+		// The bounded read only sees the padding; an unbounded read would
+		// find the marker and accept the response as healthy.
+		body := strings.Repeat("x", maxResponseBytes) + "Ollama is running"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(body))
+		}))
+		defer srv.Close()
+
+		err := b.HealthCheck(addrFromURL(t, srv.URL))
+		if err == nil {
+			t.Fatal("expected error when the marker sits past the read cap")
+		}
+		if !strings.Contains(err.Error(), "unexpected response") {
+			t.Errorf("error = %q, want it to contain 'unexpected response'", err)
+		}
+	})
 }
 
 func TestOllamaLoadModel(t *testing.T) {
@@ -224,6 +243,18 @@ func TestOllamaListRunningModels(t *testing.T) {
 			t.Fatal("expected error for malformed JSON")
 		}
 	})
+}
+
+func TestOllamaTryStop_IsNoOpAndNeverErrors(t *testing.T) {
+	t.Parallel()
+
+	// TryStop used to run `ollama stop` (which errors without a model argument)
+	// and then SIGTERM every `ollama serve` on the host. It is now a pure no-op:
+	// the launcher stops the specific instance via the address-scoped PID path.
+	b := &Ollama{}
+	if err := b.TryStop("127.0.0.1:11434"); err != nil {
+		t.Errorf("TryStop = %v, want nil", err)
+	}
 }
 
 func TestOllamaAuthHeaders(t *testing.T) {

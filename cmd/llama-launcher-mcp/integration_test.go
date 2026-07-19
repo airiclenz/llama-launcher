@@ -89,6 +89,7 @@ func TestEndToEndToolsForwardCommands(t *testing.T) {
 		{"start_server", map[string]any{"profile": "qwen"}, "start --profile qwen"},
 		{"stop_server", map[string]any{"target": "llamacpp"}, "stop llamacpp"},
 		{"tail_log", map[string]any{}, "logs"},
+		{"tail_log", map[string]any{"target": "127.0.0.1:8080"}, "logs 127.0.0.1:8080"},
 	}
 	for _, c := range cases {
 		if got := callText(t, s, c.tool, c.args); got != c.want {

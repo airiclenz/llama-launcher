@@ -1,6 +1,6 @@
 # Stop is unconditional, regardless of who started the LLM Server
 
-`llama-launcher` does not distinguish between LLM Servers it started and LLM Servers that were already running. Any `stop` (whether triggered by the user via `llml stop` or implicitly via `auto_stop_server: true` when switching backends) terminates the server using whichever mechanism that LLM Server type supports (signal to PID for `llamacpp`, `lms server stop` for `lmstudio`, a pgrep/SIGTERM sweep of `ollama serve` processes for `ollama` — its CLI has no server-stop command; `ollama stop MODEL` only unloads a model).
+`llama-launcher` does not distinguish between LLM Servers it started and LLM Servers that were already running. Any `stop` (whether triggered by the user via `llml stop` or implicitly via `auto_stop_server: true` when switching backends) terminates the server: the process listening at the instance's `host:port` is signalled (SIGTERM, escalating to SIGKILL), and the LLM Server type's own stop hook runs where one exists (`lms server stop` for `lmstudio`). Ollama has no usable stop hook — its CLI has no server-stop command (`ollama stop MODEL` only unloads a model), so the address-scoped signal *is* its stop mechanism; the launcher deliberately does not sweep every `ollama serve` process on the host, which would kill instances at other addresses it was not asked to stop (see [ADR-0006](0006-instances-are-keyed-by-address.md)).
 
 ## Why
 
