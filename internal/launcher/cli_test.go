@@ -15,9 +15,10 @@ import (
 // statusJSONEntry mirrors the fields of cmdStatusJSON's output that the
 // tests assert on.
 type statusJSONEntry struct {
-	Backend string `json:"backend"`
-	Running bool   `json:"running"`
-	Address string `json:"address"`
+	Backend  string `json:"backend"`
+	Running  bool   `json:"running"`
+	Starting bool   `json:"starting"`
+	Address  string `json:"address"`
 }
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
@@ -196,7 +197,7 @@ func TestCmdStatusJSON_ListsEveryInstanceOfABackend(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &raw); err != nil {
 		t.Fatalf("re-unmarshalling status JSON: %v", err)
 	}
-	for _, key := range []string{"backend", "running", "address", "active_profile", "active_model", "pid", "uptime_seconds"} {
+	for _, key := range []string{"backend", "running", "starting", "address", "active_profile", "active_model", "pid", "uptime_seconds"} {
 		if _, ok := raw[0][key]; !ok {
 			t.Errorf("running entry is missing documented key %q: %v", key, raw[0])
 		}
@@ -242,6 +243,205 @@ func TestCmdStatusJSON_AllStoppedEmitsIdleEntryPerBackend(t *testing.T) {
 		if e.Running {
 			t.Errorf("entry[%d] (%s) running = true, want false", i, e.Backend)
 		}
+	}
+}
+
+// newFakeStartingLlamaCppServer returns an httptest server that mimics a
+// llama-server still loading its model: every path answers 503, which fails
+// the health check but satisfies the StartingUp probe (ADR-0010).
+func newFakeStartingLlamaCppServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// startingCfg returns a config whose single enabled backend is expected at
+// addr, so discovery probes exactly that address.
+func startingCfg(t *testing.T, backend, addr string) *Config {
+	t.Helper()
+
+	host, port, ok := splitHostPort(addr)
+	if !ok {
+		t.Fatalf("splitting %q", addr)
+	}
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{backend: {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal(backend),
+		Host:   &host,
+		Port:   &port,
+	}
+	return cfg
+}
+
+// TestCmdStatus_RendersStartingInstance pins the human rendering of a
+// Starting instance (ADR-0010): the state column says "starting…" instead
+// of "running", and the details block still appears — its PID and log are
+// what a user watching a long model load needs.
+func TestCmdStatus_RendersStartingInstance(t *testing.T) {
+	srv := newFakeStartingLlamaCppServer(t)
+	cfg := startingCfg(t, "llamacpp", addrFromURL(t, srv.URL))
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStatus(cfg, nil) })
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (a Starting instance counts as present)", code)
+	}
+	if !strings.Contains(out, "starting…") {
+		t.Errorf("output does not show the starting… state:\n%s", out)
+	}
+	if strings.Contains(out, "running") {
+		t.Errorf("output labels a Starting instance as running:\n%s", out)
+	}
+	if !strings.Contains(out, "Starting: LLaMA.cpp") {
+		t.Errorf("output is missing the Starting details line:\n%s", out)
+	}
+}
+
+// TestCmdStatusJSON_ReportsStartingInstance pins the machine contract for a
+// Starting instance (ADR-0010): running keeps meaning healthy — the entry
+// reports running=false with starting=true — while the exit code matches
+// the human path, which counts the instance as present.
+func TestCmdStatusJSON_ReportsStartingInstance(t *testing.T) {
+	srv := newFakeStartingLlamaCppServer(t)
+	addr := addrFromURL(t, srv.URL)
+	cfg := startingCfg(t, "llamacpp", addr)
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStatusJSON(cfg) })
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (a Starting instance counts as present)", code)
+	}
+	entries := decodeStatusJSON(t, out)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %+v", len(entries), entries)
+	}
+	e := entries[0]
+	if e.Running {
+		t.Error("running = true, want false — running means healthy, not Starting")
+	}
+	if !e.Starting {
+		t.Error("starting = false, want true for a 503 /health answer")
+	}
+	if e.Address != addr {
+		t.Errorf("address = %q, want %q", e.Address, addr)
+	}
+}
+
+// TestCmdStop_StopsStartingInstance drives the full CLI stop path against a
+// Starting instance (ADR-0010): discovery must surface it so a bare `stop`
+// resolves it as the single target, and the stop mechanics must run the
+// backend's stop hook. The registry stub keeps every real backend away from
+// the dead address, so no real process is signalled. Not parallel: it
+// mutates the global llmServers registry.
+func TestCmdStop_StopsStartingInstance(t *testing.T) {
+	addr := deadAddr(t)
+	stub := &startingStopServer{name: "startingcli"}
+	// Starting until the stop hook has run, so the post-stop verification
+	// sees the occupant gone.
+	stub.starting = func(string) bool { return len(stub.tryStops) == 0 }
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+	cfg := startingCfg(t, stub.name, addr)
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStop(cfg, nil) })
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+	}
+	if len(stub.tryStops) != 1 || stub.tryStops[0] != addr {
+		t.Errorf("TryStop calls = %v, want exactly one for %s", stub.tryStops, addr)
+	}
+	if !strings.Contains(out, "Stopped") {
+		t.Errorf("output does not report the stop:\n%s", out)
+	}
+}
+
+// startingManagedServer is startingStopServer with the ManagedLLMServer
+// surface, so Unload routes it through the managed rule (unload = stop the
+// server, ADR-0003/0004) — the case ADR-0010 extends to Starting instances.
+type startingManagedServer struct {
+	startingStopServer
+}
+
+func (s *startingManagedServer) ServerBinary(*Config) string                        { return s.name }
+func (s *startingManagedServer) BuildServerArgs(*Config, *ResolvedProfile) []string { return nil }
+func (s *startingManagedServer) BuildServerEnv(*Config, *ResolvedProfile) []string  { return nil }
+
+// TestCmdUnload_StartingManagedInstanceIsStopped: `unload <profile>` on a
+// managed instance still loading its model must stop it — unload on a
+// managed backend reduces to stop, and ADR-0010 extends that to Starting
+// instances — instead of answering "No model loaded", which is what the
+// pre-ADR-0010 ActiveModel gate did. Not parallel: it mutates the global
+// llmServers registry.
+func TestCmdUnload_StartingManagedInstanceIsStopped(t *testing.T) {
+	addr := deadAddr(t)
+	stub := &startingManagedServer{startingStopServer{name: "startingunload"}}
+	stub.starting = func(string) bool { return len(stub.tryStops) == 0 }
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+	cfg := startingCfg(t, stub.name, addr)
+	cfg.Profiles["big"] = Profile{Model: "some-model"}
+
+	var code int
+	out := captureStdout(t, func() { code = cmdUnload(cfg, []string{"big"}) })
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+	}
+	if len(stub.tryStops) != 1 || stub.tryStops[0] != addr {
+		t.Errorf("TryStop calls = %v, want exactly one for %s", stub.tryStops, addr)
+	}
+	if !strings.Contains(out, "server stopped") {
+		t.Errorf("output does not report the server stop:\n%s", out)
+	}
+}
+
+// TestCmdUnload_AmbiguousListingLabelsStarting: with several unload
+// candidates a bare `unload` refuses and lists them — a Starting instance
+// appears with the "(starting…)" label instead of a model name (ADR-0010).
+// Not parallel: it mutates the global llmServers registry.
+func TestCmdUnload_AmbiguousListingLabelsStarting(t *testing.T) {
+	addrA := deadAddr(t)
+	addrB := deadAddr(t)
+	stub := &startingStopServer{
+		name:     "startingpick",
+		starting: func(string) bool { return true },
+	}
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+	cfg := startingCfg(t, stub.name, addrA)
+	_, portB, ok := splitHostPort(addrB)
+	if !ok {
+		t.Fatalf("splitting %q", addrB)
+	}
+	// A second instance address enters discovery via a profile whose port
+	// overrides the default.
+	cfg.Profiles["second"] = Profile{ProfileParams: ProfileParams{Port: &portB}}
+
+	var code int
+	errOut := captureStderr(t, func() {
+		_ = captureStdout(t, func() { code = cmdUnload(cfg, nil) })
+	})
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 (ambiguous target); stderr:\n%s", code, errOut)
+	}
+	if got := strings.Count(errOut, "(starting…)"); got != 2 {
+		t.Errorf("stderr lists %d \"(starting…)\" labels, want 2:\n%s", got, errOut)
+	}
+	if len(stub.tryStops) != 0 {
+		t.Errorf("TryStop calls = %v, want none on an ambiguous unload", stub.tryStops)
 	}
 }
 
