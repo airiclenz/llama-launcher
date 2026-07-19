@@ -34,7 +34,7 @@ func hasSafeShape(s string) bool {
 
 // validateTarget vets an untrusted free-form target before it is forwarded
 // as a positional argument to the CLI. Only a positive allowlist passes:
-// empty (the CLI auto-selects the single running instance), a known backend
+// empty (the CLI auto-selects the single discovered instance), a known backend
 // name, or a host:port with a valid port number. This keeps flag injection
 // ("-f", "--days"), subcommand injection ("clean"), and shell metacharacters
 // out of the shell-out — the CLI's own argument grammar is not relied on as
