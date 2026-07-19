@@ -129,6 +129,9 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "start_server",
 		Description: "Start a server. With a profile this activates it (same as load_profile). Without a profile it starts the default backend with no model loaded — managed backends (llamacpp) require a profile and fail otherwise.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args profileArgs) (*mcp.CallToolResult, any, error) {
+		if err := validateProfile(args.Profile); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
 		cmd := []string{"start"}
 		if args.Profile != "" {
 			cmd = append(cmd, "--profile", args.Profile)

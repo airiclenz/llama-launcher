@@ -59,9 +59,11 @@ func validateTarget(target string) error {
 	return fmt.Errorf("invalid target %q: must be a backend name (llamacpp, lmstudio, ollama) or host:port", target)
 }
 
-// validateProfile vets an untrusted profile name before it is forwarded as a
-// positional argument to the CLI (unload_model -> `unload [profile]`,
-// load_profile -> `load <name>`).
+// validateProfile vets an untrusted profile name before it is forwarded to
+// the CLI, whether as a positional argument (unload_model ->
+// `unload [profile]`, load_profile -> `load <name>`) or as a flag value
+// (start_server -> `start --profile <profile>`, where a leading dash could
+// be read as another flag).
 // Profile names are user-defined in a config the adapter deliberately does
 // not parse (ADR-0008), so no pinned allowlist of names exists; the charset
 // allowlist plus the no-leading-dash rule keeps flag-shaped arguments,

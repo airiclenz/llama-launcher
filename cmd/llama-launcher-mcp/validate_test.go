@@ -151,10 +151,11 @@ func TestEndToEndReadOnlyTailLogRejectsInjection(t *testing.T) {
 }
 
 // stop_server, unload_model, and load_profile forward a free-form argument
-// as a CLI positional (`stop [target]`, `unload [profile]`, `load <name>`).
-// Adversarial values must be rejected in the adapter — before the CLI is
-// ever invoked — so the CLI's argument grammar is not the security boundary
-// (same rule as tail_log).
+// as a CLI positional (`stop [target]`, `unload [profile]`, `load <name>`),
+// and start_server forwards its profile as a flag value
+// (`start --profile <profile>`). Adversarial values must be rejected in the
+// adapter — before the CLI is ever invoked — so the CLI's argument grammar
+// is not the security boundary (same rule as tail_log).
 func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 	bin, record := recordingCLI(t)
 	cfg := &config{llamaLauncherBin: bin}
@@ -180,6 +181,11 @@ func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 		{"load_profile", map[string]any{"name": "; rm"}},
 		{"load_profile", map[string]any{"name": "$(reboot)"}},
 		{"load_profile", map[string]any{"name": "qwen --restart"}},
+		{"start_server", map[string]any{"profile": "-f"}},
+		{"start_server", map[string]any{"profile": "--all"}},
+		{"start_server", map[string]any{"profile": "; rm"}},
+		{"start_server", map[string]any{"profile": "$(reboot)"}},
+		{"start_server", map[string]any{"profile": "qwen --restart"}},
 	}
 	for _, tc := range rejected {
 		res := callTool(t, s, tc.tool, tc.args)
@@ -203,6 +209,8 @@ func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 		{"unload_model", map[string]any{"profile": "qwen-7b"}, "unload qwen-7b"},
 		{"load_profile", map[string]any{"name": "qwen-7b"}, "load qwen-7b"},
 		{"load_profile", map[string]any{"name": "llama3.1", "restart": true}, "load llama3.1 --restart"},
+		{"start_server", map[string]any{"profile": "qwen-7b"}, "start --profile qwen-7b"},
+		{"start_server", map[string]any{}, "start"},
 	}
 	for _, tc := range accepted {
 		res := callTool(t, s, tc.tool, tc.args)
