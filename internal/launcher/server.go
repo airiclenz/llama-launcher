@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,22 +180,50 @@ func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) 
 
 // identifyBackend asks each registered backend whether it owns the server
 // reachable at addr. Used by stop paths that have an address but no caller-
-// supplied backend name. Returns ErrNotRunning when nothing is reachable.
+// supplied backend name. Two passes, each in sorted-name order so the
+// answer is deterministic (map iteration is random): first the backends'
+// discriminating health checks, then the startup probes of backends that
+// implement StartupProber — a Starting instance fails its health check for
+// the whole model load but must still be identifiable so it can be stopped
+// (ADR-0010). Returns ErrNotRunning when nothing is reachable.
 func identifyBackend(addr string) (string, error) {
-	for name, b := range llmServers {
-		if b.HealthCheck(addr) == nil {
+	names := make([]string, 0, len(llmServers))
+	for name := range llmServers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if llmServers[name].HealthCheck(addr) == nil {
+			return name, nil
+		}
+	}
+	for _, name := range names {
+		if startingUp(llmServers[name], addr) {
 			return name, nil
 		}
 	}
 	return "", ErrNotRunning
 }
 
+// startingUp reports whether a still-starting (Starting, ADR-0010) server
+// of b's answers at addr. Only backends that can tell a loading server
+// apart from a dead address implement StartupProber; for all others this
+// is false.
+func startingUp(b LLMServer, addr string) bool {
+	sp, ok := b.(StartupProber)
+	return ok && sp.StartingUp(addr)
+}
+
 // stopServerAt runs both stop mechanisms against addr exactly once, in the
 // documented order (TDD §6.5): signal the listening PID first (with the
 // SIGTERM → SIGKILL → port-release escalation), then invoke the backend's
 // native stop hook. The hook is best-effort — its error surfaces only when
-// the address is still serving afterwards. Returns the signalled PID (0 when
-// none was found) and an error when the server survived both mechanisms.
+// the address is still serving afterwards. Stopped means not healthy *and*
+// not still starting up: a survived Starting server also fails the health
+// check (503 for the whole model load), so health alone would report it as
+// stopped (ADR-0010). Returns the signalled PID (0 when none was found) and
+// an error when the server survived both mechanisms.
 func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
 	b, err := GetLLMServer(backend)
 	if err != nil {
@@ -209,7 +238,7 @@ func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
 	reportStep(progress, "Disconnecting")
 	stopErr := b.TryStop(addr)
 
-	if b.HealthCheck(addr) != nil {
+	if b.HealthCheck(addr) != nil && !startingUp(b, addr) {
 		return pid, nil
 	}
 	if stopErr != nil {

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -936,8 +937,9 @@ func TestStop_Orchestration(t *testing.T) {
 }
 
 // TestIdentifyBackend covers the stop path's backend identification: a
-// llamacpp-shaped /health response claims the address for llamacpp, and an
-// address nothing answers on yields ErrNotRunning.
+// llamacpp-shaped /health response claims the address for llamacpp, a
+// still-loading llama-server is claimed via the StartupProber second pass
+// (ADR-0010), and an address nothing answers on yields ErrNotRunning.
 func TestIdentifyBackend(t *testing.T) {
 	t.Parallel()
 
@@ -952,6 +954,26 @@ func TestIdentifyBackend(t *testing.T) {
 			// 404 elsewhere fails the Ollama ("/") and LM Studio
 			// ("/v1/models") health checks, so only llamacpp matches.
 			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		backend, err := identifyBackend(addrFromURL(t, srv.URL))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if backend != "llamacpp" {
+			t.Errorf("backend = %q, want %q", backend, "llamacpp")
+		}
+	})
+
+	t.Run("still-loading llamacpp server is identified via the startup probe", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// llama-server answers every request with 503 while loading its
+			// model. That fails every backend's health check, so only the
+			// StartupProber second pass can claim the address (ADR-0010).
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"error":{"code":503,"message":"Loading model","type":"unavailable_error"}}`))
 		}))
 		defer srv.Close()
 
@@ -1265,6 +1287,125 @@ func TestStopServerAt_TryStopFlipsHealthCheck(t *testing.T) {
 	if want := []string{"127.0.0.1:1"}; !slices.Equal(stub.tryStops, want) {
 		t.Errorf("TryStop calls = %v, want %v", stub.tryStops, want)
 	}
+}
+
+// startingStopServer is a registry stub for a managed-style backend whose
+// server answers 503 while loading (ADR-0010): HealthCheck always fails —
+// exactly like a real Starting llama-server's — and StartingUp delegates to
+// the configured probe, so each test controls whether the stop verification
+// sees a survived Starting server.
+type startingStopServer struct {
+	name     string
+	starting func(addr string) bool
+	tryStops []string
+}
+
+func (s *startingStopServer) Name() string        { return s.name }
+func (s *startingStopServer) DisplayName() string { return s.name }
+func (s *startingStopServer) DefaultAddr() string { return "localhost:0" }
+func (s *startingStopServer) HealthCheck(string) error {
+	return errors.New("unhealthy: status 503")
+}
+func (s *startingStopServer) ResolveModel(_ *Config, ref string) (string, error) { return ref, nil }
+func (s *startingStopServer) LoadModel(string, *ResolvedProfile) error           { return nil }
+func (s *startingStopServer) UnloadModel(string, string) error                   { return nil }
+func (s *startingStopServer) TryStart(*Config, string) error                     { return nil }
+func (s *startingStopServer) TryStop(addr string) error {
+	s.tryStops = append(s.tryStops, addr)
+	return nil
+}
+func (s *startingStopServer) ParamSpecs() []ProfileParamSpec { return nil }
+func (s *startingStopServer) StartingUp(addr string) bool    { return s.starting(addr) }
+
+// TestStopServerAt_StartingOccupant pins the ADR-0010 stop-verification
+// rule: stopped means not healthy *and* not still starting up. A Starting
+// server fails its health check for the whole model load, so health alone
+// would misreport a survived Starting server as stopped. Not parallel: the
+// subtests mutate the global llmServers registry.
+func TestStopServerAt_StartingOccupant(t *testing.T) {
+	t.Run("signalling the listener stops a Starting server and reports its PID", func(t *testing.T) {
+		if _, err := exec.LookPath("nc"); err != nil {
+			t.Skip("nc not available")
+		}
+
+		// A real child process listening at the target address stands in for
+		// the loading llama-server: the PID path (lsof + SIGTERM) is what the
+		// stop relies on while the server cannot answer its stop hook. The
+		// stub's startup probe dials the address, so it flips false exactly
+		// when the signalled listener is gone.
+		addr := deadAddr(t)
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			t.Fatalf("splitting %q: %v", addr, err)
+		}
+		cmd := exec.Command("nc", "-l", host, port)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("starting nc: %v", err)
+		}
+		// Reap the child as soon as it exits: a zombie still counts as alive
+		// for IsProcessAlive, which would stall terminatePID's wait loop.
+		go cmd.Wait()
+		t.Cleanup(func() { cmd.Process.Kill() })
+
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if pid, err := findListeningPID(addr); err == nil && pid == cmd.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("nc (PID %d) never showed up listening on %s", cmd.Process.Pid, addr)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		stub := &startingStopServer{
+			name: "startingstop",
+			starting: func(addr string) bool {
+				conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+				if err != nil {
+					return false
+				}
+				conn.Close()
+				return true
+			},
+		}
+		RegisterLLMServer(stub)
+		t.Cleanup(func() { delete(llmServers, stub.name) })
+
+		pid, err := stopServerAt(stub.name, addr, nil)
+
+		if err != nil {
+			t.Fatalf("stopServerAt = %v, want success once the listener is gone", err)
+		}
+		if pid != cmd.Process.Pid {
+			t.Errorf("reported PID = %d, want the listener's PID %d", pid, cmd.Process.Pid)
+		}
+		if IsProcessAlive(cmd.Process.Pid) {
+			t.Errorf("PID %d still alive after stopServerAt", cmd.Process.Pid)
+		}
+	})
+
+	t.Run("a survived still-starting server yields the still-reachable error", func(t *testing.T) {
+		stub := &startingStopServer{
+			name:     "survivestart",
+			starting: func(string) bool { return true },
+		}
+		RegisterLLMServer(stub)
+		t.Cleanup(func() { delete(llmServers, stub.name) })
+
+		pid, err := stopServerAt(stub.name, deadAddr(t), nil)
+
+		if err == nil || !strings.Contains(err.Error(), "still reachable") {
+			t.Fatalf("stopServerAt = %v, want the still-reachable error for a survived Starting server", err)
+		}
+		if pid != 0 {
+			t.Errorf("reported PID = %d, want 0 when nothing was listening", pid)
+		}
+		if len(stub.tryStops) != 1 {
+			t.Errorf("TryStop calls = %v, want exactly one before the verification", stub.tryStops)
+		}
+	})
 }
 
 // TestStartServer_BinaryNotFound: a managed backend whose server binary is
