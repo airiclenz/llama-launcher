@@ -96,14 +96,14 @@ func newServer(cfg *config) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "server_status",
-		Description: "Report every running server instance plus each idle enabled backend (running, address, active_profile, active_model, pid, uptime_seconds) as JSON.",
+		Description: "Report every running or still-starting server instance plus each idle enabled backend (running, starting, address, active_profile, active_model, pid, uptime_seconds) as JSON. An instance still loading its model reports starting=true with running=false.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {
 		return cfg.run(ctx, "status", "--json"), nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "tail_log",
-		Description: "Return the tail of a running instance's log. Target is optional when exactly one server is running; otherwise pass a backend name or host:port.",
+		Description: "Return the tail of a server instance's log (running or still starting). Target is optional when exactly one instance is up; otherwise pass a backend name or host:port.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args targetArgs) (*mcp.CallToolResult, any, error) {
 		if err := validateTarget(args.Target); err != nil {
 			return toolError(err.Error()), nil, nil
@@ -131,7 +131,7 @@ func newServer(cfg *config) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "unload_model",
-		Description: "Unload the model (for managed backends this stops the server). Profile is optional when only one model is loaded.",
+		Description: "Unload the model (for managed backends this stops the server; a still-starting managed server is stopped too). Profile is optional when exactly one instance has a model loaded or is still starting.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args profileArgs) (*mcp.CallToolResult, any, error) {
 		if err := validateProfile(args.Profile); err != nil {
 			return toolError(err.Error()), nil, nil
@@ -155,7 +155,7 @@ func newServer(cfg *config) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "stop_server",
-		Description: "Stop a running server. Target is optional when exactly one server is running; otherwise pass a backend name or host:port.",
+		Description: "Stop a server, including one still starting up (loading its model). Target is optional when exactly one instance is up; otherwise pass a backend name or host:port.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args targetArgs) (*mcp.CallToolResult, any, error) {
 		if err := validateTarget(args.Target); err != nil {
 			return toolError(err.Error()), nil, nil
