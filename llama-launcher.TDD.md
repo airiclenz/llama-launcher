@@ -845,7 +845,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 
 ### 12.5 Integration Tests (Layer 2)
 
-The files `integration_test.go` (shared helpers), `integration_llamacpp_test.go`, `integration_ollama_test.go`, and `integration_lmstudio_test.go` carry `//go:build integration`, so `go test ./...` never compiles them. `make test-integration` runs them (`go test -tags=integration -timeout 5m -v ./internal/launcher/`); `make test-all` runs both layers.
+The files `integration_test.go` (shared helpers), `integration_llamacpp_test.go`, `integration_ollama_test.go`, and `integration_lmstudio_test.go` carry `//go:build integration`, so `go test ./...` never compiles them. `make test-integration` runs them (`go test -tags=integration -count=1 -timeout 5m -v ./internal/launcher/` — `-count=1` bypasses Go's test cache, so an unchanged tree still exercises the real servers instead of replaying a cached pass); `make test-all` runs both layers.
 
 | Test | What it covers |
 |---|---|
