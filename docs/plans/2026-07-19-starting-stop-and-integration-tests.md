@@ -52,7 +52,8 @@
   - `cmdUnload` (cli.go:147): the `ActiveModel == ""` gates currently exclude Starting instances. A Starting **managed** instance is a valid unload target (unload = stop, ADR-0003/0004): accept it in both the profile-arg path (cli.go:158) and the no-arg enumeration (cli.go:166), labelled `(starting…)` in the multiple-targets listing.
   - Exit-code semantics unchanged.
 
-- [ ] **6. TUI menu** — `internal/launcher/menu.go`
+- [x] **6. TUI menu** — `internal/launcher/menu.go` — ✅ DONE (2026-07-19)
+  - NOTES (2026-07-19): the item's cited sub-lists got the `starting…` label (header via `serverStatusLines`, stop sub-menu via the new `stopTargetItems` helper) plus one site beyond the cited lines: `runIdleMenuSimple`'s `Status:` line, which otherwise mislabels a Starting primary as "running (no model)". The LoadProfile-refusal "verify, don't assume" is pinned by a test (`TestDoLoadProfile_RefusesStartingOccupant` — menu funnel `doLoadProfile` against a real 503 httptest server), not just code trace. `doUnloadModel` (menu.go) deliberately keeps enumerating only model-loaded instances: the item names stop as the menu verb for Starting instances and its "Unload model" entry only exists in the loaded menu; CLI unload parity was Item 5's scope. TDD/CHANGELOG/README updates deferred to Item 8 per Item 4/5 precedent.
   - The running-instances header/sub-lists (menu.go:27,99,285) must show Starting instances (`starting…` label) and offer **stop** for them; model-swap/load actions against a Starting address go through the same refusal as the CLI (they call `LoadProfile`, so this should fall out of Item 4 — verify, don't assume).
   - Menu refresh: covered by the `instancesSignature` change in Item 1.
 
