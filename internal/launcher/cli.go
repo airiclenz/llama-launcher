@@ -752,7 +752,9 @@ func cmdConfig(configPath string, args []string) int {
 		fmt.Fprintln(os.Stderr, "Usage: llama-launcher config <subcommand>")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Subcommands:")
-		fmt.Fprintln(os.Stderr, "  validate    Check config file for errors")
+		fmt.Fprintln(os.Stderr, "  validate         Check config file for errors")
+		fmt.Fprintln(os.Stderr, "  init [--force]   Generate example config (overwrite if --force)")
+		fmt.Fprintln(os.Stderr, "  reset            Reset config to example (overwrite)")
 		return 2
 	}
 

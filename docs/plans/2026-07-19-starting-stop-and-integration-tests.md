@@ -104,7 +104,8 @@
 
 ## Part C — Approved one-liner doc fixes (independent, any time)
 
-- [ ] **16. Four approved fixes**
+- [x] **16. Four approved fixes** — ✅ DONE (2026-07-19)
+  - NOTES (2026-07-19): of "drop/mark-shipped", the Homebrew bullet was dropped (§13 already documents the formula; a "shipped" line in a future-considerations list carries no information). ADR-0009's cited `server.go:847,866` have drifted to 898,917 — the reworded line names no line numbers, so nothing to correct. A CHANGELOG Fixed bullet under `## Unreleased` records the `config` usage fix with the three doc one-liners riding along (intro convention: Item 16 collects its own doc updates); TDD/README need nothing — neither reproduces the `config` no-arg usage text.
   - TDD line 6: "ADRs 0001–0007" → "ADRs 0001–0010".
   - TDD §11 future-work list (line 780): drop/mark-shipped the "Homebrew formula" bullet (shipped in 1.4.4; §13 already documents it).
   - ADR-0009 (docs/adr/0009-activation-operations-seam.md:19): "The unified `Unload`/`Stop` entry points planned next build on the same seam" → past tense (they exist: `server.go:847,866`).

@@ -3,7 +3,7 @@
 The architectural source of truth for `llama-launcher` lives in two places:
 
 - **[CONTEXT.md](CONTEXT.md)** — domain language (LLM Server, Model, Profile; Activate, Load/Unload, Start/Stop).
-- **[docs/adr/](docs/adr/)** — numbered Architectural Decision Records (ADRs 0001–0007) that pin down behaviour.
+- **[docs/adr/](docs/adr/)** — numbered Architectural Decision Records (ADRs 0001–0010) that pin down behaviour.
 
 This document explains how those decisions are realised in code. Where this document and an ADR appear to conflict, the ADR wins; please file a doc fix.
 
@@ -782,7 +782,6 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 - **Shell completions**: Generate bash/zsh/fish completions for subcommands and Profile names.
 - **Config reload subcommand**: A `reload` subcommand that restarts the matching instance with the same Profile using updated config values. (Note: automatic config reload in the interactive menu is already implemented — this item covers the CLI subcommand.)
 - **Additional LLM Servers**: vLLM and others — each as a new `backend_<name>.go` file implementing the `LLMServer` interface.
-- **Homebrew formula**: Package for `brew install llama-launcher`.
 - **Launchd integration**: Generate a launchd plist for auto-start on login.
 - **Per-Profile log retention**: Today log retention is global; a per-Profile `log_retention` would let chatty debug Profiles keep more history without inflating storage for everything.
 
