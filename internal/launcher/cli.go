@@ -155,7 +155,9 @@ func cmdUnload(cfg *Config, args []string) int {
 		addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 		instances := DiscoverRunningInstances(cfg)
 		target = findInstance(instances, addr)
-		if target == nil || target.Backend != profile.Backend || target.ActiveModel == "" {
+		// A Starting instance has no active model yet but is a valid unload
+		// target: unload on a managed backend reduces to stop (ADR-0010).
+		if target == nil || target.Backend != profile.Backend || (target.ActiveModel == "" && !target.Starting) {
 			fmt.Println("No model loaded for that profile.")
 			return 1
 		}
@@ -163,7 +165,7 @@ func cmdUnload(cfg *Config, args []string) int {
 		instances := DiscoverRunningInstances(cfg)
 		var loaded []*RunningInstance
 		for _, inst := range instances {
-			if inst.ActiveModel != "" {
+			if inst.ActiveModel != "" || inst.Starting {
 				loaded = append(loaded, inst)
 			}
 		}
@@ -174,11 +176,7 @@ func cmdUnload(cfg *Config, args []string) int {
 		if len(loaded) > 1 {
 			fmt.Fprintln(os.Stderr, "Multiple models loaded — specify which to unload:")
 			for _, inst := range loaded {
-				profileLabel := inst.ActiveProfile
-				if profileLabel == "" {
-					profileLabel = "(no matching profile)"
-				}
-				fmt.Fprintf(os.Stderr, "  %s at %s: %s (%s)\n", backendDisplayName(inst.Backend), inst.Addr(), inst.ActiveModel, profileLabel)
+				fmt.Fprintf(os.Stderr, "  %s at %s: %s\n", backendDisplayName(inst.Backend), inst.Addr(), unloadTargetLabel(inst))
 			}
 			return 2
 		}
@@ -197,6 +195,21 @@ func cmdUnload(cfg *Config, args []string) int {
 		fmt.Printf("Model unloaded (server still running at %s:%d)\n", res.Instance.Host, res.Instance.Port)
 	}
 	return 0
+}
+
+// unloadTargetLabel describes one candidate in the ambiguous-unload listing:
+// the loaded model with its matched profile, or "(starting…)" for an
+// instance still loading its model (a Starting instance names no model,
+// ADR-0010).
+func unloadTargetLabel(inst *RunningInstance) string {
+	if inst.Starting {
+		return "(starting…)"
+	}
+	profileLabel := inst.ActiveProfile
+	if profileLabel == "" {
+		profileLabel = "(no matching profile)"
+	}
+	return fmt.Sprintf("%s (%s)", inst.ActiveModel, profileLabel)
 }
 
 func cmdStart(cfg *Config, args []string) int {
@@ -391,24 +404,23 @@ func cmdStatus(cfg *Config, args []string) int {
 		if err != nil {
 			continue
 		}
+		state := statusStateLabel(inst)
 		modelStr := inst.ActiveModel
 		if modelStr != "" {
-			fmt.Printf("  ● %-*s  running    %-22s %s\n", maxLen, b.DisplayName(), inst.Addr(), modelStr)
+			fmt.Printf("  ● %-*s  %s  %-22s %s\n", maxLen, b.DisplayName(), state, inst.Addr(), modelStr)
 		} else {
-			fmt.Printf("  ● %-*s  running    %s\n", maxLen, b.DisplayName(), inst.Addr())
+			fmt.Printf("  ● %-*s  %s  %s\n", maxLen, b.DisplayName(), state, inst.Addr())
 		}
 	}
 
 	for _, inst := range instances {
-		if inst.ActiveModel == "" {
+		// A Starting instance gets a details line too: its PID and log are
+		// exactly what a user watching a long model load needs (ADR-0010).
+		if inst.ActiveModel == "" && !inst.Starting {
 			continue
 		}
 		fillRuntimeDetails(cfg, inst)
-		profileLabel := profileDisplayName(cfg, inst.ActiveProfile)
-		if inst.ActiveProfile == "" {
-			profileLabel = inst.ActiveModel
-		}
-		parts := []string{fmt.Sprintf("Active: %s", profileLabel)}
+		parts := []string{statusDetailsLead(cfg, inst)}
 		if inst.PID > 0 {
 			parts = append(parts, fmt.Sprintf("PID %d", inst.PID))
 			if uptime := inst.Uptime(); uptime > 0 {
@@ -423,6 +435,34 @@ func cmdStatus(cfg *Config, args []string) int {
 	}
 
 	return 0
+}
+
+// statusStateLabel renders the state column of a status row: a Starting
+// instance (ADR-0010) shows "starting…" instead of "running". The label is
+// padded to a fixed visible width so the address column stays aligned —
+// byte-counting %-*s padding would drift on the multibyte ellipsis.
+func statusStateLabel(inst *RunningInstance) string {
+	const columnWidth = 9 // visible width of the widest label, "starting…"
+	label := "running"
+	if inst.Starting {
+		label = "starting…"
+	}
+	return label + strings.Repeat(" ", columnWidth-visibleWidth(label))
+}
+
+// statusDetailsLead is the first segment of an instance's details line: the
+// active profile (or model) for a healthy instance, or a "Starting" marker
+// for one still loading — a Starting instance has no model to name
+// (ADR-0010).
+func statusDetailsLead(cfg *Config, inst *RunningInstance) string {
+	if inst.Starting {
+		return fmt.Sprintf("Starting: %s", backendDisplayName(inst.Backend))
+	}
+	profileLabel := profileDisplayName(cfg, inst.ActiveProfile)
+	if inst.ActiveProfile == "" {
+		profileLabel = inst.ActiveModel
+	}
+	return fmt.Sprintf("Active: %s", profileLabel)
 }
 
 func cmdList(cfg *Config, args []string) int {
@@ -488,13 +528,16 @@ func cmdList(cfg *Config, args []string) int {
 // cmdStatusJSON prints one JSON entry per running instance (keyed by
 // address) plus one running=false entry per enabled backend that has no
 // running instance, so multiple concurrent instances of one backend all
-// appear (ADR-0006). Entries are grouped by backend name in sorted order;
-// within a backend, instances are ordered by address. Exit code matches
-// the human path: 0 if any instance is running, 1 if all are stopped.
+// appear (ADR-0006). A Starting instance (ADR-0010) reports running=false
+// with starting=true — running keeps meaning healthy. Entries are grouped
+// by backend name in sorted order; within a backend, instances are ordered
+// by address. Exit code matches the human path: 0 if any instance was
+// discovered (healthy or Starting), 1 if all are stopped.
 func cmdStatusJSON(cfg *Config) int {
 	type entry struct {
 		Backend       string `json:"backend"`
 		Running       bool   `json:"running"`
+		Starting      bool   `json:"starting"`
 		Address       string `json:"address"`
 		ActiveProfile string `json:"active_profile"`
 		ActiveModel   string `json:"active_model"`
@@ -525,7 +568,8 @@ func cmdStatusJSON(cfg *Config) int {
 			fillRuntimeDetails(cfg, inst)
 			output = append(output, entry{
 				Backend:       name,
-				Running:       true,
+				Running:       !inst.Starting,
+				Starting:      inst.Starting,
 				Address:       inst.Addr(),
 				ActiveProfile: inst.ActiveProfile,
 				ActiveModel:   inst.ActiveModel,
