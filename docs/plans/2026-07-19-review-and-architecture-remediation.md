@@ -205,7 +205,13 @@ contract — `paramDrift`'s own tests are untouched as required.
 - **Docs:** `CHANGELOG.md` (Fixed/Security); note the `tail_log` input constraints in
   TDD §15.2.
 
-## 5. Make `status --json` enumerate every running instance
+## 5. Make `status --json` enumerate every running instance — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Beyond the listed docs, updated the MCP `server_status`
+tool description (`cmd/llama-launcher-mcp/main.go`) from "each enabled
+backend's status" to the per-instance wording — the old text misdescribed
+the new output to remote agents, and this item's rationale names that tool
+as the JSON path's consumer. No adapter behaviour changed.
 
 - **Severity:** High. Restores ADR-0006 (instances keyed by `host:port`; multiple
   concurrent instances of one backend allowed). The human `status` path already lists them

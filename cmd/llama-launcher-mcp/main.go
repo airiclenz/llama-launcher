@@ -82,7 +82,7 @@ func newServer(cfg *config) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "server_status",
-		Description: "Report each enabled backend's status (running, address, active_profile, active_model, pid, uptime_seconds) as JSON.",
+		Description: "Report every running server instance plus each idle enabled backend (running, address, active_profile, active_model, pid, uptime_seconds) as JSON.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {
 		return cfg.run(ctx, "status", "--json"), nil, nil
 	})

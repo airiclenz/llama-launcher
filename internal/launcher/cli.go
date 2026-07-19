@@ -483,11 +483,12 @@ func cmdList(cfg *Config, args []string) int {
 	return 0
 }
 
-// cmdStatusJSON prints one JSON entry per enabled configured backend. When
-// a backend's configured address is reachable, the entry's running fields
-// reflect the live discovery; otherwise the entry is emitted with
-// running=false and zero/empty fields. Exit code matches the human path: 0
-// if any backend is running, 1 if all are stopped.
+// cmdStatusJSON prints one JSON entry per running instance (keyed by
+// address) plus one running=false entry per enabled backend that has no
+// running instance, so multiple concurrent instances of one backend all
+// appear (ADR-0006). Entries are grouped by backend name in sorted order;
+// within a backend, instances are ordered by address. Exit code matches
+// the human path: 0 if any instance is running, 1 if all are stopped.
 func cmdStatusJSON(cfg *Config) int {
 	type entry struct {
 		Backend       string `json:"backend"`
@@ -509,29 +510,28 @@ func cmdStatusJSON(cfg *Config) int {
 
 	instances := DiscoverRunningInstances(cfg)
 
-	output := make([]entry, 0, len(backends))
+	output := make([]entry, 0, len(backends)+len(instances))
 	anyRunning := false
 	for _, name := range backends {
-		var found *RunningInstance
+		matched := false
 		for _, inst := range instances {
-			if inst.Backend == name {
-				found = inst
-				break
+			if inst.Backend != name {
+				continue
 			}
-		}
-		if found != nil {
+			matched = true
 			anyRunning = true
-			fillRuntimeDetails(cfg, found)
+			fillRuntimeDetails(cfg, inst)
 			output = append(output, entry{
 				Backend:       name,
 				Running:       true,
-				Address:       found.Addr(),
-				ActiveProfile: found.ActiveProfile,
-				ActiveModel:   found.ActiveModel,
-				PID:           found.PID,
-				UptimeSeconds: int64(found.Uptime().Seconds()),
+				Address:       inst.Addr(),
+				ActiveProfile: inst.ActiveProfile,
+				ActiveModel:   inst.ActiveModel,
+				PID:           inst.PID,
+				UptimeSeconds: int64(inst.Uptime().Seconds()),
 			})
-		} else {
+		}
+		if !matched {
 			output = append(output, entry{Backend: name})
 		}
 	}
