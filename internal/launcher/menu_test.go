@@ -60,6 +60,37 @@ func TestFormatUptime(t *testing.T) {
 	}
 }
 
+func TestPrimaryInstance(t *testing.T) {
+	t.Parallel()
+
+	idleFirst := &RunningInstance{Backend: "lmstudio", Host: "127.0.0.1", Port: 1234}
+	idleSecond := &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 11434}
+	loaded := &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 11434, ActiveModel: "llama3"}
+	loadedSecond := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "qwen3"}
+
+	tests := []struct {
+		name      string
+		instances []*RunningInstance
+		want      *RunningInstance
+	}{
+		{"idle first, loaded second", []*RunningInstance{idleFirst, loaded}, loaded},
+		{"loaded first, idle second", []*RunningInstance{loaded, idleSecond}, loaded},
+		{"two loaded, first wins", []*RunningInstance{loaded, loadedSecond}, loaded},
+		{"all idle, sort-first wins", []*RunningInstance{idleFirst, idleSecond}, idleFirst},
+		{"single idle", []*RunningInstance{idleFirst}, idleFirst},
+		{"empty", nil, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := primaryInstance(tt.instances); got != tt.want {
+				t.Errorf("primaryInstance() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProfileDisplayName(t *testing.T) {
 	t.Parallel()
 

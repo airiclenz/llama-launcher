@@ -26,18 +26,12 @@ func RunInteractiveMenu(cfg *Config) error {
 		cfg.Reload()
 		instances := DiscoverRunningInstances(cfg)
 
-		var primary *RunningInstance
+		primary := primaryInstance(instances)
 		anyModel := false
 		anyServer := len(instances) > 0
 		for _, inst := range instances {
 			if inst.ActiveModel != "" {
 				anyModel = true
-				if primary == nil {
-					primary = inst
-				}
-			}
-			if primary == nil {
-				primary = inst
 			}
 		}
 		if primary != nil {
@@ -68,6 +62,26 @@ func RunInteractiveMenu(cfg *Config) error {
 			showErrorPopup(err)
 		}
 	}
+}
+
+// primaryInstance selects the instance the menu renders details for
+// (model label, "Show log", "Show model config"): the first instance with an
+// active model, so the loaded-state menu points at a server that actually has
+// a model; otherwise the sort-first instance; nil when nothing is running.
+func primaryInstance(instances []*RunningInstance) *RunningInstance {
+	var firstWithModel, firstAny *RunningInstance
+	for _, inst := range instances {
+		if firstAny == nil {
+			firstAny = inst
+		}
+		if firstWithModel == nil && inst.ActiveModel != "" {
+			firstWithModel = inst
+		}
+	}
+	if firstWithModel != nil {
+		return firstWithModel
+	}
+	return firstAny
 }
 
 func runStoppedMenu(cfg *Config, stateSig string) error {

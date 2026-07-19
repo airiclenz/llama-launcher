@@ -275,7 +275,7 @@ supported for lmstudio — one field beyond the three the item names.
   ./internal/launcher/ -run 'TestLMStudio|TestFormatProfileParams'` passes.
 - **Docs:** `README.md` backend/parameter tables, `defaults/config.yaml`, `CHANGELOG.md`.
 
-## 7. Fix interactive-menu primary-instance selection
+## 7. Fix interactive-menu primary-instance selection — ✅ DONE (2026-07-19)
 
 - **Severity:** Medium. The loaded-state menu renders against the wrong instance when
   several are running.
