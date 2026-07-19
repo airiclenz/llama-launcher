@@ -428,8 +428,11 @@ func doEditConfig(cfg *Config) error {
 	return exec.Command("open", cfg.ConfigPath).Run()
 }
 
+// formatProfileParams renders the "Show model config" pop-up body. Which
+// parameters appear — and how their values are formatted — is owned by the
+// profile's LLM Server via LLMServer.ParamSpecs, so a parameter the backend
+// never applies is never displayed and a new backend needs no change here.
 func formatProfileParams(profile *ResolvedProfile) []string {
-	p := &profile.ProfileParams
 	var lines []string
 
 	add := func(label, value string) {
@@ -442,47 +445,12 @@ func formatProfileParams(profile *ResolvedProfile) []string {
 	add("Backend", backendDisplayName(profile.Backend))
 	add("Model", profile.ModelPath)
 
-	if p.ContextSize != nil {
-		add("Context size", strconv.Itoa(*p.ContextSize))
-	}
-
-	isLlamaCpp := profile.Backend == "llamacpp"
-	isLMStudio := profile.Backend == "lmstudio"
-
-	// gpu_layers is llamacpp-only: LM Studio's load API has no GPU-offload
-	// field, so displaying it for lmstudio profiles would misreport reality.
-	if isLlamaCpp && p.GPULayers != nil {
-		add("GPU layers", strconv.Itoa(*p.GPULayers))
-	}
-	if isLlamaCpp && p.Threads != nil {
-		add("Threads", strconv.Itoa(*p.Threads))
-	}
-	if isLlamaCpp && p.ThreadsBatch != nil {
-		add("Threads (batch)", strconv.Itoa(*p.ThreadsBatch))
-	}
-	if (isLlamaCpp || isLMStudio) && p.BatchSize != nil {
-		add("Batch size", strconv.Itoa(*p.BatchSize))
-	}
-	if (isLlamaCpp || isLMStudio) && p.FlashAttn != nil {
-		add("Flash attention", strconv.FormatBool(*p.FlashAttn))
-	}
-	if isLlamaCpp && p.ContBatching != nil {
-		add("Cont. batching", strconv.FormatBool(*p.ContBatching))
-	}
-	if (isLlamaCpp || isLMStudio) && p.Parallel != nil {
-		add("Parallel", strconv.Itoa(*p.Parallel))
-	}
-	if isLlamaCpp && p.Mlock != nil {
-		add("Mlock", strconv.FormatBool(*p.Mlock))
-	}
-	if isLlamaCpp && p.NoMmap != nil {
-		add("No mmap", strconv.FormatBool(*p.NoMmap))
-	}
-	if isLlamaCpp && p.Embedding != nil {
-		add("Embedding", strconv.FormatBool(*p.Embedding))
-	}
-	if isLlamaCpp && p.Jinja != nil {
-		add("Jinja", strconv.FormatBool(*p.Jinja))
+	if srv, err := GetLLMServer(profile.Backend); err == nil {
+		for _, spec := range srv.ParamSpecs() {
+			if value, ok := spec.Format(&profile.ProfileParams); ok {
+				add(spec.Label, value)
+			}
+		}
 	}
 
 	if len(profile.ExtraArgs) > 0 {

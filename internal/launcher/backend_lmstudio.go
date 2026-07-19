@@ -112,6 +112,19 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 	return expectOK(resp, lmStudioStatusErr("load"))
 }
 
+// ParamSpecs lists, in display order, the parameters LoadModel sends to LM
+// Studio's load endpoint: context_size, batch_size (as eval_batch_size),
+// flash_attn (as flash_attention), and parallel. gpu_layers is deliberately
+// absent — the REST API has no GPU-offload field (see LoadModel).
+func (b *LMStudio) ParamSpecs() []ProfileParamSpec {
+	return []ProfileParamSpec{
+		specContextSize,
+		specBatchSize,
+		specFlashAttn,
+		specParallel,
+	}
+}
+
 // lmStudioStatusErr returns the non-200 status mapper for LM Studio's model
 // load/unload endpoints: it prefers the server-reported error message and
 // falls back to a generic "<verb> returned status" error.

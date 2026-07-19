@@ -3,6 +3,7 @@ package launcher
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -23,7 +24,65 @@ type LLMServer interface {
 	UnloadModel(addr string, modelID string) error
 	TryStart(cfg *Config, addr string) error
 	TryStop(addr string) error
+	// ParamSpecs returns the ordered display specs for the profile
+	// parameters this LLM Server actually applies when loading a model or
+	// launching a server. The "Show model config" pop-up renders profile
+	// parameters exclusively from this list, so a parameter absent here is
+	// never displayed (a param the server never receives must not be shown).
+	ParamSpecs() []ProfileParamSpec
 }
+
+// ProfileParamSpec describes how one profile parameter is displayed: the
+// label shown in the profile pop-up and a formatter rendering the value from
+// a ProfileParams. Format reports ok=false when the field is unset so the
+// renderer skips the line entirely. Each LLM Server owns the list of specs
+// it honours (LLMServer.ParamSpecs); the shared spec* values below keep
+// labels and value formatting identical for parameters that more than one
+// backend supports.
+type ProfileParamSpec struct {
+	Label  string
+	Format func(p *ProfileParams) (value string, ok bool)
+}
+
+// intParamSpec builds a ProfileParamSpec for an optional integer field.
+func intParamSpec(label string, field func(*ProfileParams) *int) ProfileParamSpec {
+	return ProfileParamSpec{Label: label, Format: func(p *ProfileParams) (string, bool) {
+		v := field(p)
+		if v == nil {
+			return "", false
+		}
+		return strconv.Itoa(*v), true
+	}}
+}
+
+// boolParamSpec builds a ProfileParamSpec for an optional boolean field.
+func boolParamSpec(label string, field func(*ProfileParams) *bool) ProfileParamSpec {
+	return ProfileParamSpec{Label: label, Format: func(p *ProfileParams) (string, bool) {
+		v := field(p)
+		if v == nil {
+			return "", false
+		}
+		return strconv.FormatBool(*v), true
+	}}
+}
+
+// Display specs for the cross-backend profile parameters. Backends assemble
+// their ParamSpecs lists from these so a parameter honoured by several
+// backends keeps a single label and formatting.
+var (
+	specContextSize  = intParamSpec("Context size", func(p *ProfileParams) *int { return p.ContextSize })
+	specGPULayers    = intParamSpec("GPU layers", func(p *ProfileParams) *int { return p.GPULayers })
+	specThreads      = intParamSpec("Threads", func(p *ProfileParams) *int { return p.Threads })
+	specThreadsBatch = intParamSpec("Threads (batch)", func(p *ProfileParams) *int { return p.ThreadsBatch })
+	specBatchSize    = intParamSpec("Batch size", func(p *ProfileParams) *int { return p.BatchSize })
+	specFlashAttn    = boolParamSpec("Flash attention", func(p *ProfileParams) *bool { return p.FlashAttn })
+	specContBatching = boolParamSpec("Cont. batching", func(p *ProfileParams) *bool { return p.ContBatching })
+	specParallel     = intParamSpec("Parallel", func(p *ProfileParams) *int { return p.Parallel })
+	specMlock        = boolParamSpec("Mlock", func(p *ProfileParams) *bool { return p.Mlock })
+	specNoMmap       = boolParamSpec("No mmap", func(p *ProfileParams) *bool { return p.NoMmap })
+	specEmbedding    = boolParamSpec("Embedding", func(p *ProfileParams) *bool { return p.Embedding })
+	specJinja        = boolParamSpec("Jinja", func(p *ProfileParams) *bool { return p.Jinja })
+)
 
 // apiKeyConfigurable is implemented by LLM Servers that accept a per-server
 // API key for the launcher's own HTTP calls (and, for managed servers, for

@@ -690,7 +690,18 @@ progress.go, menu.go, server_test.go rows); CHANGELOG (Changed).
   (managed → stop, external → unload) via the item-17 fake. `go test ./internal/launcher/`.
 - **Docs:** TDD §5.2; `CHANGELOG.md`.
 
-## 19. Move backend parameter display behind the `LLMServer` seam — DESIGN-CALL, DEPENDS: 6
+## 19. Move backend parameter display behind the `LLMServer` seam — DESIGN-CALL, DEPENDS: 6 — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Design call resolved as backend-owned paramSpec: `ParamSpecs()
+[]ProfileParamSpec` (label + value formatter) added to `LLMServer` itself, not a
+capability interface, so the compiler forces every new backend to declare its spec;
+shared `spec*` values in backend.go keep cross-backend labels single-sourced. Applying
+"only display params the backend actually applies" also removed the unconditional
+`Context size` line for **ollama** profiles (its load request never carries it; the
+config's param table already marked it `-`) — a visible change beyond the lmstudio
+cases the item's problem statement names, called out in the CHANGELOG. The
+99→"max"/0→"off" mapping the problem statement mentions no longer existed in code
+(item 6 removed it), so nothing was carried over.
 
 - **Rating:** Worth exploring. Resolves the last backend-name string-switch outside the
   backend files, and depends on the item-6 decision about which LM Studio params are real.

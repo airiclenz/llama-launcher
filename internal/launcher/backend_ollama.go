@@ -52,6 +52,10 @@ func (b *Ollama) ResolveModel(_ *Config, modelRef string) (string, error) {
 	return modelRef, nil
 }
 
+// ParamSpecs is empty: LoadModel sends only the model name and a keep_alive
+// — no profile parameter reaches the Ollama server, so none is displayed.
+func (b *Ollama) ParamSpecs() []ProfileParamSpec { return nil }
+
 func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 	payload := map[string]interface{}{
 		"model":      profile.ModelPath,

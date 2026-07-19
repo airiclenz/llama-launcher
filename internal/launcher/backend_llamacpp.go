@@ -59,6 +59,27 @@ func (b *LlamaCpp) StartingUp(addr string) bool {
 	return resp.StatusCode == http.StatusServiceUnavailable
 }
 
+// ParamSpecs lists, in display order, the parameters BuildServerArgs turns
+// into llama-server launch flags. Sampling parameters (temperature, top_k,
+// ...) are absent: the launcher passes no sampling flags to llama-server, so
+// displaying them would misreport what the server runs with.
+func (b *LlamaCpp) ParamSpecs() []ProfileParamSpec {
+	return []ProfileParamSpec{
+		specContextSize,
+		specGPULayers,
+		specThreads,
+		specThreadsBatch,
+		specBatchSize,
+		specFlashAttn,
+		specContBatching,
+		specParallel,
+		specMlock,
+		specNoMmap,
+		specEmbedding,
+		specJinja,
+	}
+}
+
 func (b *LlamaCpp) LoadModel(_ string, _ *ResolvedProfile) error { return nil }
 func (b *LlamaCpp) UnloadModel(_ string, _ string) error         { return nil }
 func (b *LlamaCpp) TryStart(_ *Config, _ string) error           { return nil }

@@ -199,6 +199,98 @@ func TestFormatProfileParams_LMStudio(t *testing.T) {
 	})
 }
 
+func TestFormatProfileParams_OllamaShowsNoParams(t *testing.T) {
+	t.Parallel()
+
+	ctx := 4096
+	profile := &ResolvedProfile{
+		Backend:       "ollama",
+		ModelPath:     "llama3",
+		ProfileParams: ProfileParams{ContextSize: &ctx},
+	}
+	lines := formatProfileParams(profile)
+	for _, line := range lines {
+		if contains(line, "Context size") {
+			t.Errorf("expected no Context size line for ollama profile (its load request never carries it), got lines: %v", lines)
+		}
+	}
+}
+
+// specStubServer is a minimal LLMServer whose only purpose is to carry a
+// param spec of its own, proving the menu renders profile parameters purely
+// from the backend-owned spec.
+type specStubServer struct {
+	name  string
+	specs []ProfileParamSpec
+}
+
+func (s *specStubServer) Name() string                                       { return s.name }
+func (s *specStubServer) DisplayName() string                                { return s.name }
+func (s *specStubServer) DefaultAddr() string                                { return "localhost:0" }
+func (s *specStubServer) HealthCheck(string) error                           { return nil }
+func (s *specStubServer) ResolveModel(_ *Config, ref string) (string, error) { return ref, nil }
+func (s *specStubServer) LoadModel(string, *ResolvedProfile) error           { return nil }
+func (s *specStubServer) UnloadModel(string, string) error                   { return nil }
+func (s *specStubServer) TryStart(*Config, string) error                     { return nil }
+func (s *specStubServer) TryStop(string) error                               { return nil }
+func (s *specStubServer) ParamSpecs() []ProfileParamSpec                     { return s.specs }
+
+// TestFormatProfileParams_RendersBackendOwnedSpec registers a brand-new
+// backend and asserts its profile pop-up renders exactly that backend's
+// spec, in spec order — i.e. adding a backend requires no edit in menu.go.
+// Not parallel: it mutates the global llmServers registry, which is safe
+// only while no parallel test is running (sequential tests never overlap
+// with parallel ones).
+func TestFormatProfileParams_RendersBackendOwnedSpec(t *testing.T) {
+	stub := &specStubServer{
+		name: "specstub",
+		specs: []ProfileParamSpec{
+			intParamSpec("Stub knob", func(p *ProfileParams) *int { return p.Threads }),
+			specContextSize,
+		},
+	}
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+
+	threads := 8
+	ctx := 4096
+	mlock := true
+	profile := &ResolvedProfile{
+		Backend:   stub.name,
+		ModelPath: "stub-model",
+		ProfileParams: ProfileParams{
+			Threads:     &threads,
+			ContextSize: &ctx,
+			Mlock:       &mlock, // not in the stub's spec — must not render
+		},
+	}
+	lines := formatProfileParams(profile)
+
+	knobIdx, ctxIdx := -1, -1
+	for i, line := range lines {
+		switch {
+		case contains(line, "Stub knob"):
+			knobIdx = i
+			if !contains(line, "8") {
+				t.Errorf("Stub knob line missing value 8: %q", line)
+			}
+		case contains(line, "Context size"):
+			ctxIdx = i
+			if !contains(line, "4096") {
+				t.Errorf("Context size line missing value 4096: %q", line)
+			}
+		case contains(line, "Mlock"):
+			t.Errorf("Mlock rendered although absent from the backend's spec: %q", line)
+		}
+	}
+	if knobIdx == -1 || ctxIdx == -1 {
+		t.Fatalf("expected both spec'd params rendered, got lines: %v", lines)
+	}
+	if knobIdx > ctxIdx {
+		t.Errorf("params rendered out of spec order (Stub knob at %d after Context size at %d)", knobIdx, ctxIdx)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && containsStr(s, substr)
 }
