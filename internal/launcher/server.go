@@ -26,10 +26,6 @@ const (
 
 var ErrNotRunning = errors.New("no server running")
 
-// stopInstanceFn indirects StopInstance so tests can observe LoadProfile's
-// auto-stop decisions without signalling real processes.
-var stopInstanceFn = StopInstance
-
 // StartServer launches a managed server or connects to an external one.
 func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
 	b, err := GetLLMServer(profile.Backend)
@@ -311,6 +307,77 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, bool
 	return inst, true, nil
 }
 
+// activationOps is the seam behind LoadProfile (ADR-0009): the process,
+// health, and probe operations the activation orchestration drives. The
+// production adapter (realOps) executes them against the live system —
+// exec/lsof/signals for processes, each backend's HTTP API for probes —
+// while tests substitute an in-memory fake, so the ADR-0004/0007 decision
+// logic is exercised without forking a process or opening a socket.
+type activationOps interface {
+	// healthy reports whether b's own server answers at addr
+	// (backend-discriminating health check).
+	healthy(b LLMServer, addr string) bool
+	// loadedModel returns the model currently loaded at addr; empty when
+	// nothing is loaded or b cannot list models.
+	loadedModel(b LLMServer, addr string) string
+	// liveDrift diffs the live server parameters at addr against the
+	// freshly resolved profile params (ADR-0007 drift notice).
+	liveDrift(b LLMServer, addr string, fresh ProfileParams) []string
+	// discover returns the running instances derivable from cfg.
+	discover(cfg *Config) []*RunningInstance
+	// start launches a managed server or connects an external one.
+	start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error)
+	// waitHealthy polls b's health check at addr until success or timeout.
+	waitHealthy(b LLMServer, addr string, timeout time.Duration) error
+	// stop stops whatever instance is listening at addr (ADR-0001).
+	stop(addr string, progress ProgressFunc) (*RunningInstance, error)
+	// unloadInstance unloads the active model of the instance at addr
+	// without stopping its server.
+	unloadInstance(addr string, progress ProgressFunc) (*RunningInstance, error)
+	// loadModel loads the profile's model on b at addr.
+	loadModel(b LLMServer, addr string, profile *ResolvedProfile) error
+	// unloadModel unloads modelID on b at addr.
+	unloadModel(b LLMServer, addr, modelID string) error
+}
+
+// realOps is the production activationOps adapter. Each method delegates to
+// the package's live implementation; no orchestration logic lives here.
+type realOps struct{}
+
+func (realOps) healthy(b LLMServer, addr string) bool { return b.HealthCheck(addr) == nil }
+
+func (realOps) loadedModel(b LLMServer, addr string) string { return liveLoadedModel(b, addr) }
+
+func (realOps) liveDrift(b LLMServer, addr string, fresh ProfileParams) []string {
+	return liveParamDrift(b, addr, fresh)
+}
+
+func (realOps) discover(cfg *Config) []*RunningInstance { return DiscoverRunningInstances(cfg) }
+
+func (realOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
+	return StartServer(cfg, profile)
+}
+
+func (realOps) waitHealthy(b LLMServer, addr string, timeout time.Duration) error {
+	return WaitForHealth(b, addr, timeout)
+}
+
+func (realOps) stop(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	return StopInstance(addr, progress)
+}
+
+func (realOps) unloadInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	return UnloadInstanceModel(addr, progress)
+}
+
+func (realOps) loadModel(b LLMServer, addr string, profile *ResolvedProfile) error {
+	return b.LoadModel(addr, profile)
+}
+
+func (realOps) unloadModel(b LLMServer, addr, modelID string) error {
+	return b.UnloadModel(addr, modelID)
+}
+
 // LoadProfile activates a profile at its target address. When a server is
 // already reachable and serving the requested model, the call is idempotent
 // (ADR-0007): if the live server's parameters match the freshly resolved
@@ -321,6 +388,13 @@ func EnsureServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, bool
 // parameters (Ollama, LM Studio), model-name match alone is enough for the
 // idempotency no-op. Pass restart=true to force re-activation.
 func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
+	return loadProfile(realOps{}, cfg, profile, restart, progress)
+}
+
+// loadProfile is the activation orchestration behind LoadProfile. It drives
+// every process/health/probe effect through ops (ADR-0009) and carries the
+// single targetAddr derived from the resolved profile.
+func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
 	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 
 	b, err := GetLLMServer(profile.Backend)
@@ -328,12 +402,12 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 		return nil, false, err
 	}
 
-	healthy := b.HealthCheck(targetAddr) == nil
+	healthy := ops.healthy(b, targetAddr)
 
 	if !restart && healthy {
-		liveModel := liveLoadedModel(b, targetAddr)
+		liveModel := ops.loadedModel(b, targetAddr)
 		if liveModel != "" && profile.ModelPath != "" && modelNamesMatch(profile.ModelPath, liveModel) {
-			drifts := liveParamDrift(b, targetAddr, profile.ProfileParams)
+			drifts := ops.liveDrift(b, targetAddr, profile.ProfileParams)
 			if len(drifts) > 0 {
 				printDriftNotice(profile.Name, targetAddr, drifts)
 			}
@@ -349,8 +423,7 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 	}
 
 	if cfg.ShouldAutoStopServer() {
-		instances := DiscoverRunningInstances(cfg)
-		for _, inst := range instances {
+		for _, inst := range ops.discover(cfg) {
 			// Skip only a same-backend instance at the target address —
 			// that is the instance being (re)activated. A *different*
 			// backend occupying the shared target address (backends may
@@ -360,13 +433,12 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 				continue
 			}
 			reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(inst.Backend)))
-			if _, err := stopInstanceFn(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
+			if _, err := ops.stop(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
 				return nil, false, fmt.Errorf("auto-stopping %s: %w", inst.Backend, err)
 			}
 		}
 	} else if cfg.ShouldAutoUnload() {
-		instances := DiscoverRunningInstances(cfg)
-		for _, inst := range instances {
+		for _, inst := range ops.discover(cfg) {
 			// Same skip rule as above: a same-backend instance at the
 			// target address is the one being (re)activated; a foreign
 			// backend there is a regular cross-server unload candidate.
@@ -377,16 +449,16 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 				continue
 			}
 			reportStep(progress, fmt.Sprintf("Unloading model on %s", backendDisplayName(inst.Backend)))
-			if _, err := UnloadInstanceModel(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
+			if _, err := ops.unloadInstance(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
 				return nil, false, fmt.Errorf("auto-unloading %s: %w", inst.Backend, err)
 			}
 		}
 	}
 
 	if _, ok := b.(ManagedLLMServer); ok {
-		return loadProfileManaged(cfg, profile, healthy, b, progress)
+		return loadProfileManaged(ops, cfg, profile, targetAddr, healthy, b, progress)
 	}
-	return loadProfileExternal(cfg, profile, b, healthy, progress)
+	return loadProfileExternal(ops, cfg, profile, targetAddr, healthy, b, progress)
 }
 
 // liveLoadedModel returns the name (or path) of the model currently loaded
@@ -585,23 +657,22 @@ func shouldCrossServerUnload(inst *RunningInstance, targetBackend string) bool {
 	return !isManaged
 }
 
-func loadProfileManaged(cfg *Config, profile *ResolvedProfile, healthy bool, b LLMServer, progress ProgressFunc) (*RunningInstance, bool, error) {
-	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+func loadProfileManaged(ops activationOps, cfg *Config, profile *ResolvedProfile, targetAddr string, healthy bool, b LLMServer, progress ProgressFunc) (*RunningInstance, bool, error) {
 	if healthy {
 		reportStep(progress, "Stopping current server")
-		if _, err := stopInstanceFn(targetAddr, nil); err != nil && !errors.Is(err, ErrNotRunning) {
+		if _, err := ops.stop(targetAddr, nil); err != nil && !errors.Is(err, ErrNotRunning) {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
 		}
 	}
 
 	reportStep(progress, "Starting server")
-	inst, err := StartServer(cfg, profile)
+	inst, err := ops.start(cfg, profile)
 	if err != nil {
 		return nil, false, err
 	}
 
 	reportStep(progress, "Waiting for server")
-	if err := WaitForHealth(b, inst.Addr(), 30*time.Second); err != nil {
+	if err := ops.waitHealthy(b, inst.Addr(), 30*time.Second); err != nil {
 		return nil, false, startupTimeoutErr(err, inst)
 	}
 
@@ -611,13 +682,13 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, healthy bool, b L
 	return inst, true, nil
 }
 
-func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, healthy bool, progress ProgressFunc) (*RunningInstance, bool, error) {
+func loadProfileExternal(ops activationOps, cfg *Config, profile *ResolvedProfile, targetAddr string, healthy bool, b LLMServer, progress ProgressFunc) (*RunningInstance, bool, error) {
 	var inst *RunningInstance
 	if healthy {
 		if cfg.ShouldAutoUnload() {
-			if liveModel := liveLoadedModel(b, fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)); liveModel != "" {
+			if liveModel := ops.loadedModel(b, targetAddr); liveModel != "" {
 				reportStep(progress, "Unloading current model")
-				if err := b.UnloadModel(fmt.Sprintf("%s:%d", *profile.Host, *profile.Port), liveModel); err != nil {
+				if err := ops.unloadModel(b, targetAddr, liveModel); err != nil {
 					return nil, false, fmt.Errorf("unloading current model: %w", err)
 				}
 			}
@@ -629,7 +700,7 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, hea
 		}
 	} else {
 		reportStep(progress, "Connecting to server")
-		newInst, err := connectExternalServer(cfg, profile, b)
+		newInst, err := ops.start(cfg, profile)
 		if err != nil {
 			return nil, false, err
 		}
@@ -637,7 +708,7 @@ func loadProfileExternal(cfg *Config, profile *ResolvedProfile, b LLMServer, hea
 	}
 
 	reportStep(progress, "Loading model")
-	if err := b.LoadModel(inst.Addr(), profile); err != nil {
+	if err := ops.loadModel(b, inst.Addr(), profile); err != nil {
 		return nil, false, fmt.Errorf("loading model: %w", err)
 	}
 

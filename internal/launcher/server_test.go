@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -176,21 +177,19 @@ func TestShouldCrossServerUnload(t *testing.T) {
 	}
 }
 
-// stubStopInstance swaps stopInstanceFn for a recorder and restores it when
-// the test ends. Tests using it must not run in parallel.
-func stubStopInstance(t *testing.T, fn func(addr string, progress ProgressFunc) (*RunningInstance, error)) *[]string {
-	t.Helper()
-	var stopped []string
-	orig := stopInstanceFn
-	stopInstanceFn = func(addr string, progress ProgressFunc) (*RunningInstance, error) {
-		stopped = append(stopped, addr)
-		if fn != nil {
-			return fn(addr, progress)
-		}
-		return &RunningInstance{}, nil
-	}
-	t.Cleanup(func() { stopInstanceFn = orig })
-	return &stopped
+// stopRecordingOps runs the real activation operations (discovery, health
+// probes, managed starts) but records stop targets instead of signalling
+// real processes. Used by the tests that drive loadProfile against live
+// httptest fakes: the real StopInstance would lsof the listening PID — the
+// test process itself — and SIGTERM it.
+type stopRecordingOps struct {
+	realOps
+	stopped *[]string
+}
+
+func (s stopRecordingOps) stop(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	*s.stopped = append(*s.stopped, addr)
+	return &RunningInstance{}, nil
 }
 
 // TestLoadProfile_StopsForeignBackendAtSharedAddr covers the shared-port
@@ -198,7 +197,7 @@ func stubStopInstance(t *testing.T, fn func(addr string, progress ProgressFunc) 
 // LoadProfile's auto-stop loop must stop it — it is the one instance that
 // blocks the new server from binding (ADR-0004, ADR-0006).
 func TestLoadProfile_StopsForeignBackendAtSharedAddr(t *testing.T) {
-	// Not parallel: swaps stopInstanceFn and rewrites PATH.
+	// Not parallel: rewrites PATH.
 
 	// A fake Ollama serving at the shared address.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,20 +233,20 @@ func TestLoadProfile_StopsForeignBackendAtSharedAddr(t *testing.T) {
 		ProfileParams: ProfileParams{Host: &host, Port: &port},
 	}
 
-	stopped := stubStopInstance(t, nil)
+	var stopped []string
 	// Empty PATH so the managed start fails at the binary lookup instead of
 	// forking a real llama-server.
 	t.Setenv("PATH", t.TempDir())
 
-	_, _, err := LoadProfile(cfg, profile, false, nil)
+	_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil)
 
 	// The auto-stop loop must have cleared the foreign occupant before the
 	// managed start was attempted: the recorded stop targets the shared
 	// address, and the returned error comes from the start step, which runs
 	// after the loop.
 	targetAddr := addrFromURL(t, srv.URL)
-	if len(*stopped) != 1 || (*stopped)[0] != targetAddr {
-		t.Errorf("stopped addresses = %v, want exactly [%s]", *stopped, targetAddr)
+	if len(stopped) != 1 || stopped[0] != targetAddr {
+		t.Errorf("stopped addresses = %v, want exactly [%s]", stopped, targetAddr)
 	}
 	if err == nil || !strings.Contains(err.Error(), "server binary not found") {
 		t.Errorf("err = %v, want the managed-start binary lookup failure", err)
@@ -258,7 +257,7 @@ func TestLoadProfile_StopsForeignBackendAtSharedAddr(t *testing.T) {
 // profile a server at the target address is already serving must not stop or
 // restart anything.
 func TestLoadProfile_SameBackendSameModelIsNoOp(t *testing.T) {
-	// Not parallel: swaps stopInstanceFn and rewrites PATH.
+	// Not parallel: rewrites PATH.
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -291,20 +290,20 @@ func TestLoadProfile_SameBackendSameModelIsNoOp(t *testing.T) {
 		ProfileParams: ProfileParams{Host: &host, Port: &port},
 	}
 
-	stopped := stubStopInstance(t, nil)
+	var stopped []string
 	// Safety net: if the no-op check regresses, fail at the binary lookup
 	// instead of forking a real llama-server.
 	t.Setenv("PATH", t.TempDir())
 
-	inst, started, err := LoadProfile(cfg, profile, false, nil)
+	inst, started, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if started {
 		t.Error("started = true, want false for an idempotent reload")
 	}
-	if len(*stopped) != 0 {
-		t.Errorf("stopped addresses = %v, want none for an idempotent reload", *stopped)
+	if len(stopped) != 0 {
+		t.Errorf("stopped addresses = %v, want none for an idempotent reload", stopped)
 	}
 	if inst == nil || inst.ActiveModel != "/models/test-7b.gguf" {
 		t.Errorf("instance = %+v, want ActiveModel /models/test-7b.gguf", inst)
@@ -396,7 +395,7 @@ func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
 // without --restart — must neither kill it nor fork a duplicate onto the
 // occupied port; it refuses with guidance instead.
 func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
-	// Not parallel: swaps stopInstanceFn and rewrites PATH.
+	// Not parallel: rewrites PATH.
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// llama-server answers every request with 503 while loading.
@@ -421,13 +420,13 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 		ProfileParams: ProfileParams{Host: &host, Port: &port},
 	}
 
-	stopped := stubStopInstance(t, nil)
+	var stopped []string
 	// Empty PATH: if the refusal regresses, the managed start fails at the
 	// binary lookup with a distinguishable error instead of forking.
 	t.Setenv("PATH", t.TempDir())
 
 	for _, restart := range []bool{false, true} {
-		_, _, err := LoadProfile(cfg, profile, restart, nil)
+		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, restart, nil)
 		if err == nil || !strings.Contains(err.Error(), "still starting up") {
 			t.Errorf("restart=%v: err = %v, want still-starting-up refusal", restart, err)
 			continue
@@ -436,9 +435,361 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 			t.Errorf("restart=%v: refusal must fire before the spawn attempt, got %v", restart, err)
 		}
 	}
-	if len(*stopped) != 0 {
-		t.Errorf("stopped addresses = %v, want none — a still-loading server is never killed", *stopped)
+	if len(stopped) != 0 {
+		t.Errorf("stopped addresses = %v, want none — a still-loading server is never killed", stopped)
 	}
+}
+
+// fakeOps is a pure in-memory activationOps: every operation records its
+// invocation and answers from the configured fields, so the orchestration
+// tests exercise loadProfile's decision logic without forking a process,
+// sending a signal, or opening a socket.
+type fakeOps struct {
+	healthyAddrs map[string]bool   // addr → backend's own server answers there
+	models       map[string]string // addr → currently loaded model
+	drift        []string          // liveDrift result for any addr
+	instances    []*RunningInstance
+	startErr     error
+	waitErr      error
+	stopErr      error
+	loadErr      error
+
+	stopped           []string // stop targets, in call order
+	unloadedInstances []string // unloadInstance targets
+	started           []string // profile names passed to start
+	waited            []string // addresses waited on
+	loadedModels      []string // "addr model" per loadModel call
+	unloadedModels    []string // "addr model" per unloadModel call
+}
+
+func (f *fakeOps) healthy(b LLMServer, addr string) bool { return f.healthyAddrs[addr] }
+
+func (f *fakeOps) loadedModel(b LLMServer, addr string) string { return f.models[addr] }
+
+func (f *fakeOps) liveDrift(b LLMServer, addr string, fresh ProfileParams) []string {
+	return f.drift
+}
+
+func (f *fakeOps) discover(cfg *Config) []*RunningInstance { return f.instances }
+
+func (f *fakeOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
+	f.started = append(f.started, profile.Name)
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
+	return &RunningInstance{
+		Backend: profile.Backend,
+		Host:    *profile.Host,
+		Port:    *profile.Port,
+		PID:     4242,
+		LogFile: "/logs/fake.log",
+	}, nil
+}
+
+func (f *fakeOps) waitHealthy(b LLMServer, addr string, timeout time.Duration) error {
+	f.waited = append(f.waited, addr)
+	return f.waitErr
+}
+
+func (f *fakeOps) stop(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	f.stopped = append(f.stopped, addr)
+	if f.stopErr != nil {
+		return nil, f.stopErr
+	}
+	return &RunningInstance{}, nil
+}
+
+func (f *fakeOps) unloadInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	f.unloadedInstances = append(f.unloadedInstances, addr)
+	return &RunningInstance{}, nil
+}
+
+func (f *fakeOps) loadModel(b LLMServer, addr string, profile *ResolvedProfile) error {
+	f.loadedModels = append(f.loadedModels, addr+" "+profile.ModelPath)
+	return f.loadErr
+}
+
+func (f *fakeOps) unloadModel(b LLMServer, addr, modelID string) error {
+	f.unloadedModels = append(f.unloadedModels, addr+" "+modelID)
+	return nil
+}
+
+// orchProfile builds a resolved profile for the fake-driven orchestration
+// tests. The backend name must be one of the registered backends — the
+// orchestration resolves it via GetLLMServer — but no I/O ever reaches it:
+// every effect goes through the fakeOps seam.
+func orchProfile(backend, name, model, host string, port int) *ResolvedProfile {
+	h, p := host, port
+	return &ResolvedProfile{
+		Name:          name,
+		ModelPath:     model,
+		Backend:       backend,
+		ProfileParams: ProfileParams{Host: &h, Port: &p},
+	}
+}
+
+func orchInstance(backend, host string, port int, model string) *RunningInstance {
+	return &RunningInstance{Backend: backend, Host: host, Port: port, ActiveModel: model}
+}
+
+// TestLoadProfile_Orchestration_IdempotentNoOp pins ADR-0007 through the
+// activation seam: a healthy target already serving the profile's model is
+// a no-op — nothing is stopped, started, or loaded — even when drift is
+// reported (the notice is informational; only --restart acts on it).
+func TestLoadProfile_Orchestration_IdempotentNoOp(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, drift []string) *fakeOps {
+		t.Helper()
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		f := &fakeOps{
+			healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
+			models:       map[string]string{"127.0.0.1:8080": "/models/test-7b.gguf"},
+			drift:        drift,
+			instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
+		}
+		inst, started, err := loadProfile(f, &Config{}, profile, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if started {
+			t.Error("started = true, want false for an idempotent reload")
+		}
+		if inst == nil || inst.ActiveModel != "/models/test-7b.gguf" || inst.ActiveProfile != "chat" {
+			t.Errorf("instance = %+v, want the live model and profile name", inst)
+		}
+		if len(f.stopped) != 0 || len(f.started) != 0 || len(f.loadedModels) != 0 || len(f.unloadedInstances) != 0 {
+			t.Errorf("no-op must not touch anything: stopped=%v started=%v loaded=%v unloaded=%v",
+				f.stopped, f.started, f.loadedModels, f.unloadedInstances)
+		}
+		return f
+	}
+
+	t.Run("matching model with no drift", func(t *testing.T) {
+		t.Parallel()
+		run(t, nil)
+	})
+
+	t.Run("drift notice does not trigger a restart", func(t *testing.T) {
+		t.Parallel()
+		run(t, []string{"context_size: 4096 → 8192"})
+	})
+}
+
+// TestLoadProfile_Orchestration_Restart pins the --restart path for a
+// managed backend: the same-backend instance at the target address is
+// skipped by the auto-stop loop (it is the one being re-activated), then
+// stopped exactly once by the managed path, and a fresh server is started
+// and waited on.
+func TestLoadProfile_Orchestration_Restart(t *testing.T) {
+	t.Parallel()
+
+	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+	f := &fakeOps{
+		healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
+		models:       map[string]string{"127.0.0.1:8080": "/models/test-7b.gguf"},
+		instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
+	}
+
+	inst, started, err := loadProfile(f, &Config{}, profile, true, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !started {
+		t.Error("started = false, want true for --restart")
+	}
+	if want := []string{"127.0.0.1:8080"}; !slices.Equal(f.stopped, want) {
+		t.Errorf("stopped = %v, want exactly %v (once, from the managed path)", f.stopped, want)
+	}
+	if want := []string{"chat"}; !slices.Equal(f.started, want) {
+		t.Errorf("started profiles = %v, want %v", f.started, want)
+	}
+	if want := []string{"127.0.0.1:8080"}; !slices.Equal(f.waited, want) {
+		t.Errorf("waited = %v, want %v", f.waited, want)
+	}
+	if inst == nil || inst.ActiveProfile != "chat" || inst.ActiveModel != "/models/test-7b.gguf" {
+		t.Errorf("instance = %+v, want active profile and model set", inst)
+	}
+}
+
+// TestLoadProfile_Orchestration_AutoStop pins the auto_stop_server rule
+// (ADR-0004/0006) through the seam: every other instance — including a
+// foreign backend occupying the shared target address — is stopped before
+// the target server is started; a stop failure aborts the activation.
+func TestLoadProfile_Orchestration_AutoStop(t *testing.T) {
+	t.Parallel()
+
+	newFake := func() (*fakeOps, *ResolvedProfile) {
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		f := &fakeOps{
+			healthyAddrs: map[string]bool{}, // target not yet serving llamacpp
+			instances: []*RunningInstance{
+				orchInstance("ollama", "127.0.0.1", 8080, "llama3.1:8b"), // foreign occupant of the target
+				orchInstance("ollama", "127.0.0.1", 11434, "llama3.1:8b"),
+				orchInstance("llamacpp", "127.0.0.1", 8081, "/models/other.gguf"),
+			},
+		}
+		return f, profile
+	}
+
+	t.Run("stops every other instance including the foreign occupant", func(t *testing.T) {
+		t.Parallel()
+		f, profile := newFake()
+		_, started, err := loadProfile(f, &Config{}, profile, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true")
+		}
+		want := []string{"127.0.0.1:8080", "127.0.0.1:11434", "127.0.0.1:8081"}
+		if !slices.Equal(f.stopped, want) {
+			t.Errorf("stopped = %v, want %v", f.stopped, want)
+		}
+		if len(f.unloadedInstances) != 0 {
+			t.Errorf("unloadedInstances = %v, want none under auto_stop", f.unloadedInstances)
+		}
+		if want := []string{"chat"}; !slices.Equal(f.started, want) {
+			t.Errorf("started profiles = %v, want %v", f.started, want)
+		}
+	})
+
+	t.Run("a failing stop aborts the activation", func(t *testing.T) {
+		t.Parallel()
+		f, profile := newFake()
+		f.stopErr = errors.New("boom")
+		_, _, err := loadProfile(f, &Config{}, profile, false, nil)
+		if err == nil || !strings.Contains(err.Error(), "auto-stopping") {
+			t.Errorf("err = %v, want auto-stopping failure", err)
+		}
+		if len(f.started) != 0 {
+			t.Errorf("started profiles = %v, want none after a failed stop", f.started)
+		}
+	})
+}
+
+// TestLoadProfile_Orchestration_AutoUnload pins the auto_unload matrix with
+// auto_stop_server disabled (ADR-0004's one rule): only external instances
+// with a model loaded are unload candidates — managed instances (unload
+// requires a restart, ADR-0003) and idle instances are skipped, and nothing
+// is ever stopped. With both flags off, other instances are untouched.
+func TestLoadProfile_Orchestration_AutoUnload(t *testing.T) {
+	t.Parallel()
+
+	off := false
+	on := true
+
+	newFake := func() (*fakeOps, *ResolvedProfile) {
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		f := &fakeOps{
+			healthyAddrs: map[string]bool{},
+			instances: []*RunningInstance{
+				orchInstance("ollama", "127.0.0.1", 11434, "llama3.1:8b"),     // external, loaded → unload
+				orchInstance("llamacpp", "127.0.0.1", 8081, "/models/o.gguf"), // managed → skipped
+				orchInstance("lmstudio", "127.0.0.1", 1234, ""),               // idle → skipped
+			},
+		}
+		return f, profile
+	}
+
+	t.Run("auto_unload unloads only loaded external instances", func(t *testing.T) {
+		t.Parallel()
+		f, profile := newFake()
+		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
+		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true")
+		}
+		if want := []string{"127.0.0.1:11434"}; !slices.Equal(f.unloadedInstances, want) {
+			t.Errorf("unloadedInstances = %v, want %v", f.unloadedInstances, want)
+		}
+		if len(f.stopped) != 0 {
+			t.Errorf("stopped = %v, want none with auto_stop_server: false", f.stopped)
+		}
+	})
+
+	t.Run("both flags off leave other instances untouched", func(t *testing.T) {
+		t.Parallel()
+		f, profile := newFake()
+		cfg := &Config{AutoStopServer: &off, AutoUnload: &off}
+		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true")
+		}
+		if len(f.stopped) != 0 || len(f.unloadedInstances) != 0 {
+			t.Errorf("stopped=%v unloaded=%v, want none with both flags off", f.stopped, f.unloadedInstances)
+		}
+	})
+}
+
+// TestLoadProfile_Orchestration_External pins the external-backend fork:
+// a healthy server with a different model gets a same-server swap (unload
+// current, load new — no stop, no start), an unreachable one is started
+// and then loaded.
+func TestLoadProfile_Orchestration_External(t *testing.T) {
+	t.Parallel()
+
+	off := false
+	on := true
+
+	t.Run("healthy server swaps the model in place", func(t *testing.T) {
+		t.Parallel()
+		profile := orchProfile("ollama", "chat", "llama3.1:8b", "127.0.0.1", 11434)
+		f := &fakeOps{
+			healthyAddrs: map[string]bool{"127.0.0.1:11434": true},
+			models:       map[string]string{"127.0.0.1:11434": "qwen2.5:7b"},
+			instances:    []*RunningInstance{orchInstance("ollama", "127.0.0.1", 11434, "qwen2.5:7b")},
+		}
+		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
+		inst, started, err := loadProfile(f, cfg, profile, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true for a model swap")
+		}
+		if want := []string{"127.0.0.1:11434 qwen2.5:7b"}; !slices.Equal(f.unloadedModels, want) {
+			t.Errorf("unloadedModels = %v, want %v", f.unloadedModels, want)
+		}
+		if want := []string{"127.0.0.1:11434 llama3.1:8b"}; !slices.Equal(f.loadedModels, want) {
+			t.Errorf("loadedModels = %v, want %v", f.loadedModels, want)
+		}
+		if len(f.stopped) != 0 || len(f.started) != 0 {
+			t.Errorf("stopped=%v started=%v, want neither for an in-place swap", f.stopped, f.started)
+		}
+		if inst == nil || inst.ActiveProfile != "chat" {
+			t.Errorf("instance = %+v, want active profile set", inst)
+		}
+	})
+
+	t.Run("unreachable server is started before the load", func(t *testing.T) {
+		t.Parallel()
+		profile := orchProfile("ollama", "chat", "llama3.1:8b", "127.0.0.1", 11434)
+		f := &fakeOps{healthyAddrs: map[string]bool{}}
+		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
+		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true")
+		}
+		if want := []string{"chat"}; !slices.Equal(f.started, want) {
+			t.Errorf("started profiles = %v, want %v", f.started, want)
+		}
+		if want := []string{"127.0.0.1:11434 llama3.1:8b"}; !slices.Equal(f.loadedModels, want) {
+			t.Errorf("loadedModels = %v, want %v", f.loadedModels, want)
+		}
+		if len(f.unloadedModels) != 0 {
+			t.Errorf("unloadedModels = %v, want none when nothing was loaded", f.unloadedModels)
+		}
+	})
 }
 
 // TestIdentifyBackend covers the stop path's backend identification: a

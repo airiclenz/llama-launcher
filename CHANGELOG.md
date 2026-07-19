@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Profile activation is now testable: the orchestration behind `load` drives an explicit operations seam.** `LoadProfile`'s decision logic — the idempotency/drift check (ADR-0007), the `auto_stop_server`/`auto_unload` pass (ADR-0004), and the managed/external activation fork — previously called `exec`, `lsof`, process signals, and live HTTP directly, so none of it was covered by tests; only its pure leaf helpers were. The orchestration now runs against a package-private operations interface ([ADR-0009](docs/adr/0009-activation-operations-seam.md)) whose production adapter executes the same operations as before, and the first orchestration tests drive that same code against an in-memory fake: the idempotent no-op (with and without a drift notice), `--restart`, the auto-stop/auto-unload matrix including the foreign-occupant-on-a-shared-address case, and the external model swap/connect paths — without forking a process or opening a socket. The target address is also derived from the resolved profile once and carried through, instead of being re-assembled at each call site. No observable behaviour changes.
+
 ### Removed
 
 - **Dead state-file-era code is gone — including a wasted `/props` request on every discovery pass.** `RunningInstance.ResolvedParams` was populated by discovery (an extra `GET /props` per llamacpp instance on every CLI command and every open-menu refresh tick) and by the load paths, but nothing ever read it: since the state-file removal in 1.3.1, parameter drift is derived live and on demand (ADR-0007), independently of discovery. The field and its discovery-time probe are removed — `QueryLiveParams` itself is untouched, drift detection still uses it — so discovery now costs one round-trip less per llamacpp instance. Also removed: the never-called `IsServerAlive` helper (liveness has long been decided by each backend's health check directly) and the test-only `FormatMemoryLine`/`percentString` memory-formatting wrappers (the compiled-template engine and `percentValue` they wrapped remain, with their coverage preserved).

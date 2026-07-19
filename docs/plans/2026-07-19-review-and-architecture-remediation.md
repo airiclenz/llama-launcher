@@ -605,7 +605,29 @@ bodies. CHANGELOG untouched per the item (no observable behaviour).
 - **Docs:** TDD §5.2 `backend_http.go` responsibility line; `CHANGELOG.md` (Changed) if any
   behaviour is observable (it should not be).
 
-## 17. Extract a testable activation seam behind `LoadProfile` — DESIGN-CALL
+## 17. Extract a testable activation seam behind `LoadProfile` — DESIGN-CALL — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Design question answered by the user: seam shape (a) — an
+operations interface. Landed as package-private `activationOps` (server.go)
+with production adapter `realOps` (one-line delegations); the exported
+`LoadProfile` binds it and the orchestration moved into unexported
+`loadProfile(ops, …)` — the seam is a parameter, not a mutable package var,
+so fake-driven tests run in parallel. The item's five named ops grew to the
+full effect surface the orchestration drives: healthy, loadedModel,
+liveDrift, discover, start, waitHealthy, stop, unloadInstance, loadModel,
+unloadModel. Adaptation per item 9: the body's `EnsureStopped` no longer
+exists (folded into unexported `stopServerAt`, sole caller `StopInstance`),
+so the seam's `stop` op delegates to `StopInstance` and nothing references
+`EnsureStopped`. Item 1's ad-hoc `stopInstanceFn` var was superseded and
+removed; its tests now use `stopRecordingOps` (embeds `realOps`, overrides
+`stop`). `targetAddr` is computed once and threaded through the fan-out;
+`EnsureServer`/`StartServer`/`connectExternalServer`/`startManagedServer`
+stay as the real implementations behind the adapter (item 18 unifies the
+stop/unload entry points). `loadProfileExternal`'s connect branch now calls
+`StartServer` via `ops.start` instead of `connectExternalServer` directly —
+identical behaviour (StartServer forwards external backends there). Docs:
+ADR-0009 added; TDD §5.2 (server.go + server_test.go rows) and §6.1;
+CHANGELOG (Changed).
 
 - **Rating:** Strong (the highest-leverage structural change), but requires interface design.
 - **Where:** `internal/launcher/server.go` — `LoadProfile` and its fan-out
