@@ -792,6 +792,128 @@ func TestLoadProfile_Orchestration_External(t *testing.T) {
 	})
 }
 
+// steppedOps wraps fakeOps so its stop/unload mechanics emit progress
+// steps, letting the unified Stop/Unload tests assert that the steps are
+// collected into the StopResult instead of streamed to a UI callback.
+type steppedOps struct {
+	*fakeOps
+}
+
+func (s steppedOps) stop(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	reportStep(progress, "Sending stop signal")
+	reportStep(progress, "Disconnecting")
+	return s.fakeOps.stop(addr, progress)
+}
+
+func (s steppedOps) unloadInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
+	reportStep(progress, "Unloading model")
+	return s.fakeOps.unloadInstance(addr, progress)
+}
+
+// TestUnload_Orchestration pins the single home of the "unload on a
+// managed backend means stop the server" rule (ADR-0003/0004) behind the
+// unified Unload entry point: a managed backend's unload stops the
+// server, an external backend's unload leaves it running, and the steps
+// the mechanics reported come back in the result for after-the-fact
+// rendering by the CLI and menu.
+func TestUnload_Orchestration(t *testing.T) {
+	t.Parallel()
+
+	t.Run("managed backend: unload stops the server", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeOps{}
+		res, err := unloadServerModel(steppedOps{f}, "llamacpp", "127.0.0.1:8080")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.ServerStopped {
+			t.Error("ServerStopped = false, want true for a managed backend")
+		}
+		if want := []string{"127.0.0.1:8080"}; !slices.Equal(f.stopped, want) {
+			t.Errorf("stopped = %v, want %v", f.stopped, want)
+		}
+		if len(f.unloadedInstances) != 0 {
+			t.Errorf("unloadedInstances = %v, want none for a managed backend", f.unloadedInstances)
+		}
+		if want := []string{"Sending stop signal", "Disconnecting"}; !slices.Equal(res.Steps, want) {
+			t.Errorf("Steps = %v, want %v", res.Steps, want)
+		}
+	})
+
+	t.Run("external backend: unload keeps the server running", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeOps{}
+		res, err := unloadServerModel(steppedOps{f}, "ollama", "127.0.0.1:11434")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.ServerStopped {
+			t.Error("ServerStopped = true, want false for an external backend")
+		}
+		if want := []string{"127.0.0.1:11434"}; !slices.Equal(f.unloadedInstances, want) {
+			t.Errorf("unloadedInstances = %v, want %v", f.unloadedInstances, want)
+		}
+		if len(f.stopped) != 0 {
+			t.Errorf("stopped = %v, want none for an external backend", f.stopped)
+		}
+		if want := []string{"Unloading model"}; !slices.Equal(res.Steps, want) {
+			t.Errorf("Steps = %v, want %v", res.Steps, want)
+		}
+	})
+
+	t.Run("unknown backend fails with a non-nil result", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeOps{}
+		res, err := unloadServerModel(steppedOps{f}, "doesnotexist", "127.0.0.1:1")
+		if err == nil {
+			t.Fatal("want error for an unknown backend")
+		}
+		if res == nil {
+			t.Fatal("result must be non-nil on error")
+		}
+		if len(f.stopped) != 0 || len(f.unloadedInstances) != 0 {
+			t.Errorf("stopped=%v unloaded=%v, want no mechanics run", f.stopped, f.unloadedInstances)
+		}
+	})
+
+	t.Run("a failing stop surfaces with the steps taken so far", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeOps{stopErr: errors.New("boom")}
+		res, err := unloadServerModel(steppedOps{f}, "llamacpp", "127.0.0.1:8080")
+		if err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Errorf("err = %v, want the stop failure", err)
+		}
+		if want := []string{"Sending stop signal", "Disconnecting"}; !slices.Equal(res.Steps, want) {
+			t.Errorf("Steps = %v, want the steps taken before the failure %v", res.Steps, want)
+		}
+	})
+}
+
+// TestStop_Orchestration pins the unified Stop entry point: the target
+// address is stopped through the seam and the mechanics' steps come back
+// in the result.
+func TestStop_Orchestration(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeOps{}
+	res, err := stopServer(steppedOps{f}, "127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.ServerStopped {
+		t.Error("ServerStopped = false, want true for Stop")
+	}
+	if want := []string{"127.0.0.1:8080"}; !slices.Equal(f.stopped, want) {
+		t.Errorf("stopped = %v, want %v", f.stopped, want)
+	}
+	if want := []string{"Sending stop signal", "Disconnecting"}; !slices.Equal(res.Steps, want) {
+		t.Errorf("Steps = %v, want %v", res.Steps, want)
+	}
+	if res.Instance == nil {
+		t.Error("Instance = nil, want the instance the mechanics reported")
+	}
+}
+
 // TestIdentifyBackend covers the stop path's backend identification: a
 // llamacpp-shaped /health response claims the address for llamacpp, and an
 // address nothing answers on yields ErrNotRunning.

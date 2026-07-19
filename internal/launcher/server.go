@@ -796,6 +796,80 @@ func UnloadInstanceModel(addr string, progress ProgressFunc) (*RunningInstance, 
 	return &RunningInstance{Backend: backend, Host: host, Port: port}, nil
 }
 
+// StopResult reports what a Stop or Unload call did. The entry points
+// collect the progress steps their mechanics report into the result
+// instead of streaming them through a live UI callback, so the CLI and
+// menu each render the same outcome after the fact, in their own style.
+type StopResult struct {
+	// Instance is the instance the operation acted on, as reported by the
+	// stop/unload mechanics (Backend, Host, Port, and the signalled PID
+	// when one was found). Nil when the operation failed.
+	Instance *RunningInstance
+	// ServerStopped distinguishes the two outcomes on success: true when
+	// the server process itself was stopped (Stop always; Unload on a
+	// managed backend), false when only the model was unloaded and the
+	// server keeps running.
+	ServerStopped bool
+	// Steps lists the orchestration steps taken, in order.
+	Steps []string
+}
+
+// stepRecorder accumulates progress steps for a StopResult. Its record
+// method is a ProgressFunc, so the recorded mechanics are unchanged —
+// they report through the same callback type as before, it just no
+// longer reaches the UI directly.
+type stepRecorder struct {
+	steps []string
+}
+
+func (r *stepRecorder) record(step string) {
+	r.steps = append(r.steps, step)
+}
+
+// Stop stops whatever LLM-server instance is listening at addr (ADR-0001)
+// and returns the steps taken. The result is non-nil even on error,
+// carrying the steps completed before the failure.
+func Stop(addr string) (*StopResult, error) {
+	return stopServer(realOps{}, addr)
+}
+
+// stopServer is the orchestration behind Stop, driven through the
+// activation seam (ADR-0009) so tests run it against a fake.
+func stopServer(ops activationOps, addr string) (*StopResult, error) {
+	rec := &stepRecorder{}
+	inst, err := ops.stop(addr, rec.record)
+	return &StopResult{Instance: inst, ServerStopped: true, Steps: rec.steps}, err
+}
+
+// Unload unloads the model of the backend instance at addr and returns
+// the steps taken. This is the single home of the "unload on a managed
+// backend means stop the server" rule (ADR-0003, ADR-0004): a managed
+// backend bakes the model into its process arguments, so its unload is a
+// stop; an external backend gets an API unload and keeps running. The
+// result is non-nil even on error, carrying the steps completed before
+// the failure.
+func Unload(backend, addr string) (*StopResult, error) {
+	return unloadServerModel(realOps{}, backend, addr)
+}
+
+// unloadServerModel is the orchestration behind Unload, driven through
+// the activation seam (ADR-0009) so tests run it against a fake.
+func unloadServerModel(ops activationOps, backend, addr string) (*StopResult, error) {
+	b, err := GetLLMServer(backend)
+	if err != nil {
+		return &StopResult{}, err
+	}
+
+	rec := &stepRecorder{}
+	if _, isManaged := b.(ManagedLLMServer); isManaged {
+		inst, stopErr := ops.stop(addr, rec.record)
+		return &StopResult{Instance: inst, ServerStopped: true, Steps: rec.steps}, stopErr
+	}
+
+	inst, unloadErr := ops.unloadInstance(addr, rec.record)
+	return &StopResult{Instance: inst, Steps: rec.steps}, unloadErr
+}
+
 // cleanupLegacyStateFiles deletes state-*.json files left over from earlier
 // versions of the launcher that persisted server state to disk. Runs once
 // per process. Silent on failure — these files are best-effort cleanup, not

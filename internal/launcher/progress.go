@@ -39,6 +39,17 @@ func newCLIProgress(title string) ProgressFunc {
 	}
 }
 
+// printStopSteps renders the steps a completed Stop/Unload took, in the
+// CLI progress style. The unified stop/unload entry points return their
+// steps in a StopResult instead of streaming them through a callback, so
+// the CLI prints them after the fact.
+func printStopSteps(title string, steps []string) {
+	fmt.Printf("  %s\n", title)
+	for _, step := range steps {
+		fmt.Printf("    %s...\n", step)
+	}
+}
+
 func (t *progressTracker) render() {
 	body := []string{""}
 	body = append(body, fmt.Sprintf("%s%s...%s", cBoldLightGray, t.title, cReset))

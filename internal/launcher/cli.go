@@ -185,27 +185,16 @@ func cmdUnload(cfg *Config, args []string) int {
 		target = loaded[0]
 	}
 
-	b, err := GetLLMServer(target.Backend)
+	res, err := Unload(target.Backend, target.Addr())
+	printStopSteps("Unloading model", res.Steps)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}
-
-	progress := newCLIProgress("Unloading model")
-	if _, ok := b.(ManagedLLMServer); ok {
-		stopped, err := StopInstance(target.Addr(), progress)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 3
-		}
-		fmt.Printf("Model unloaded, server stopped at %s\n", stopped.Addr())
+	if res.ServerStopped {
+		fmt.Printf("Model unloaded, server stopped at %s\n", res.Instance.Addr())
 	} else {
-		unloaded, err := UnloadInstanceModel(target.Addr(), progress)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 3
-		}
-		fmt.Printf("Model unloaded (server still running at %s:%d)\n", unloaded.Host, unloaded.Port)
+		fmt.Printf("Model unloaded (server still running at %s:%d)\n", res.Instance.Host, res.Instance.Port)
 	}
 	return 0
 }
@@ -350,8 +339,8 @@ func cmdStop(cfg *Config, args []string) int {
 		return 2
 	}
 
-	progress := newCLIProgress("Stopping server")
-	stopped, serr := StopInstance(inst.Addr(), progress)
+	res, serr := Stop(inst.Addr())
+	printStopSteps("Stopping server", res.Steps)
 	if serr != nil {
 		if errors.Is(serr, ErrNotRunning) {
 			fmt.Println("No server running.")
@@ -360,6 +349,7 @@ func cmdStop(cfg *Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", serr)
 		return 3
 	}
+	stopped := res.Instance
 	if stopped.PID > 0 {
 		fmt.Printf("Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
 	} else {

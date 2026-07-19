@@ -653,7 +653,25 @@ CHANGELOG (Changed).
   processes; `go test ./internal/launcher/` green; `go vet ./...`.
 - **Docs:** TDD §5.2/§6.1; a short ADR if the seam is a durable decision; `CHANGELOG.md`.
 
-## 18. Unify the Unload/Stop orchestration; CLI and menu become formatters — DESIGN-CALL, DEPENDS: 17
+## 18. Unify the Unload/Stop orchestration; CLI and menu become formatters — DESIGN-CALL, DEPENDS: 17 — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Design question answered by the user: the entry point
+returns a result struct (steps taken, outcomes, errors); the CLI printer
+and TUI progress sink format it after the fact — not a live callback.
+Landed as exported `Stop(addr)` / `Unload(backend, addr)` in server.go
+returning `*StopResult` (Instance, ServerStopped, Steps), delegating to
+unexported seam-driven orchestrations `stopServer` / `unloadServerModel`
+(item-17 pattern); `stepRecorder.record` is a ProgressFunc, so the item-9
+stop mechanics are untouched. Deviation from "behaviour unchanged",
+forced by the design call: stop/unload progress no longer streams live —
+the CLI prints identical text once the operation completes; the menu's
+transient TUI progress popup is replaced by dimmed step lines printed
+above the outcome (`renderStopSteps`), so terminal-mode final output
+gains those lines (previously the popup vanished). Two unobservable
+error-path diffs: an unregistered backend name (impossible for a
+discovered instance) now prints the CLI title line / clears the menu
+before the error surfaces. Docs: TDD §5.2 (main.go, server.go,
+progress.go, menu.go, server_test.go rows); CHANGELOG (Changed).
 
 - **Rating:** Worth exploring.
 - **Where:** `internal/launcher/cli.go` (`cmdUnload`, `cmdStop`, `resolveTargetInstance`)

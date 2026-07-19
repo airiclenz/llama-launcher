@@ -311,15 +311,8 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 		target = running[idx]
 	}
 
-	var progress ProgressFunc
-	if isTerminal() {
-		_, progress = newTUIProgress(fmt.Sprintf("Stopping %s", backendDisplayName(target.Backend)))
-	} else {
-		progress = newCLIProgress(fmt.Sprintf("Stopping %s", backendDisplayName(target.Backend)))
-	}
-
-	stopped, err := StopInstance(target.Addr(), progress)
-	fmt.Print(escClear + escCursorShow)
+	res, err := Stop(target.Addr())
+	renderStopSteps(fmt.Sprintf("Stopping %s", backendDisplayName(target.Backend)), res.Steps)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
 			fmt.Printf("  Stopped %s at %s\n", backendDisplayName(target.Backend), target.Addr())
@@ -327,12 +320,29 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 		}
 		return err
 	}
+	stopped := res.Instance
 	if stopped.PID > 0 {
 		fmt.Printf("  Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
 	} else {
 		fmt.Printf("  Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
 	}
 	return nil
+}
+
+// renderStopSteps clears the menu and prints the steps a completed
+// Stop/Unload took — the after-the-fact replacement for the live progress
+// popup (the unified entry points return their steps in the StopResult
+// instead of streaming them). Terminal mode dims the step lines; the
+// non-terminal fallback reuses the CLI style with the title.
+func renderStopSteps(title string, steps []string) {
+	fmt.Print(escClear + escCursorShow)
+	if !isTerminal() {
+		printStopSteps(title, steps)
+		return
+	}
+	for _, step := range steps {
+		fmt.Printf("  %s%s...%s\n", cDim, step, cReset)
+	}
 }
 
 func doUnloadModel(cfg *Config) error {
@@ -373,41 +383,25 @@ func doUnloadModel(cfg *Config) error {
 		target = loaded[idx]
 	}
 
-	b, err := GetLLMServer(target.Backend)
-	if err != nil {
-		return err
-	}
-
 	displayName := profileDisplayName(cfg, target.ActiveProfile)
 	if displayName == "" {
 		displayName = target.ActiveModel
 	}
 
-	var progress ProgressFunc
-	if isTerminal() {
-		_, progress = newTUIProgress(fmt.Sprintf("Unloading %s", displayName))
-	} else {
-		progress = newCLIProgress(fmt.Sprintf("Unloading %s", displayName))
+	res, err := Unload(target.Backend, target.Addr())
+	renderStopSteps(fmt.Sprintf("Unloading %s", displayName), res.Steps)
+	if err != nil {
+		return err
 	}
-
-	if _, ok := b.(ManagedLLMServer); ok {
-		stopped, err := StopInstance(target.Addr(), progress)
-		fmt.Print(escClear + escCursorShow)
-		if err != nil {
-			return err
-		}
+	if res.ServerStopped {
+		stopped := res.Instance
 		if stopped.PID > 0 {
 			fmt.Printf("  Model unloaded, server stopped at %s (PID %d)\n", stopped.Addr(), stopped.PID)
 		} else {
 			fmt.Printf("  Model unloaded, server stopped at %s\n", stopped.Addr())
 		}
 	} else {
-		unloaded, err := UnloadInstanceModel(target.Addr(), progress)
-		fmt.Print(escClear + escCursorShow)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("  Model unloaded (server still running at %s:%d)\n", unloaded.Host, unloaded.Port)
+		fmt.Printf("  Model unloaded (server still running at %s:%d)\n", res.Instance.Host, res.Instance.Port)
 	}
 	return nil
 }
