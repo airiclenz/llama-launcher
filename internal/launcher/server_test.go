@@ -1,8 +1,12 @@
 package launcher
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -166,6 +170,141 @@ func TestShouldCrossServerUnload(t *testing.T) {
 				t.Errorf("shouldCrossServerUnload = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// stubStopInstance swaps stopInstanceFn for a recorder and restores it when
+// the test ends. Tests using it must not run in parallel.
+func stubStopInstance(t *testing.T, fn func(addr string, progress ProgressFunc) (*RunningInstance, error)) *[]string {
+	t.Helper()
+	var stopped []string
+	orig := stopInstanceFn
+	stopInstanceFn = func(addr string, progress ProgressFunc) (*RunningInstance, error) {
+		stopped = append(stopped, addr)
+		if fn != nil {
+			return fn(addr, progress)
+		}
+		return &RunningInstance{}, nil
+	}
+	t.Cleanup(func() { stopInstanceFn = orig })
+	return &stopped
+}
+
+// TestLoadProfile_StopsForeignBackendAtSharedAddr covers the shared-port
+// design: when a *different* backend already occupies the target address,
+// LoadProfile's auto-stop loop must stop it — it is the one instance that
+// blocks the new server from binding (ADR-0004, ADR-0006).
+func TestLoadProfile_StopsForeignBackendAtSharedAddr(t *testing.T) {
+	// Not parallel: swaps stopInstanceFn and rewrites PATH.
+
+	// A fake Ollama serving at the shared address.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Write([]byte("Ollama is running"))
+		case "/api/ps":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"models": []map[string]interface{}{{"name": "llama3.1:8b", "size": 1}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, port := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+		},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	backend := "llamacpp"
+	cfg.Defaults = ProfileParams{Server: &backend, Host: &host, Port: &port}
+
+	profile := &ResolvedProfile{
+		Name:          "test",
+		ModelPath:     "/models/test.gguf",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	stopped := stubStopInstance(t, nil)
+	// Empty PATH so the managed start fails at the binary lookup instead of
+	// forking a real llama-server.
+	t.Setenv("PATH", t.TempDir())
+
+	_, _, err := LoadProfile(cfg, profile, false, nil)
+
+	// The auto-stop loop must have cleared the foreign occupant before the
+	// managed start was attempted: the recorded stop targets the shared
+	// address, and the returned error comes from the start step, which runs
+	// after the loop.
+	targetAddr := addrFromURL(t, srv.URL)
+	if len(*stopped) != 1 || (*stopped)[0] != targetAddr {
+		t.Errorf("stopped addresses = %v, want exactly [%s]", *stopped, targetAddr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "server binary not found") {
+		t.Errorf("err = %v, want the managed-start binary lookup failure", err)
+	}
+}
+
+// TestLoadProfile_SameBackendSameModelIsNoOp guards ADR-0007: reloading the
+// profile a server at the target address is already serving must not stop or
+// restart anything.
+func TestLoadProfile_SameBackendSameModelIsNoOp(t *testing.T) {
+	// Not parallel: swaps stopInstanceFn and rewrites PATH.
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{{"id": "/models/test-7b.gguf"}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, port := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	backend := "llamacpp"
+	cfg.Defaults = ProfileParams{Server: &backend, Host: &host, Port: &port}
+
+	profile := &ResolvedProfile{
+		Name:          "test",
+		ModelPath:     "/models/test-7b.gguf",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	stopped := stubStopInstance(t, nil)
+	// Safety net: if the no-op check regresses, fail at the binary lookup
+	// instead of forking a real llama-server.
+	t.Setenv("PATH", t.TempDir())
+
+	inst, started, err := LoadProfile(cfg, profile, false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if started {
+		t.Error("started = true, want false for an idempotent reload")
+	}
+	if len(*stopped) != 0 {
+		t.Errorf("stopped addresses = %v, want none for an idempotent reload", *stopped)
+	}
+	if inst == nil || inst.ActiveModel != "/models/test-7b.gguf" {
+		t.Errorf("instance = %+v, want ActiveModel /models/test-7b.gguf", inst)
 	}
 }
 

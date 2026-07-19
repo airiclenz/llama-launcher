@@ -26,6 +26,10 @@ const (
 
 var ErrNotRunning = errors.New("no server running")
 
+// stopInstanceFn indirects StopInstance so tests can observe LoadProfile's
+// auto-stop decisions without signalling real processes.
+var stopInstanceFn = StopInstance
+
 // IsServerAlive returns true when the backend's health check succeeds at the
 // instance's address (see ADR-0001: liveness is decided by health check, not
 // by PID).
@@ -347,18 +351,26 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 	if cfg.ShouldAutoStopServer() {
 		instances := DiscoverRunningInstances(cfg)
 		for _, inst := range instances {
-			if inst.Addr() == targetAddr {
+			// Skip only a same-backend instance at the target address —
+			// that is the instance being (re)activated. A *different*
+			// backend occupying the shared target address (backends may
+			// share one host:port) is a foreign occupant that must be
+			// stopped, or the new server cannot bind (ADR-0004, ADR-0006).
+			if inst.Addr() == targetAddr && inst.Backend == profile.Backend {
 				continue
 			}
 			reportStep(progress, fmt.Sprintf("Stopping %s", backendDisplayName(inst.Backend)))
-			if _, err := StopInstance(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
+			if _, err := stopInstanceFn(inst.Addr(), nil); err != nil && !errors.Is(err, ErrNotRunning) {
 				return nil, false, fmt.Errorf("auto-stopping %s: %w", inst.Backend, err)
 			}
 		}
 	} else if cfg.ShouldAutoUnload() {
 		instances := DiscoverRunningInstances(cfg)
 		for _, inst := range instances {
-			if inst.Addr() == targetAddr {
+			// Same skip rule as above: a same-backend instance at the
+			// target address is the one being (re)activated; a foreign
+			// backend there is a regular cross-server unload candidate.
+			if inst.Addr() == targetAddr && inst.Backend == profile.Backend {
 				continue
 			}
 			if !shouldCrossServerUnload(inst, profile.Backend) {
@@ -511,7 +523,7 @@ func loadProfileManaged(cfg *Config, profile *ResolvedProfile, healthy bool, b L
 	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 	if healthy {
 		reportStep(progress, "Stopping current server")
-		if _, err := StopInstance(targetAddr, nil); err != nil && !errors.Is(err, ErrNotRunning) {
+		if _, err := stopInstanceFn(targetAddr, nil); err != nil && !errors.Is(err, ErrNotRunning) {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
 		}
 	}

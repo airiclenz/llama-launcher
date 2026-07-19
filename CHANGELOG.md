@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Cross-backend switching on a shared address works again.** When two backends are configured on the same `host:port` (the shared-port design: clients need only one address) and a *different* backend already occupied the target address, `load` skipped it in both the `auto_stop_server` and `auto_unload` passes — the one instance that had to be cleared. The managed start then could not bind the port and failed with a misleading "server exited immediately after start" (or, for external backends, a 15 s connect timeout). The auto-stop/auto-unload loops now skip only a *same-backend* instance at the target address (that is the instance being re-activated, per ADR-0007's idempotency rules); a foreign occupant is stopped like any other instance (ADR-0004, ADR-0006). Same-backend idempotent reloads remain a silent no-op.
+
 ## 1.4.4
 
 ### Added
