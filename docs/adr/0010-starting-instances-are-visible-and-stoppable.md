@@ -25,5 +25,5 @@ The stop verification gap closes in the same pass: "stopped" previously meant "h
 - `identifyBackend` gains the second pass; `ErrNotRunning` is returned only when neither pass identifies. Stop verification treats a 503 answer as still-reachable.
 - `stillStartingUpErr` and `startupTimeoutErr` guidance changes from `kill <PID>` to `llama-launcher stop …` (and `--restart` where displacement is what the user wants).
 - Only `llamacpp` implements `StartupProber` today. Ollama and LM Studio have no Starting window (API-loaded Models; the server is healthy throughout), so nothing changes for them until a backend with a comparable window implements the interface.
-- The TUI, `status`, and `list --json` surface the Starting state; the menu's refresh signature includes it so the Starting→healthy transition is noticed.
+- The TUI, `status`, and `status --json` surface the Starting state; the menu's refresh signature includes it so the Starting→healthy transition is noticed.
 - TDD §6.2/§6.5 and the CHANGELOG record the behaviour change.
