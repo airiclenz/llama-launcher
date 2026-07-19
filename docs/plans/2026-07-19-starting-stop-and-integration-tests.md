@@ -113,7 +113,8 @@
 
 ## Verification
 
-- [ ] **17. Implementer-side verification (every code item, and finally overall)**
+- [x] **17. Implementer-side verification (every code item, and finally overall)** — ✅ DONE (2026-07-19)
+  - NOTES (2026-07-19): sweep ran beyond the literal text — tests with `-count=1` (the plain invocation only reported cached results), plus `go test -tags=integration -run '^$' ./internal/launcher/` as a compile-only check of the tagged files (no integration test executed; decision 7 / Item 18 untouched), plus a `go list` cross-check that all four `integration_*_test.go` files are ignored untagged and picked up under `-tags=integration`. Items 1–6 coverage verified by name (19 tests run explicitly) — all green, zero skips (`nc` present, so Item 2's signalled-child test ran for real). No code or doc changes needed; nothing found to follow up.
   - `go build ./... && go vet ./... && go test ./...` — the integration files must be invisible to the untagged build (tag check: `go vet -tags=integration ./internal/launcher/` compiles).
   - Fake/httptest coverage listed in Items 1–6 all green.
 - [ ] **18. USER-GATED: host integration run** — the user runs `make test-integration` (optionally with `INTEGRATION_MODEL_*` set) on the host and reports results. Do not mark Part B done, tag a release, or update the CHANGELOG's version header before this comes back green. Implementer must **not** start real servers (decision 7).
