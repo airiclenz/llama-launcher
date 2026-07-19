@@ -23,6 +23,10 @@ type RunningInstance struct {
 	LogFile       string
 	ActiveProfile string
 	ActiveModel   string
+	// Starting marks an instance whose process is up and address bound but
+	// whose health check does not pass yet — llama-server answers /health
+	// with 503 for the whole model load. See ADR-0010.
+	Starting bool
 }
 
 func (r *RunningInstance) Addr() string {
@@ -115,13 +119,24 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 		return nil
 	}
 	addr := fmt.Sprintf("%s:%d", host, port)
-	if b.HealthCheck(addr) != nil {
-		return nil
-	}
 	inst := &RunningInstance{
 		Backend: backend,
 		Host:    host,
 		Port:    port,
+	}
+	if b.HealthCheck(addr) != nil {
+		// A failing health check does not always mean nothing is there: a
+		// managed llama-server answers 503 during its whole model load. The
+		// StartupProber fallback surfaces that window as a Starting instance
+		// (ADR-0010). ListRunningModels is skipped — the server cannot
+		// answer yet — so ActiveModel/ActiveProfile stay empty (with no
+		// model, several profiles sharing the address would be ambiguous
+		// anyway).
+		if sp, ok := b.(StartupProber); ok && sp.StartingUp(addr) {
+			inst.Starting = true
+			return inst
+		}
+		return nil
 	}
 	if ml, ok := b.(ModelLister); ok {
 		models, err := ml.ListRunningModels(addr)
@@ -139,14 +154,15 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 
 // instancesSignature condenses a discovery result into a comparable string.
 // Two discovery passes produce the same signature exactly when the same
-// backends are reachable at the same addresses with the same models loaded.
-// The interactive menu compares signatures across refresh ticks to notice
-// background changes (e.g. a model loaded via the CLI in another terminal)
-// without any persisted state.
+// backends are reachable at the same addresses with the same models loaded
+// and the same Starting state (so a Starting→healthy transition changes
+// the signature). The interactive menu compares signatures across refresh
+// ticks to notice background changes (e.g. a model loaded via the CLI in
+// another terminal) without any persisted state.
 func instancesSignature(instances []*RunningInstance) string {
 	parts := make([]string, 0, len(instances))
 	for _, inst := range instances {
-		parts = append(parts, fmt.Sprintf("%s|%s|%s", inst.Backend, inst.Addr(), inst.ActiveModel))
+		parts = append(parts, fmt.Sprintf("%s|%s|%s|%t", inst.Backend, inst.Addr(), inst.ActiveModel, inst.Starting))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "\n")

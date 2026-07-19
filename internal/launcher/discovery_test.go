@@ -237,6 +237,59 @@ func TestDiscoverRunningInstances_SanitizesModelName(t *testing.T) {
 	}
 }
 
+// TestDiscoverRunningInstances_ReportsStarting covers ADR-0010: a
+// llama-server answering /health with 503 while it loads its model is a
+// Starting instance, not an absent one. Discovery must report it without
+// querying the model list — the loading server cannot answer /v1/models —
+// so ActiveModel and ActiveProfile stay empty.
+func TestDiscoverRunningInstances_ReportsStarting(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		case "/v1/models":
+			t.Error("discovery queried /v1/models on a Starting instance; a loading server cannot answer")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, portInt := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("llamacpp"),
+		Host:   &host,
+		Port:   &portInt,
+	}
+
+	instances := DiscoverRunningInstances(cfg)
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 Starting instance, got %d: %+v", len(instances), instances)
+	}
+	inst := instances[0]
+	if !inst.Starting {
+		t.Error("Starting = false, want true for a 503 /health answer")
+	}
+	if inst.Backend != "llamacpp" {
+		t.Errorf("Backend = %q, want llamacpp", inst.Backend)
+	}
+	if inst.ActiveModel != "" || inst.ActiveProfile != "" {
+		t.Errorf(
+			"ActiveModel/ActiveProfile = %q/%q, want both empty on a Starting instance",
+			inst.ActiveModel,
+			inst.ActiveProfile,
+		)
+	}
+}
+
 func TestMatchProfileName(t *testing.T) {
 	t.Parallel()
 	modelsDir := t.TempDir()
@@ -303,6 +356,7 @@ func TestMatchProfileName(t *testing.T) {
 func TestInstancesSignature(t *testing.T) {
 	t.Parallel()
 	idle := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080}}
+	starting := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, Starting: true}}
 	loaded := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "/models/x.gguf"}}
 	loadedAgain := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "/models/x.gguf"}}
 
@@ -314,6 +368,9 @@ func TestInstancesSignature(t *testing.T) {
 	}
 	if instancesSignature(nil) == instancesSignature(idle) {
 		t.Error("a server appearing must change the signature")
+	}
+	if instancesSignature(starting) == instancesSignature(idle) {
+		t.Error("the Starting→healthy transition must change the signature (ADR-0010)")
 	}
 	if instancesSignature(loaded) != instancesSignature(loadedAgain) {
 		t.Error("identical state must produce identical signatures")
