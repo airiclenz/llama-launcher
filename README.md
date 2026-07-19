@@ -468,6 +468,8 @@ llama-launcher config reset                 # Reset config to the example (overw
 llama-launcher version                      # Print version
 ```
 
+A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it — no hunting for the PID by hand. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)).
+
 ### Options
 
 ```

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **A server still loading its model is now visible and stoppable; only `--restart` displaces it.** Previously a still-starting llama-server (it answers `/health` with 503 for the whole model load) was invisible and untouchable: every stop path identifies the occupant via a *passing* health check, so `stop` reported "no server running" and the startup-timeout guidance told the user to `kill <PID>` by hand. A Starting instance is now first-class ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)): discovery reports it, `status` and the interactive menu show it as `starting…` (with PID and log where known), `status --json` entries gain a `starting` bool (`running` keeps meaning healthy — a Starting instance reports `running: false`, `starting: true`), and an explicit `stop` — or `unload`, which on a managed backend reduces to the same stop — kills the in-flight load. Identification stays mandatory (ADR-0006): the stop path gains a second, `StartingUp`-based identification pass, and a foreign process at a configured address is still refused. A plain `load` onto a Starting address refuses with guidance pointing at `llama-launcher stop` / `--restart` (the manual-`kill` instruction is gone from all error texts); `load --restart` stops the Starting occupant and replaces it; and the `auto_stop_server: true` sweep now also stops Starting instances at other addresses. The MCP adapter needed no behaviour change (its tools shell out to the CLI and inherit the new semantics), but the `server_status`, `stop_server`, `tail_log`, and `unload_model` tool descriptions now describe the Starting state and the new `starting` key.
+
+### Fixed
+
+- **A failed stop of a still-loading server is no longer reported as success.** "Stopped" was verified as "the health check fails afterwards" — which a *survived* still-loading server also satisfies, since it keeps answering 503 — so a stop that did not actually kill the process could print a success confirmation. Stop verification now counts a 503-answering survivor as still reachable: stopped means neither healthy nor still starting up ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)).
+
 ## 1.4.6
 
 This section describes what changed relative to the released 1.4.5, which shipped an independent remediation of the same 2026-07-06 review findings. Where both efforts fixed the same defect, the stronger variant was kept; entries below cover only behaviour that differs from 1.4.5 as released.
