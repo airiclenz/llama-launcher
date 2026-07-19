@@ -406,7 +406,7 @@ CHANGELOG.
   ./internal/launcher/ -run TestWaitForHealth` passes.
 - **Docs:** `CHANGELOG.md`; TDD §10 row for the health timeout.
 
-## 11. Restore the terminal cursor on popup exit
+## 11. Restore the terminal cursor on popup exit — ✅ DONE (2026-07-19)
 
 - **Severity:** Medium. With `auto_close` (default true) a popup action exits the process
   with the cursor left hidden.

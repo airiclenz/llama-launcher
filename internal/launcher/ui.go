@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -308,6 +309,30 @@ func showPopup(title string, lines []string) {
 		return
 	}
 
+	drawPopupAndWait(os.Stdout, title, lines, waitForAnyKey)
+}
+
+// waitForAnyKey switches stdin to raw mode, blocks until any key is pressed,
+// and restores the previous terminal state. It returns without waiting when
+// raw mode cannot be entered.
+func waitForAnyKey() error {
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return err
+	}
+	defer term.Restore(fd, oldState)
+	readKey()
+	return nil
+}
+
+// drawPopupAndWait renders the popup frame to w, hides the cursor, and calls
+// wait for the dismissing keypress. On every return path — including a wait
+// failure such as raw mode being unavailable — it clears the popup and
+// restores the cursor, so the process never exits with the cursor hidden.
+func drawPopupAndWait(w io.Writer, title string, lines []string, wait func() error) {
+	defer fmt.Fprint(w, escClear+escCursorShow)
+
 	body := append([]string{}, lines...)
 	body = append(body, "", fmt.Sprintf("%spress any key to close%s", cDim, cReset))
 
@@ -339,13 +364,9 @@ func showPopup(title string, lines []string) {
 	for i, line := range popupLines {
 		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
 	}
-	os.Stdout.WriteString(buf.String())
+	fmt.Fprint(w, buf.String())
 
-	fd := int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		return
+	if err := wait(); err != nil {
+		return // raw mode unavailable: close the popup without waiting
 	}
-	readKey()
-	term.Restore(fd, oldState)
 }
