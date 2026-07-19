@@ -696,11 +696,11 @@ On first run after upgrade, `CleanupLegacyStateFiles` (called once at CLI startu
 
 ## 8. Server Argument Assembly
 
-The launcher builds the `llama-server` command line from the merged default parameters. The Model is baked into the start arguments via `-m`, so each Profile activation produces a fresh server with that Profile's hardware parameters honoured ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)).
+The launcher builds the `llama-server` command line from the merged default parameters. The Model is baked into the start arguments via `--model`, so each Profile activation produces a fresh server with that Profile's hardware parameters honoured ([ADR-0003](docs/adr/0003-llamacpp-restart-per-profile.md)). Flag names are verified against llama-server b10068.
 
 | Config Field | Flag |
 |---|---|
-| `model` | `-m` |
+| `model` | `--model` |
 | `gpu_layers` | `-ngl` |
 | `threads` | `-t` |
 | `threads_batch` | `-tb` |
@@ -708,20 +708,20 @@ The launcher builds the `llama-server` command line from the merged default para
 | `context_size` | `-c` |
 | `host` | `--host` |
 | `port` | `--port` |
-| `flash_attn` (true) | `-fa` |
+| `flash_attn` | `-fa on` / `-fa off` |
 | `mlock` (true) | `--mlock` |
 | `no_mmap` (true) | `--no-mmap` |
 | `cont_batching` (true) | `-cb` |
 | `parallel` | `-np` |
 | `embedding` (true) | `--embedding` |
+| `jinja` (true) | `--jinja` |
 | `temperature` | `--temp` |
 | `repeat_penalty` | `--repeat-penalty` |
 | `top_k` | `--top-k` |
 | `top_p` | `--top-p` |
 | `min_p` | `--min-p` |
-| `models_dir` | `--models-dir` |
 
-Boolean flags are only appended when the resolved value is `true`. Numeric flags are only appended when explicitly set (not nil after merge). The sampling flags set llama-server's request defaults — parameters sent with an API request still override them per call — and are emitted before `extra_args`, so an `extra_args` override wins (llama-server honours the last occurrence of a repeated flag).
+Boolean flags are only appended when the resolved value is `true` — except `flash_attn`, which is emitted whenever set: `-fa on` for `true`, `-fa off` for `false` (llama-server's default is `auto`). Numeric flags are only appended when explicitly set (not nil after merge). `models_dir` is never passed to llama-server — it is launcher-side only, joining relative Model paths during resolution (§4.4; llama-server's own `--models-dir` is an unrelated router-server option). A configured per-server `api_key` is additionally emitted as `--api-key` (§4.2). The sampling flags set llama-server's request defaults — parameters sent with an API request still override them per call — and, like `--api-key`, are emitted before `extra_args`, so an `extra_args` override wins (llama-server honours the last occurrence of a repeated flag).
 
 Argument assembly is delegated to the backend via `ManagedLLMServer.BuildServerArgs()`, allowing each `ManagedLLMServer` to map config fields to its own CLI flags.
 

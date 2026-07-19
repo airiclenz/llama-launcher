@@ -25,7 +25,7 @@ The orchestration the launcher performs when a user selects a Profile: resolve i
 The API-level operation of putting Model weights into a running LLM Server's memory (or removing them). For LLM Servers with a load/unload HTTP API (Ollama, LM Studio), this is an HTTP call. For `llamacpp`, there is no API load — the Model is baked into the server's start arguments, so "loading a Model" means starting (or restarting) the LLM Server with that Model in `-m`.
 
 **Start** / **Stop** (an LLM Server):
-Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp`, `ollama serve` / `ollama stop`, `lms server start` / `lms server stop`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
+Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp`; for `ollama`, spawning `ollama serve` to start and a pgrep/SIGTERM sweep of `ollama serve` processes to stop — its CLI has no server-stop command, `ollama stop MODEL` only unloads a model; `lms server start` / `lms server stop` for `lmstudio`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
 
 ## Flagged ambiguities
 
