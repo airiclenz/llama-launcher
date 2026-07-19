@@ -448,7 +448,23 @@ CHANGELOG.
   test ./internal/launcher/ -run TestCmdStart` passes.
 - **Docs:** `CHANGELOG.md`; TDD §3.2 `start` row; README usage.
 
-## 13. Harden discovery against hostile local servers (sanitise + bound reads)
+## 13. Harden discovery against hostile local servers (sanitise + bound reads) — ✅ DONE (2026-07-19)
+
+NOTES (2026-07-19): Sanitisation strips a superset of the item's literal
+byte list: C0 (`< 0x20`) and DEL (`0x7f`) as specified, plus the C1 range
+(U+0080–U+009F), which some terminals also interpret as controls (e.g.
+U+009B as CSI). Applied at both `RunningInstance` entry points
+(`probeInstance` and `liveLoadedModel` — the latter also feeds progress
+lines) and to LM Studio's server-supplied error message
+(`extractLMStudioError`), the one other server-sourced string that reaches
+the terminal. The 512 KB cap (`boundedBody`) covers every `io.ReadAll` and
+JSON decode in the three backend files, including LM Studio's load/unload
+reply reads; Ollama's load/unload `io.Copy(io.Discard, …)` drains stay
+uncapped — they never buffer the body, and the item scopes the cap to the
+`ReadAll`s and decoders. Oversized bodies are truncated at the cap, so the
+"error rather than unbounded allocation" surfaces as the subsequent JSON
+parse / discrimination failure (asserted by the new regression tests,
+which fail without the fix).
 
 - **Severity:** Medium (security). A local process squatting a configured port can feed
   malicious responses that the launcher parses and displays.

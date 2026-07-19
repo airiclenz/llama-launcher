@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -136,6 +137,48 @@ func TestApplyAPIKeys(t *testing.T) {
 	}})
 	if lc.apiKey != "" {
 		t.Errorf("apiKey = %q after reload without key, want empty", lc.apiKey)
+	}
+}
+
+func TestSanitizeServerString(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text unchanged", "/models/test-7b.gguf", "/models/test-7b.gguf"},
+		{"empty", "", ""},
+		{"unicode preserved", "modèle-7b ✦", "modèle-7b ✦"},
+		{"OSC title spoof stripped", "\x1b]0;pwn\x07model.gguf", "]0;pwnmodel.gguf"},
+		{"CSI sequence stripped", "\x1b[2Jmodel", "[2Jmodel"},
+		{"C0 controls stripped", "a\x00b\tc\nd\re", "abcde"},
+		{"DEL stripped", "a\x7fb", "ab"},
+		{"C1 CSI stripped", "a\u009bb", "ab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := sanitizeServerString(tc.in); got != tc.want {
+				t.Errorf("sanitizeServerString(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBoundedBody(t *testing.T) {
+	t.Parallel()
+
+	src := strings.NewReader(strings.Repeat("a", maxResponseBytes+1024))
+
+	n, err := io.Copy(io.Discard, boundedBody(src))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != maxResponseBytes {
+		t.Errorf("read %d bytes, want cap %d", n, maxResponseBytes)
 	}
 }
 

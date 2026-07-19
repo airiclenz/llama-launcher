@@ -29,7 +29,7 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 	if err != nil {
 		return err
 	}
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(boundedBody(resp.Body))
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
@@ -84,7 +84,7 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
 	}
 	models := make([]RunningModelInfo, 0, len(result.Data))
@@ -129,7 +129,7 @@ func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 		} `json:"default_generation_settings"`
 		TotalSlots *int `json:"total_slots"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing /props response: %w", err)
 	}
 	contextSize := raw.DefaultGenerationSettings.NCtx

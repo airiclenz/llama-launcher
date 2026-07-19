@@ -35,6 +35,31 @@ func TestLlamaCppListRunningModels(t *testing.T) {
 	}
 }
 
+// TestListRunningModelsBoundedBody covers the response-size cap on the JSON
+// decode path: a hostile process squatting the port must not be able to make
+// the launcher allocate an unbounded model list — the read stops at
+// maxResponseBytes and the truncated JSON surfaces as a parse error.
+func TestListRunningModelsBoundedBody(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+	oversized := `{"data":[{"id":"` + strings.Repeat("A", maxResponseBytes) + `"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(oversized))
+	}))
+	defer srv.Close()
+
+	_, err := b.ListRunningModels(addrFromURL(t, srv.URL))
+
+	if err == nil {
+		t.Fatal("expected error for oversized /v1/models body")
+	}
+	if !strings.Contains(err.Error(), "parsing /v1/models response") {
+		t.Errorf("error = %q, want a parse error from the truncated body", err)
+	}
+}
+
 func TestLlamaCppQueryLiveParams(t *testing.T) {
 	t.Parallel()
 	b := &LlamaCpp{}
@@ -164,6 +189,50 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 	}
 	if inst.ResolvedParams.ContextSize == nil || *inst.ResolvedParams.ContextSize != 4096 {
 		t.Errorf("ContextSize = %v, want 4096", inst.ResolvedParams.ContextSize)
+	}
+}
+
+// TestDiscoverRunningInstances_SanitizesModelName covers the hostile-server
+// case: the model name is reported by whatever answers on the configured
+// port and is printed raw by every display site, so ANSI/OSC escapes (here
+// an OSC title-spoof sequence) must be stripped when the name enters
+// RunningInstance.
+func TestDiscoverRunningInstances_SanitizesModelName(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{{"id": "\x1b]0;pwn\x07evil.gguf"}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, portInt := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("llamacpp"),
+		Host:   &host,
+		Port:   &portInt,
+	}
+
+	instances := DiscoverRunningInstances(cfg)
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 instance, got %d: %+v", len(instances), instances)
+	}
+	if got := instances[0].ActiveModel; got != "]0;pwnevil.gguf" {
+		t.Errorf("ActiveModel = %q, want %q (escape bytes stripped)", got, "]0;pwnevil.gguf")
 	}
 }
 

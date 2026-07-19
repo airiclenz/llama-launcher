@@ -43,7 +43,7 @@ func (b *LMStudio) HealthCheck(addr string) error {
 	// LM Studio returns {"error":"..."} for the same path.
 	r, err := authedGet(healthCheckTimeout, base+"/health", b.apiKey)
 	if err == nil {
-		healthBody, _ := io.ReadAll(r.Body)
+		healthBody, _ := io.ReadAll(boundedBody(r.Body))
 		r.Body.Close()
 		if r.StatusCode == http.StatusOK {
 			var h struct {
@@ -59,7 +59,7 @@ func (b *LMStudio) HealthCheck(addr string) error {
 	// LM Studio returns 200 for all paths but with {"error":"..."}.
 	r, err = authedGet(healthCheckTimeout, base+"/api/tags", b.apiKey)
 	if err == nil {
-		tagsBody, _ := io.ReadAll(r.Body)
+		tagsBody, _ := io.ReadAll(boundedBody(r.Body))
 		r.Body.Close()
 		if r.StatusCode == http.StatusOK {
 			var tags struct {
@@ -110,7 +110,7 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 		return fmt.Errorf("loading model via LM Studio API: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(boundedBody(resp.Body))
 	if err := authFailedErr(resp.StatusCode); err != nil {
 		return err
 	}
@@ -124,6 +124,9 @@ func (b *LMStudio) LoadModel(addr string, profile *ResolvedProfile) error {
 	return nil
 }
 
+// extractLMStudioError pulls the human-readable message out of an LM Studio
+// error response body. The message is server-reported and ends up printed to
+// the terminal, so control characters are stripped (sanitizeServerString).
 func extractLMStudioError(body []byte) string {
 	var result struct {
 		Error struct {
@@ -131,7 +134,7 @@ func extractLMStudioError(body []byte) string {
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &result) == nil && result.Error.Message != "" {
-		return result.Error.Message
+		return sanitizeServerString(result.Error.Message)
 	}
 	return ""
 }
@@ -146,7 +149,7 @@ func (b *LMStudio) UnloadModel(addr string, modelID string) error {
 		return fmt.Errorf("unloading model via LM Studio API: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(boundedBody(resp.Body))
 	if err := authFailedErr(resp.StatusCode); err != nil {
 		return err
 	}
@@ -200,7 +203,7 @@ func (b *LMStudio) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("parsing /v1/models response: %w", err)
 	}
 	models := make([]RunningModelInfo, 0, len(result.Data))

@@ -35,7 +35,7 @@ func (b *Ollama) HealthCheck(addr string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(boundedBody(resp.Body))
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
@@ -172,7 +172,7 @@ func (b *Ollama) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 			Size int64  `json:"size"`
 		} `json:"models"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(boundedBody(resp.Body)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("parsing /api/ps response: %w", err)
 	}
 

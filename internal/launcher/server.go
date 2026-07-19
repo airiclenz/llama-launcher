@@ -405,7 +405,9 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 
 // liveLoadedModel returns the name (or path) of the model currently loaded
 // at addr, as reported by the backend. Empty string means "nothing loaded"
-// or "backend does not expose a model list".
+// or "backend does not expose a model list". The name is server-reported
+// and reaches the terminal (progress lines, RunningInstance.ActiveModel),
+// so control characters are stripped here (sanitizeServerString).
 func liveLoadedModel(b LLMServer, addr string) string {
 	ml, ok := b.(ModelLister)
 	if !ok {
@@ -415,7 +417,7 @@ func liveLoadedModel(b LLMServer, addr string) string {
 	if err != nil || len(models) == 0 {
 		return ""
 	}
-	return models[0].Name
+	return sanitizeServerString(models[0].Name)
 }
 
 // liveParamDrift returns the drift list between a backend's live parameters

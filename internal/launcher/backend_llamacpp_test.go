@@ -278,6 +278,34 @@ func TestLlamaCppHealthCheck(t *testing.T) {
 	})
 }
 
+// TestHealthCheckBoundedBody covers the response-size cap: whatever answers
+// on a configured port is untrusted, and a hostile squatter can stream an
+// arbitrarily large body over loopback (the probe timeout bounds duration,
+// not size). The read must stop at maxResponseBytes; the truncated body then
+// fails the llamacpp discrimination instead of being swallowed whole.
+func TestHealthCheckBoundedBody(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+	// Valid JSON when read in full — the status field sits past the cap, so
+	// an unbounded read would report healthy.
+	oversized := `{"pad":"` + strings.Repeat("A", maxResponseBytes) + `","status":"ok"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(oversized))
+	}))
+	defer srv.Close()
+
+	err := b.HealthCheck(addrFromURL(t, srv.URL))
+
+	if err == nil {
+		t.Fatal("expected error for oversized /health body")
+	}
+	if !strings.Contains(err.Error(), "not llamacpp") {
+		t.Errorf("error = %q, want it to contain 'not llamacpp'", err)
+	}
+}
+
 // TestLlamaCppStartingUp covers the still-loading probe: llama-server
 // answers /health with 503 while it loads its model, which is the one
 // state that must be told apart from both "healthy" and "not running"

@@ -127,7 +127,11 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 	if ml, ok := b.(ModelLister); ok {
 		models, err := ml.ListRunningModels(addr)
 		if err == nil && len(models) > 0 {
-			inst.ActiveModel = models[0].Name
+			// The name is server-reported and reaches the terminal via every
+			// display site (status, menu header, pop-ups) — sanitize it here,
+			// at the point it enters RunningInstance, so all of them are
+			// covered once.
+			inst.ActiveModel = sanitizeServerString(models[0].Name)
 		}
 	}
 	if lp, ok := b.(LiveParamsQuerier); ok {
