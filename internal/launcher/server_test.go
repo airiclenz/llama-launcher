@@ -790,6 +790,26 @@ func TestLoadProfile_Orchestration_External(t *testing.T) {
 			t.Errorf("unloadedModels = %v, want none when nothing was loaded", f.unloadedModels)
 		}
 	})
+
+	t.Run("start failure surfaces and reports not started", func(t *testing.T) {
+		t.Parallel()
+		profile := orchProfile("ollama", "chat", "llama3.1:8b", "127.0.0.1", 11434)
+		f := &fakeOps{
+			healthyAddrs: map[string]bool{},
+			startErr:     errors.New("ollama binary not found in PATH"),
+		}
+		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
+		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		if err == nil || !strings.Contains(err.Error(), "ollama binary not found") {
+			t.Fatalf("err = %v, want the start failure surfaced", err)
+		}
+		if started {
+			t.Error("started = true, want false on start failure")
+		}
+		if len(f.loadedModels) != 0 {
+			t.Errorf("loadedModels = %v, want none after a failed start", f.loadedModels)
+		}
+	})
 }
 
 // steppedOps wraps fakeOps so its stop/unload mechanics emit progress
@@ -1195,4 +1215,77 @@ func TestLiveParamDrift(t *testing.T) {
 			t.Errorf("want nil drift for non-querier backend, got %v", d)
 		}
 	})
+}
+
+// hookStopServer is a registry stub whose health flips to stopped when its
+// TryStop hook runs, standing in for a backend (like LM Studio) whose native
+// stop command — not a PID signal — is what actually stops the server.
+type hookStopServer struct {
+	name     string
+	stopped  bool
+	tryStops []string
+}
+
+func (s *hookStopServer) Name() string        { return s.name }
+func (s *hookStopServer) DisplayName() string { return s.name }
+func (s *hookStopServer) DefaultAddr() string { return "localhost:0" }
+func (s *hookStopServer) HealthCheck(string) error {
+	if s.stopped {
+		return errors.New("stopped")
+	}
+	return nil
+}
+func (s *hookStopServer) ResolveModel(_ *Config, ref string) (string, error) { return ref, nil }
+func (s *hookStopServer) LoadModel(string, *ResolvedProfile) error           { return nil }
+func (s *hookStopServer) UnloadModel(string, string) error                   { return nil }
+func (s *hookStopServer) TryStart(*Config, string) error                     { return nil }
+func (s *hookStopServer) TryStop(addr string) error {
+	s.tryStops = append(s.tryStops, addr)
+	s.stopped = true
+	return nil
+}
+func (s *hookStopServer) ParamSpecs() []ProfileParamSpec { return nil }
+
+// TestStopServerAt_TryStopFlipsHealthCheck: when no process listens at the
+// address (nothing for the PID path to signal) but the backend's stop hook
+// does stop the server, stopServerAt reports success — the hook is a real
+// stop mechanism, not just best-effort cleanup after the signal. Not
+// parallel: it mutates the global llmServers registry.
+func TestStopServerAt_TryStopFlipsHealthCheck(t *testing.T) {
+	stub := &hookStopServer{name: "hookstop"}
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+
+	_, err := stopServerAt(stub.name, "127.0.0.1:1", nil)
+
+	if err != nil {
+		t.Fatalf("stopServerAt = %v, want nil once TryStop makes the health check fail", err)
+	}
+	if want := []string{"127.0.0.1:1"}; !slices.Equal(stub.tryStops, want) {
+		t.Errorf("TryStop calls = %v, want %v", stub.tryStops, want)
+	}
+}
+
+// TestStartServer_BinaryNotFound: a managed backend whose server binary is
+// not on PATH fails fast with a clear error before anything is spawned.
+// Not parallel: it rewrites PATH.
+func TestStartServer_BinaryNotFound(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no llama-server anywhere on PATH
+
+	host := "127.0.0.1"
+	port := 18080
+	cfg := &Config{
+		LogDir:  t.TempDir(),
+		Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}},
+	}
+	profile := &ResolvedProfile{
+		Name:          "x",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	_, err := StartServer(cfg, profile)
+	if err == nil || !strings.Contains(err.Error(), "server binary not found") {
+		t.Fatalf("StartServer = %v, want a 'server binary not found' error", err)
+	}
 }
