@@ -1,5 +1,9 @@
 # Code Review — Merge reconciliation `f17d0e2` + `6e577ab` — 2026-07-19
 
+> **Resolution (same day):** all twelve findings were fixed in `34c5de0` (the four doc
+> corrections) and `2bfb1fe` (the three production hardenings and the five test
+> gaps/fixes). The full verify suite including `go test -race` is green after the fixes.
+
 **Scope:** the merge of origin/main (v1.4.5) into local main — resolution diff `55ececd..HEAD` cross-checked against both parents, focusing on hand-edited files.
 **Mission:** llama-launcher manages local LLM servers (llama.cpp, Ollama, LM Studio) on a shared address with stateless live discovery; an MCP adapter exposes lifecycle control to an assumed-prompt-injectable client behind an IP allowlist.
 **Files reviewed:** 22 changed files (13 Go, 9 docs) plus both parents for cross-checking.
