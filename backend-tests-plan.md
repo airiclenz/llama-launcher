@@ -1,5 +1,9 @@
 # Plan: Backend Test Coverage — httptest + Real Integration Tests
 
+> **Status (2026-07-19):** Layer 1 is shipped and kept below as historical record.
+> The Layer 2 spec is superseded — see
+> [Part B (Items 10–15) of the 2026-07-19 plan](docs/plans/2026-07-19-starting-stop-and-integration-tests.md).
+
 ## Context
 
 The current test suite only covers config parsing, arg building, and UI rendering. All actual backend behavior — HTTP health checks, model load/unload API calls, and process start/stop — is completely untested. This plan adds two layers of tests:
@@ -39,99 +43,14 @@ Test cases (table-driven, `t.Parallel()`):
 
 ## Layer 2: Real Integration Tests (`//go:build integration`)
 
-Actually start/stop real backends. Each test auto-skips if the backend binary isn't in PATH. Model operations are optional, controlled by env vars.
-
-### Run Command
-```bash
-go test -tags=integration -timeout 5m -v ./internal/launcher/
-```
-
-### New Files
-
-#### `internal/launcher/integration_test.go`
-Shared helpers (all with `t.Helper()`):
-- **`mustFindBinary(t, name)`** — `exec.LookPath`; calls `t.Skip` if not found
-- **`freePort(t)`** — binds `:0`, reads assigned port, closes listener
-- **`waitForHealthy(t, backend, addr, timeout)`** — polls `HealthCheck` until success or timeout
-- **`waitForUnhealthy(t, backend, addr, timeout)`** — polls until `HealthCheck` fails (confirms stop)
-
-#### `internal/launcher/integration_ollama_test.go`
-**`TestIntegrationOllama`** (sequential subtests, not parallel):
-1. `mustFindBinary(t, "ollama")`
-2. Get free port, construct addr
-3. `t.Cleanup` → `TryStop` + kill by PID
-4. Subtests: `TryStart` → `HealthCheck` → `LoadModel` (if `INTEGRATION_MODEL_OLLAMA` set) → `ListRunningModels` → `UnloadModel` → `TryStop` → verify unhealthy
-
-#### `internal/launcher/integration_lmstudio_test.go`
-**`TestIntegrationLMStudio`** — same structure:
-1. `mustFindBinary(t, "lms")`
-2. Subtests: `TryStart` → `HealthCheck` → `LoadModel` (if `INTEGRATION_MODEL_LMSTUDIO`) → `UnloadModel` → `TryStop`
-
-#### `internal/launcher/integration_llamacpp_test.go`
-**`TestIntegrationLlamaCpp`** — different because it's a managed backend:
-1. `mustFindBinary(t, "llama-server")`
-2. Requires `INTEGRATION_MODEL_LLAMACPP` (path to .gguf) — skip entirely if unset (llama-server needs a model arg to start)
-3. Build `ResolvedProfile` with model path, host, port
-4. Start process directly via `exec.Command` using `ServerBinary` + `BuildServerArgs`
-5. `t.Cleanup` → kill process by PID
-6. Subtests: Start → `HealthCheck` → Stop (SIGTERM) → verify unhealthy
-
-### Environment Variables for Model Tests
-
-| Variable | Example | Purpose |
-|---|---|---|
-| `INTEGRATION_MODEL_OLLAMA` | `llama3.2:1b` | Ollama model name (must be pre-pulled) |
-| `INTEGRATION_MODEL_LMSTUDIO` | `lmstudio-community/...` | LM Studio model identifier |
-| `INTEGRATION_MODEL_LLAMACPP` | `/path/to/model.gguf` | Absolute path to GGUF file |
-
-When unset → model subtests skip; start/stop/health still run.
-
-### Cleanup Strategy
-- `t.Cleanup` registered immediately after deciding to start a process
-- Attempts `TryStop(addr)` first
-- Falls back to `SIGTERM` by PID
-- `t.TempDir()` for log dirs (auto-cleaned)
-
-### Port Conflicts
-`freePort` uses OS-assigned ephemeral ports. No `t.Parallel()` on integration tests avoids races.
-
----
-
-## Makefile Changes
-
-Add to existing Makefile:
-
-```makefile
-test:
-	go test ./...
-
-test-integration:
-	go test -tags=integration -timeout 5m -v ./internal/launcher/
-
-test-all: test test-integration
-```
-
----
-
-## Files to Create/Modify
-
-| File | Action |
-|---|---|
-| `internal/launcher/backend_ollama_test.go` | **Create** — httptest tests for Ollama HTTP methods |
-| `internal/launcher/backend_lmstudio_test.go` | **Create** — httptest tests for LM Studio HTTP methods |
-| `internal/launcher/backend_llamacpp_test.go` | **Modify** — add `TestLlamaCppHealthCheck` with httptest |
-| `internal/launcher/helpers_test.go` | **Create** — `addrFromURL` shared helper |
-| `internal/launcher/integration_test.go` | **Create** — shared integration helpers (build tag) |
-| `internal/launcher/integration_ollama_test.go` | **Create** — real Ollama lifecycle tests (build tag) |
-| `internal/launcher/integration_lmstudio_test.go` | **Create** — real LM Studio lifecycle tests (build tag) |
-| `internal/launcher/integration_llamacpp_test.go` | **Create** — real LlamaCpp lifecycle tests (build tag) |
-| `Makefile` | **Modify** — add `test`, `test-integration`, `test-all` targets |
-
----
-
-## Verification
-
-1. `go test ./...` — all existing + new httptest tests pass, integration tests excluded
-2. `go test -tags=integration -timeout 5m -v ./internal/launcher/` — integration tests run, skipping backends not in PATH
-3. `INTEGRATION_MODEL_OLLAMA=llama3.2:1b go test -tags=integration -timeout 5m -v -run TestIntegrationOllama ./internal/launcher/` — full Ollama lifecycle including model load/unload
-4. `make test-integration` — same as #2 via Makefile
+> **Superseded (2026-07-19).** The Layer-2 spec that lived here (written 2026-05-20)
+> predates the `Backend` → `LLMServer` rename, ADR-0009 (the activation-operations
+> seam), and the unified `Stop`/`Unload` entry points. The validated spec is now
+> **Part B, Items 10–15** of
+> [`docs/plans/2026-07-19-starting-stop-and-integration-tests.md`](docs/plans/2026-07-19-starting-stop-and-integration-tests.md):
+> shared helpers, llamacpp/Ollama/LM Studio lifecycle suites, Makefile
+> `test`/`test-integration`/`test-all` targets, and the docs pass. Notable delta:
+> the llamacpp suite drives the real in-package start path (`StartServer`) instead
+> of re-implementing `exec.Command`, and adds the ADR-0010 stop-while-Starting
+> scenario. The superseded text also covered Makefile changes, a files table, and
+> verification steps — all owned by that plan now.

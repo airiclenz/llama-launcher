@@ -68,7 +68,8 @@
 
 ## Part B — Integration-test layer (Layer 2 of `backend-tests-plan.md`)
 
-- [ ] **9. Re-point the stale plan doc** — `backend-tests-plan.md`
+- [x] **9. Re-point the stale plan doc** — `backend-tests-plan.md` — ✅ DONE (2026-07-19)
+  - NOTES (2026-07-19): the replacement span is wider than the literal "## Layer 2" section — the trailing "Makefile Changes", "Files to Create/Modify", and "Verification" sections were the same superseded Layer-2 spec (Items 14–15 and this plan's Verification own them now) and folded into the pointer; the Layer-1 rows they carried were already fully listed in the kept Layer-1 section. A one-line Status blockquote was also added under the H1 so the doc is re-pointed at first glance.
   - Its Layer-2 section (2026-05-20) predates the `Backend`→`LLMServer` rename, ADR-0009, and the unified `Stop`/`Unload` entry points. Replace that section with a short pointer to this plan (Items 10–15 are the validated spec). Leave Layer 1 (shipped) as historical record.
 
 - [ ] **10. Shared integration helpers** — `internal/launcher/integration_test.go` (new, `//go:build integration`)
