@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,31 @@ func captureStdout(t *testing.T, fn func()) string {
 	return string(data)
 }
 
+// captureStderr runs fn with os.Stderr redirected to a pipe and returns
+// everything fn wrote. Not safe for parallel tests — os.Stderr is process
+// state — so callers must not call t.Parallel().
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+	os.Stderr = writer
+	defer func() { os.Stderr = original }()
+
+	fn()
+
+	writer.Close()
+	os.Stderr = original
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("reading captured stderr: %v", err)
+	}
+	return string(data)
+}
+
 // newFakeLlamaCppServer returns an httptest server that passes the llamacpp
 // backend's body-discriminating health check and 404s everything else.
 func newFakeLlamaCppServer(t *testing.T) *httptest.Server {
@@ -68,6 +94,46 @@ func decodeStatusJSON(t *testing.T, out string) []statusJSONEntry {
 		t.Fatalf("unmarshalling status JSON %q: %v", out, err)
 	}
 	return entries
+}
+
+// TestCmdStart_ManagedDefaultWithoutProfileFailsFast asserts that a bare
+// `start` with a managed default backend (llamacpp) fails fast with the
+// configuration-error exit code and an actionable message instead of
+// forking a llama-server that would exit immediately for lack of a model
+// (ADR-0003: the model is baked into the start arguments). PATH is blanked
+// so a regression fails at the llama-server binary lookup (exit 3) rather
+// than forking a real binary.
+func TestCmdStart_ManagedDefaultWithoutProfileFailsFast(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	host := "127.0.0.1"
+	port := 1 // a port nothing listens on
+
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("llamacpp"),
+		Host:   &host,
+		Port:   &port,
+	}
+
+	var code int
+	errOut := captureStderr(t, func() {
+		_ = captureStdout(t, func() { code = cmdStart(cfg, nil) })
+	})
+
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 (configuration error)", code)
+	}
+	if !strings.Contains(errOut, "requires a profile") {
+		t.Errorf("stderr = %q, want it to say the backend requires a profile", errOut)
+	}
+	if !strings.Contains(errOut, "--profile") {
+		t.Errorf("stderr = %q, want it to name the --profile flag", errOut)
+	}
 }
 
 // TestCmdStatusJSON_ListsEveryInstanceOfABackend runs two fake llamacpp

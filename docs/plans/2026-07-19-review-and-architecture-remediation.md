@@ -425,7 +425,7 @@ CHANGELOG.
   visible) as a NOTES line. `go build ./...`, `go vet ./...`.
 - **Docs:** `CHANGELOG.md` (Fixed).
 
-## 12. Fail fast on `start`/`start_server` for a managed backend without a profile
+## 12. Fail fast on `start`/`start_server` for a managed backend without a profile — ✅ DONE (2026-07-19)
 
 - **Severity:** Medium. Bare `start` cannot work for llamacpp (the default shipped
   backend) yet fails with an opaque process-exit error, and the MCP tool description

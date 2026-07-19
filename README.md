@@ -451,7 +451,7 @@ When more than one instance is running, the relevant actions (stop, unload, show
 ```bash
 llama-launcher load <profile> [--restart]   # Activate a profile (no-op if already active; --restart forces)
 llama-launcher unload [profile]             # Unload model from the matching instance
-llama-launcher start [--profile p]          # Start server (optionally with a profile)
+llama-launcher start [--profile p]          # Start server without a model (llamacpp requires --profile)
 llama-launcher stop [target]                # Stop a server (target = host:port or backend name)
 llama-launcher status [--json]              # Show all running instances (--json for structured output)
 llama-launcher list [--json]                # List available profiles (--json for structured output)

@@ -241,6 +241,18 @@ func cmdStart(cfg *Config, args []string) int {
 		return 2
 	}
 
+	// A managed server bakes the Model into its start arguments (ADR-0003),
+	// so there is nothing to start without a profile — forking anyway would
+	// only die with "--model is required". Fail fast instead.
+	if _, isManaged := b.(ManagedLLMServer); isManaged {
+		fmt.Fprintf(
+			os.Stderr,
+			"Error: %s requires a profile: llama-launcher start --profile <name>\n",
+			serverName,
+		)
+		return 2
+	}
+
 	fmt.Printf("Starting %s...\n", b.DisplayName())
 	defaults := cfg.Defaults
 	applyBackendFallbacks(&defaults, cfg, serverName, b)
