@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.6
 
 This section describes what changed relative to the released 1.4.5, which shipped an independent remediation of the same 2026-07-06 review findings. Where both efforts fixed the same defect, the stronger variant was kept; entries below cover only behaviour that differs from 1.4.5 as released.
 
