@@ -16,7 +16,7 @@ test:
 	go test ./...
 
 test-integration:
-	go test -tags=integration -timeout 5m -v ./internal/launcher/
+	go test -tags=integration -count=1 -timeout 5m -v ./internal/launcher/
 
 test-all: test test-integration
 
