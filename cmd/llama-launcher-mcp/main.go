@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -58,7 +59,18 @@ func main() {
 	fmt.Printf("  allow: %s\n", describeAllow(cfg.allow))
 	fmt.Printf("  cli:   %s%s\n", cfg.llamaLauncherBin, readOnlySuffix(cfg.readOnly))
 
-	srv := &http.Server{Addr: cfg.listen, Handler: mux}
+	// Bound every connection phase so a stuck or hostile client cannot hold
+	// the listener open indefinitely. Control-plane requests are small, so
+	// header reads and idle keep-alives get short windows; WriteTimeout must
+	// outlast the slowest tool call (load_profile waits up to 5 minutes for a
+	// model load, plus health-check and stop grace periods).
+	srv := &http.Server{
+		Addr:              cfg.listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      10 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)

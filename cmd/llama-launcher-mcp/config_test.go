@@ -147,3 +147,62 @@ func TestRunForwardsConfigPath(t *testing.T) {
 		t.Errorf("args = %q, want %q", got, want)
 	}
 }
+
+// A fake CLI that floods stdout with more than the cap must come back as the
+// capped prefix plus a truncation notice, not the full unbounded output.
+func TestRunCapsOversizedOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flood")
+	script := "#!/bin/sh\nyes flood | head -c " + itoa(2*maxCapturedOutput) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config{llamaLauncherBin: path}
+	res := cfg.run(context.Background(), "logs")
+	if res.IsError {
+		t.Fatal("truncated output should still be a normal result, not an error")
+	}
+	got := resultText(t, res)
+	if maxLen := maxCapturedOutput + len(truncationNotice) + 1; len(got) > maxLen {
+		t.Errorf("output length = %d, want <= %d", len(got), maxLen)
+	}
+	if !strings.HasSuffix(got, truncationNotice) {
+		t.Errorf("output does not end with truncation notice %q; tail = %q", truncationNotice, got[len(got)-80:])
+	}
+}
+
+func TestLimitedWriter(t *testing.T) {
+	tests := []struct {
+		name      string
+		limit     int
+		writes    []string
+		want      string
+		truncated bool
+	}{
+		{"under cap", 10, []string{"ab", "cd"}, "abcd", false},
+		{"exactly cap is not truncation", 5, []string{"abcde"}, "abcde", false},
+		{"over cap in one write", 5, []string{"abcdefgh"}, "abcde", true},
+		{"over cap across writes", 6, []string{"abcd", "efgh"}, "abcdef", true},
+		{"writes after cap are discarded", 5, []string{"abcde", "fgh"}, "abcde", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &limitedWriter{limit: tt.limit}
+			for _, s := range tt.writes {
+				n, err := w.Write([]byte(s))
+				if err != nil {
+					t.Fatalf("Write(%q) error: %v", s, err)
+				}
+				if n != len(s) {
+					t.Errorf("Write(%q) = %d, want %d (must report full consumption)", s, n, len(s))
+				}
+			}
+			if got := w.b.String(); got != tt.want {
+				t.Errorf("content = %q, want %q", got, tt.want)
+			}
+			if w.truncated != tt.truncated {
+				t.Errorf("truncated = %v, want %v", w.truncated, tt.truncated)
+			}
+		})
+	}
+}
