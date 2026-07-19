@@ -19,6 +19,11 @@ var errUserQuit = errors.New("quit")
 // rebuilds instead of keeping the stale item list on screen.
 var errMenuStale = errors.New("menu stale")
 
+// startingLabel marks a Starting instance (ADR-0010) wherever the menu
+// renders instances — the process is up and the address bound, but the
+// health check does not pass yet.
+const startingLabel = "starting…"
+
 // RunInteractiveMenu presents a menu based on current server state.
 // When auto_close is false, the menu re-displays after each action.
 func RunInteractiveMenu(cfg *Config) error {
@@ -293,13 +298,7 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 	if len(running) == 1 {
 		target = running[0]
 	} else {
-		items := make([]menuItem, len(running))
-		for i, inst := range running {
-			items[i] = menuItem{
-				Label:       backendDisplayName(inst.Backend),
-				Description: inst.Addr(),
-			}
-		}
+		items := stopTargetItems(running)
 		title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 		headerFn := func() ([]string, bool) {
 			return []string{"Select a server to stop"}, false
@@ -327,6 +326,24 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 		fmt.Printf("  Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
 	}
 	return nil
+}
+
+// stopTargetItems builds the selection rows for the multiple-servers stop
+// menu. A Starting instance (ADR-0010) is a first-class stop target and is
+// labelled so the user knows the stop kills an in-flight model load.
+func stopTargetItems(instances []*RunningInstance) []menuItem {
+	items := make([]menuItem, len(instances))
+	for i, inst := range instances {
+		desc := inst.Addr()
+		if inst.Starting {
+			desc += " · " + startingLabel
+		}
+		items[i] = menuItem{
+			Label:       backendDisplayName(inst.Backend),
+			Description: desc,
+		}
+	}
+	return items
 }
 
 // renderStopSteps clears the menu and prints the steps a completed
@@ -667,9 +684,14 @@ func serverStatusLines(cfg *Config, instances []*RunningInstance) []string {
 		}
 		for _, inst := range running {
 			detail := inst.Addr()
-			if inst.ActiveProfile != "" {
+			switch {
+			case inst.Starting:
+				// A Starting instance names no profile or model (ADR-0010) —
+				// the label is the whole detail.
+				detail += " · " + cDim + startingLabel + cReset
+			case inst.ActiveProfile != "":
 				detail += " · " + fmt.Sprintf("%s%s%s", cBoldLightGray, profileDisplayName(cfg, inst.ActiveProfile), cReset)
-			} else if inst.ActiveModel != "" {
+			case inst.ActiveModel != "":
 				detail += " · " + inst.ActiveModel
 			}
 			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
@@ -779,12 +801,16 @@ func runLoadedMenuSimple(cfg *Config, inst *RunningInstance) error {
 func runIdleMenuSimple(cfg *Config, inst *RunningInstance, names []string) error {
 	fmt.Printf("\nllama-launcher %s\n\n", Version)
 	displayName := backendDisplayName(inst.Backend)
+	status := "running (no model)"
+	if inst.Starting {
+		status = startingLabel
+	}
 	if inst.PID > 0 {
-		fmt.Printf("  Status:  running (no model)\n  Server:  %s · %s:%d · PID %d · Uptime %s\n\n  Load a profile:\n\n",
-			displayName, inst.Host, inst.Port, inst.PID, formatUptime(inst.Uptime()))
+		fmt.Printf("  Status:  %s\n  Server:  %s · %s:%d · PID %d · Uptime %s\n\n  Load a profile:\n\n",
+			status, displayName, inst.Host, inst.Port, inst.PID, formatUptime(inst.Uptime()))
 	} else {
-		fmt.Printf("  Status:  running (no model)\n  Server:  %s · %s:%d\n\n  Load a profile:\n\n",
-			displayName, inst.Host, inst.Port)
+		fmt.Printf("  Status:  %s\n  Server:  %s · %s:%d\n\n  Load a profile:\n\n",
+			status, displayName, inst.Host, inst.Port)
 	}
 	simpleItems := buildSimpleProfileLines(cfg, names)
 	for i, line := range simpleItems {

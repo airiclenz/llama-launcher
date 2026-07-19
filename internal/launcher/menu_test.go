@@ -1,6 +1,9 @@
 package launcher
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -302,6 +305,104 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestDoLoadProfile_RefusesStartingOccupant verifies the menu's load and
+// model-swap actions run through the same ADR-0010 refusal as the CLI:
+// doLoadProfile (the funnel behind both) calls LoadProfile with
+// restart=false, so a menu load onto a Starting address refuses with the
+// stop/--restart guidance instead of displacing the in-flight model load.
+// Not parallel: captureStdout swaps os.Stdout.
+func TestDoLoadProfile_RefusesStartingOccupant(t *testing.T) {
+	srv := newFakeStartingLlamaCppServer(t)
+	cfg := startingCfg(t, "llamacpp", addrFromURL(t, srv.URL))
+	modelPath := filepath.Join(t.TempDir(), "model.gguf")
+	if err := os.WriteFile(modelPath, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Profiles["big"] = Profile{Model: modelPath}
+
+	var err error
+	_ = captureStdout(t, func() { err = doLoadProfile(cfg, "big") })
+
+	if err == nil {
+		t.Fatal("doLoadProfile succeeded, want the Starting-occupant refusal")
+	}
+	if !strings.Contains(err.Error(), "--restart") || !strings.Contains(err.Error(), "llama-launcher stop") {
+		t.Errorf("refusal lacks the stop/--restart guidance: %v", err)
+	}
+}
+
+// TestServerStatusLines_StartingInstance pins the menu header rendering of
+// a Starting instance (ADR-0010): the instance appears with the starting…
+// label instead of being invisible, while a healthy instance keeps its
+// model detail and gains no label.
+func TestServerStatusLines_StartingInstance(t *testing.T) {
+	t.Parallel()
+
+	noMem := false
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+		},
+		ShowMemoryStatus: &noMem,
+	}
+	instances := []*RunningInstance{
+		{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, Starting: true},
+		{Backend: "ollama", Host: "127.0.0.1", Port: 11434, ActiveModel: "llama3"},
+	}
+
+	lines := serverStatusLines(cfg, instances)
+
+	var startingLine, healthyLine string
+	for _, line := range lines {
+		if contains(line, "127.0.0.1:8080") {
+			startingLine = line
+		}
+		if contains(line, "127.0.0.1:11434") {
+			healthyLine = line
+		}
+	}
+	if startingLine == "" {
+		t.Fatalf("Starting instance missing from header lines: %v", lines)
+	}
+	if !contains(startingLine, startingLabel) {
+		t.Errorf("Starting instance line lacks %q: %q", startingLabel, startingLine)
+	}
+	if healthyLine == "" {
+		t.Fatalf("healthy instance missing from header lines: %v", lines)
+	}
+	if contains(healthyLine, startingLabel) {
+		t.Errorf("healthy instance line wrongly labelled %q: %q", startingLabel, healthyLine)
+	}
+	if !contains(healthyLine, "llama3") {
+		t.Errorf("healthy instance line lost its model detail: %q", healthyLine)
+	}
+}
+
+// TestStopTargetItems_LabelsStartingInstance pins the stop sub-menu listing
+// (ADR-0010): a Starting instance is offered as a stop target and labelled,
+// so the user knows the stop kills an in-flight model load.
+func TestStopTargetItems_LabelsStartingInstance(t *testing.T) {
+	t.Parallel()
+
+	instances := []*RunningInstance{
+		{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, Starting: true},
+		{Backend: "ollama", Host: "127.0.0.1", Port: 11434, ActiveModel: "llama3"},
+	}
+
+	items := stopTargetItems(instances)
+
+	if len(items) != len(instances) {
+		t.Fatalf("got %d items, want %d", len(items), len(instances))
+	}
+	if !contains(items[0].Description, "127.0.0.1:8080") || !contains(items[0].Description, startingLabel) {
+		t.Errorf("Starting target not labelled: %+v", items[0])
+	}
+	if contains(items[1].Description, startingLabel) {
+		t.Errorf("healthy target wrongly labelled: %+v", items[1])
+	}
 }
 
 func TestFormatProfileParams_RedactsAPIKey(t *testing.T) {
