@@ -31,12 +31,22 @@ func boundedBody(body io.Reader) io.Reader {
 // local port is untrusted, and the display path passes escape sequences
 // through unmodified, so a model name carrying ANSI/OSC escapes could spoof
 // the screen or title, or write the clipboard via OSC 52, when printed.
-// Removes the C0 range (including ESC), DEL, and the C1 range
-// (U+0080–U+009F, which some terminals also interpret as controls);
-// printable text passes through unchanged.
+// Removes the C0 range (including ESC), DEL, the C1 range (U+0080–U+009F,
+// which some terminals also interpret as controls), and the Unicode
+// directional-formatting characters (Trojan-Source class: U+061C,
+// U+200E/U+200F, U+202A–U+202E, U+2066–U+2069), which can visually reorder
+// or mask displayed text without any control byte; printable text passes
+// through unchanged.
 func sanitizeServerString(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+		switch {
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+			return -1
+		case r == 0x061c || r == 0x200e || r == 0x200f:
+			return -1
+		case r >= 0x202a && r <= 0x202e:
+			return -1
+		case r >= 0x2066 && r <= 0x2069:
 			return -1
 		}
 		return r

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +144,46 @@ func TestEndToEndAllowlistBlocksConnect(t *testing.T) {
 	if _, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL, MaxRetries: -1}, nil); err == nil {
 		t.Fatal("expected connect to fail for non-allowlisted client")
 	}
+}
+
+// TestMaxBytesHandlerCapsRequestBody pins the request-ingress cap: the MCP
+// streamable handler buffers the whole POST body in memory, so an allowlisted
+// but hostile client must not be able to feed it an unbounded body. The
+// wrapped handler's read must fail once the limit is crossed, while a body
+// within the limit passes through intact.
+func TestMaxBytesHandlerCapsRequestBody(t *testing.T) {
+	t.Parallel()
+
+	const limit = 64
+
+	var gotErr error
+	var gotBody []byte
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, gotErr = io.ReadAll(r.Body)
+	})
+	srv := httptest.NewServer(maxBytesHandler(next, limit))
+	defer srv.Close()
+
+	t.Run("oversized body fails the read", func(t *testing.T) {
+		resp, err := http.Post(srv.URL, "application/json", strings.NewReader(strings.Repeat("x", 4*limit)))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		resp.Body.Close()
+		if gotErr == nil {
+			t.Errorf("handler read %d bytes with no error, want the cap to fail the read", len(gotBody))
+		}
+	})
+
+	t.Run("body within the limit passes intact", func(t *testing.T) {
+		gotErr, gotBody = nil, nil
+		resp, err := http.Post(srv.URL, "application/json", strings.NewReader("{\"ok\":true}"))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		resp.Body.Close()
+		if gotErr != nil || string(gotBody) != "{\"ok\":true}" {
+			t.Errorf("read = %q, %v; want the full body and no error", gotBody, gotErr)
+		}
+	})
 }

@@ -115,6 +115,12 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 	}
 	logFile.Close()
 
+	// Reap the detached child when it exits so it cannot linger as a zombie
+	// in a long-lived launcher process (the interactive menu): a zombie still
+	// satisfies kill(pid, 0), which would stall a later stop's SIGTERM →
+	// SIGKILL escalation against an already-dead process.
+	go func() { _ = cmd.Wait() }()
+
 	b.lastPID = cmd.Process.Pid
 	b.lastLogFile = logPath
 	return nil

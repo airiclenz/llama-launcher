@@ -53,7 +53,7 @@ func main() {
 	}, nil)
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", allowlistMiddleware(cfg.allow, mcpHandler))
+	mux.Handle("/mcp", allowlistMiddleware(cfg.allow, maxBytesHandler(mcpHandler, maxRequestBody)))
 
 	fmt.Printf("llama-launcher-mcp %s listening on http://%s/mcp\n", Version, cfg.listen)
 	fmt.Printf("  allow: %s\n", describeAllow(cfg.allow))
@@ -61,12 +61,14 @@ func main() {
 
 	// Bound every connection phase so a stuck or hostile client cannot hold
 	// the listener open indefinitely. Control-plane requests are small, so
-	// header reads and idle keep-alives get short windows; WriteTimeout must
-	// outlast the slowest tool call (load_profile waits up to 5 minutes for a
-	// model load, plus health-check and stop grace periods).
+	// full-request reads, header reads, and idle keep-alives get short
+	// windows; WriteTimeout must outlast the slowest tool call (load_profile
+	// waits up to 5 minutes for a model load, plus health-check and stop
+	// grace periods).
 	srv := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           mux,
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
@@ -187,4 +189,19 @@ func argsFor(sub, arg string) []string {
 		return []string{sub}
 	}
 	return []string{sub, arg}
+}
+
+// maxRequestBody caps how much of a request body the MCP handler will read.
+// Control-plane calls are small JSON-RPC payloads; without a cap the
+// streamable handler buffers the entire body in memory, so an allowlisted
+// but hostile client could exhaust the adapter's memory with one huge POST.
+const maxRequestBody = 1 << 20
+
+// maxBytesHandler wraps next so every request body is capped at limit bytes;
+// a read past the limit fails and MaxBytesReader answers 413 for the handler.
+func maxBytesHandler(next http.Handler, limit int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		next.ServeHTTP(w, r)
+	})
 }

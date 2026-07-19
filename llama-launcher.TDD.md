@@ -597,7 +597,7 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 
 1. Resolve the address from `servers` map (if host:port value) or `LLMServer.DefaultAddr()`.
 2. Call `LLMServer.HealthCheck(addr)` to verify server is reachable.
-3. If not reachable, call `LLMServer.TryStart()` (e.g. `lms server start`, `ollama serve`).
+3. If not reachable, call `LLMServer.TryStart()` (e.g. `lms server start`, `ollama serve`). A forked `ollama serve` child is reaped by a `cmd.Wait()` goroutine so it cannot linger as a zombie in a long-lived launcher process (a zombie still satisfies `kill(pid, 0)` and would stall a later stop's signal escalation).
 4. Poll health check until successful (up to 15 seconds) or fail with a user-friendly message.
 5. Print confirmation.
 
@@ -875,7 +875,7 @@ The adapter is a thin shim: it runs on the host, exposes an MCP server over Stre
 
 It ships with the CLI: `make build-mcp` builds it locally, and the Homebrew formula installs it alongside `llama-launcher` (§13). It is inert until started — installing it adds no resident process.
 
-The HTTP listener sets connection timeouts so a stuck or hostile client cannot hold it open indefinitely: `ReadHeaderTimeout` 10 s, `IdleTimeout` 2 min, and `WriteTimeout` 10 min — the write window is generous because it must outlast the slowest tool call (`load_profile` waits up to 5 minutes for a model load, plus health-check and stop grace periods).
+The HTTP listener sets connection timeouts so a stuck or hostile client cannot hold it open indefinitely: `ReadTimeout` 30 s, `ReadHeaderTimeout` 10 s, `IdleTimeout` 2 min, and `WriteTimeout` 10 min — the write window is generous because it must outlast the slowest tool call (`load_profile` waits up to 5 minutes for a model load, plus health-check and stop grace periods). Request bodies are capped at 1 MiB via `http.MaxBytesReader` before they reach the MCP handler, which buffers the whole body in memory — control-plane calls are small JSON-RPC payloads, so an allowlisted but hostile client cannot exhaust the adapter's memory with one huge POST.
 
 ### 15.2 Tool surface
 
