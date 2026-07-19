@@ -116,11 +116,14 @@ var (
 )
 
 // run executes `llama-launcher [--config path] <args...>` and maps the result
-// to an MCP tool result. stdout is returned as the tool's text content; when
-// the command exits non-zero with no stdout, the result is flagged as an error
-// carrying stderr. Several subcommands (e.g. `status`) exit non-zero to signal
-// an informational negative while still printing valid JSON on stdout — those
-// are returned as normal content so the caller keeps the data.
+// to an MCP tool result, keyed off the CLI's exit code: 0 is success and
+// stdout becomes the tool's text content; 1 is an informational negative
+// (e.g. `status --json` exits 1 when nothing is running but still emits the
+// JSON array) and is returned as normal content so the caller keeps the data;
+// anything else — exit >= 2, a signal, or a failure to run the CLI at all —
+// is flagged as a tool error carrying stderr, with stdout appended for
+// context. Stdout emptiness is deliberately not the discriminator: mutating
+// subcommands print progress to stdout before they can fail.
 func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
 	full := args
 	if c.configPath != "" {
@@ -136,10 +139,13 @@ func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
 	out := strings.TrimRight(stdout.String(), "\n")
 	errOut := strings.TrimRight(stderr.String(), "\n")
 
-	if err != nil && out == "" {
+	if err != nil && exitCode(err) != 1 {
 		msg := errOut
 		if msg == "" {
 			msg = err.Error()
+		}
+		if out != "" {
+			msg += "\n" + out
 		}
 		return &mcp.CallToolResult{
 			IsError: true,
@@ -160,6 +166,17 @@ func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 	}
+}
+
+// exitCode extracts the process exit code from a cmd.Run error. It returns -1
+// when the process did not run or was terminated by a signal, so those cases
+// never masquerade as the informational exit 1.
+func exitCode(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 func readOnlySuffix(ro bool) string {

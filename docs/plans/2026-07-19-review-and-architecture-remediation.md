@@ -298,7 +298,7 @@ supported for lmstudio — one field beyond the three the item names.
   `go test ./internal/launcher/ -run TestPrimaryInstance` passes.
 - **Docs:** `CHANGELOG.md` (Fixed).
 
-## 8. Flag failed MCP mutating calls as tool errors
+## 8. Flag failed MCP mutating calls as tool errors — ✅ DONE (2026-07-19)
 
 - **Severity:** Medium (security-adjacent). A failed `load`/`stop`/`unload` currently
   returns a success-shaped result to the untrusted agent.

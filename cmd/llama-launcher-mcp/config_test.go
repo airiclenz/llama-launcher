@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -85,6 +86,37 @@ func TestRunNonZeroWithStdoutIsNotError(t *testing.T) {
 		t.Error("non-zero exit with stdout should not be an error")
 	}
 	if got := resultText(t, res); got != `[]` {
+		t.Errorf("text = %q", got)
+	}
+}
+
+// A mutating subcommand prints progress to stdout before it can fail, so a
+// real failure (exit >= 2) must be flagged as a tool error even when stdout is
+// non-empty — keyed off the exit code, not stdout emptiness.
+func TestRunFailureWithProgressOnStdoutIsError(t *testing.T) {
+	cfg := &config{llamaLauncherBin: fakeCLI(t, "  Loading qwen\n", "Error: failed to load model", 3)}
+	res := cfg.run(context.Background(), "load", "qwen")
+	if !res.IsError {
+		t.Fatal("exit 3 with progress on stdout must be flagged as error")
+	}
+	got := resultText(t, res)
+	if !strings.Contains(got, "Error: failed to load model") {
+		t.Errorf("text = %q, want it to contain the stderr message", got)
+	}
+	if !strings.Contains(got, "Loading qwen") {
+		t.Errorf("text = %q, want it to carry stdout for context", got)
+	}
+}
+
+// Exit 1 is an informational negative per the CLI's exit-code contract, even
+// when the message lands on stderr rather than stdout.
+func TestRunExitOneWithStderrOnlyIsNotError(t *testing.T) {
+	cfg := &config{llamaLauncherBin: fakeCLI(t, "", "no server running", 1)}
+	res := cfg.run(context.Background(), "status")
+	if res.IsError {
+		t.Error("exit 1 should not be flagged as error")
+	}
+	if got := resultText(t, res); got != "no server running" {
 		t.Errorf("text = %q", got)
 	}
 }
