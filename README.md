@@ -30,8 +30,10 @@ This installs both the `llama-launcher` CLI and the optional `llama-launcher-mcp
 Requires Go 1.26+.
 
 ```bash
-make install
+make build      # => ./llama-launcher, for local testing
 ```
+
+Installation is deliberately Homebrew-only: `brew install airiclenz/tap/llama-launcher` (upgrade with `brew upgrade llama-launcher`). `make install` does not copy anything — it just points you there.
 
 ## Quick start
 
@@ -509,13 +511,17 @@ Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no t
 Requires Go 1.26+.
 
 ```bash
-make build      # Build the binary
-make build-mcp  # Build the optional MCP control-plane adapter (see above)
-make install    # Build + install to ~/.local/bin
-make clean      # Remove the binaries
+make build             # Build the binary (for local testing)
+make build-mcp         # Build the optional MCP control-plane adapter (see above)
+make test              # Unit tests (go test ./...)
+make test-integration  # Real-backend integration suite (host only; see below)
+make test-all          # Both test layers
+make clean             # Remove the binaries
 ```
 
-The version is read from the `VERSION` file and injected at build time.
+The version is read from the `VERSION` file and injected at build time. Installing the binaries is done via Homebrew (`brew install airiclenz/tap/llama-launcher`, upgrade with `brew upgrade llama-launcher`); `make install` deliberately points there instead of copying anything.
+
+`make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA` (already-pulled model name), and/or `INTEGRATION_MODEL_LMSTUDIO` (already-downloaded model name) to exercise the model load/unload steps. Note that the LM Studio test drives the single app-owned LM Studio server, so it can interfere with an interactive LM Studio session.
 
 ## Architecture
 
