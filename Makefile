@@ -4,13 +4,21 @@ VERSION    := $(shell cat VERSION)
 LDFLAGS    := -ldflags "-X github.com/airiclenz/llama-launcher/internal/launcher.Version=$(VERSION)"
 MCP_LDFLAGS := -ldflags "-X main.Version=$(VERSION)"
 
-.PHONY: build build-mcp install clean
+.PHONY: build build-mcp test test-integration test-all install clean
 
 build:
 	go build $(LDFLAGS) -o $(BINARY) .
 
 build-mcp:
 	go build $(MCP_LDFLAGS) -o $(MCP_BINARY) ./cmd/llama-launcher-mcp
+
+test:
+	go test ./...
+
+test-integration:
+	go test -tags=integration -timeout 5m -v ./internal/launcher/
+
+test-all: test test-integration
 
 install:
 	@echo "Install via Homebrew:  brew upgrade llama-launcher"
