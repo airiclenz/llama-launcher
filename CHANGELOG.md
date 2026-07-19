@@ -13,6 +13,7 @@
 ### Fixed
 
 - **A failed stop of a still-loading server is no longer reported as success.** "Stopped" was verified as "the health check fails afterwards" — which a *survived* still-loading server also satisfies, since it keeps answering 503 — so a stop that did not actually kill the process could print a success confirmation. Stop verification now counts a 503-answering survivor as still reachable: stopped means neither healthy nor still starting up ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)).
+- **`llama-launcher config` with no subcommand now advertises all three subcommands.** The usage message listed only `validate`, although `init` and `reset` are dispatched by the same command; all three are now listed, matching the top-level usage text. Three stale doc lines are corrected alongside (docs only): the TDD's ADR index range now reads 0001–0010, its future-considerations list drops the Homebrew-formula bullet (shipped in 1.4.4 and documented in §13), and ADR-0009 no longer describes the unified `Unload`/`Stop` entry points as future work.
 - **README and TDD no longer claim `make install` copies the binary to `~/.local/bin`.** The `install` target has been a deliberate Homebrew pointer (print `brew upgrade llama-launcher` guidance, exit non-zero) since the formula shipped, but both documents still described the old copy-to-`~/.local/bin` behaviour. They now point at `brew install airiclenz/tap/llama-launcher` / `brew upgrade llama-launcher`, with `make build` for local testing. Docs only, no code change.
 
 ## 1.4.6
