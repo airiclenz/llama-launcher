@@ -82,9 +82,9 @@ func startRealLlamaServer(t *testing.T, logDir, model string) *RunningInstance {
 
 // killServerOnCleanup registers best-effort teardown for inst on t: a
 // normal Stop first, then SIGKILL for anything that survived, so a failed
-// test does not leave a llama-server running on the host. Setsid at spawn
-// gives the child PGID == PID, so the group is swept along with the
-// process itself.
+// test does not leave a server running on the host. Shared by the ollama
+// suite too — both backends spawn with Setsid, which gives the child
+// PGID == PID, so the group is swept along with the process itself.
 func killServerOnCleanup(t *testing.T, inst *RunningInstance) {
 	t.Helper()
 	t.Cleanup(func() {
