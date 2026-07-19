@@ -361,7 +361,7 @@ func TestWaitForHealth(t *testing.T) {
 // managed start whose health wait expires: the spawned server is left
 // running (killing a legitimately slow model load would be worse) and
 // the error must name its PID and log path so the user can watch or
-// stop it.
+// stop it — via `llama-launcher stop`, never a manual kill (ADR-0010).
 func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
 	t.Parallel()
 
@@ -383,24 +383,29 @@ func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
 		"/logs/llamacpp-20260719-120000.log",
 		"left running",
 		"llama-launcher logs llamacpp",
-		"kill 4242",
+		"llama-launcher stop llamacpp",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
 	}
+	if strings.Contains(err.Error(), "kill ") {
+		t.Errorf("error %q still suggests a manual kill; ADR-0010 guidance is `llama-launcher stop`", err)
+	}
 }
 
-// TestLoadProfile_RefusesDoubleSpawnWhileStartingUp covers the retry
-// after a health-wait timeout: while the earlier-spawned llama-server is
-// still loading its model (health answers 503), a second load — with or
-// without --restart — must neither kill it nor fork a duplicate onto the
-// occupied port; it refuses with guidance instead.
+// TestLoadProfile_RefusesDoubleSpawnWhileStartingUp drives the real
+// llamacpp StartingUp probe against a live 503 server (llama-server
+// answers every request with 503 while loading) through loadProfile
+// (ADR-0010): a plain load refuses with guidance and never touches the
+// occupant; --restart attempts the displacement stop first, and when the
+// occupant survives the stop (this test's stop is a recorder), the
+// StartingUp backstop inside startManagedServer still refuses to fork a
+// duplicate onto the occupied port.
 func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 	// Not parallel: rewrites PATH.
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// llama-server answers every request with 503 while loading.
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(`{"error":{"code":503,"message":"Loading model","type":"unavailable_error"}}`))
 	}))
@@ -422,24 +427,49 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 		ProfileParams: ProfileParams{Host: &host, Port: &port},
 	}
 
-	var stopped []string
-	// Empty PATH: if the refusal regresses, the managed start fails at the
-	// binary lookup with a distinguishable error instead of forking.
+	// Empty PATH: if a refusal regresses into a spawn attempt, the managed
+	// start fails at the binary lookup with a distinguishable error instead
+	// of forking.
 	t.Setenv("PATH", t.TempDir())
+	targetAddr := addrFromURL(t, srv.URL)
 
-	for _, restart := range []bool{false, true} {
-		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, restart, nil)
+	t.Run("plain load refuses without touching the occupant", func(t *testing.T) {
+		var stopped []string
+		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil)
 		if err == nil || !strings.Contains(err.Error(), "still starting up") {
-			t.Errorf("restart=%v: err = %v, want still-starting-up refusal", restart, err)
-			continue
+			t.Fatalf("err = %v, want still-starting-up refusal", err)
 		}
 		if strings.Contains(err.Error(), "server binary not found") {
-			t.Errorf("restart=%v: refusal must fire before the spawn attempt, got %v", restart, err)
+			t.Errorf("refusal must fire before the spawn attempt, got %v", err)
 		}
-	}
-	if len(stopped) != 0 {
-		t.Errorf("stopped addresses = %v, want none — a still-loading server is never killed", stopped)
-	}
+		for _, want := range []string{"llama-launcher stop llamacpp", "--restart"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("refusal %q missing the %q guidance", err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "kill ") {
+			t.Errorf("refusal %q still suggests a manual kill; ADR-0010 guidance is `llama-launcher stop`", err)
+		}
+		if len(stopped) != 0 {
+			t.Errorf("stopped addresses = %v, want none — a plain load never displaces a Starting occupant", stopped)
+		}
+	})
+
+	t.Run("restart stops first; a survived occupant still blocks the spawn", func(t *testing.T) {
+		var stopped []string
+		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, true, nil)
+		if want := []string{targetAddr}; !slices.Equal(stopped, want) {
+			t.Errorf("stopped addresses = %v, want %v — --restart displaces the Starting occupant", stopped, want)
+		}
+		// The recording stop left the 503 server alive, so the in-start
+		// backstop must refuse rather than fork onto the occupied port.
+		if err == nil || !strings.Contains(err.Error(), "still starting up") {
+			t.Fatalf("err = %v, want the startManagedServer backstop refusal", err)
+		}
+		if strings.Contains(err.Error(), "server binary not found") {
+			t.Errorf("backstop must fire before the spawn attempt, got %v", err)
+		}
+	})
 }
 
 // fakeOps is a pure in-memory activationOps: every operation records its
@@ -729,6 +759,131 @@ func TestLoadProfile_Orchestration_AutoUnload(t *testing.T) {
 		}
 		if len(f.stopped) != 0 || len(f.unloadedInstances) != 0 {
 			t.Errorf("stopped=%v unloaded=%v, want none with both flags off", f.stopped, f.unloadedInstances)
+		}
+	})
+}
+
+// TestLoadProfile_Orchestration_StartingOccupant pins the ADR-0010
+// activation matrix around Starting instances: a plain load onto a
+// Starting target refuses (same or different profile — a Starting
+// instance exposes no model that could tell them apart) and touches
+// nothing, --restart displaces the occupant (stop, then start, then
+// wait), the auto_stop_server sweep stops a Starting instance at another
+// address like any other, and auto_unload never touches a Starting
+// instance — it has no active model to unload.
+func TestLoadProfile_Orchestration_StartingOccupant(t *testing.T) {
+	t.Parallel()
+
+	const target = "127.0.0.1:8080"
+	startingOccupant := func() *RunningInstance {
+		return &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, Starting: true}
+	}
+
+	t.Run("plain load refuses regardless of profile", func(t *testing.T) {
+		t.Parallel()
+		for _, profile := range []*ResolvedProfile{
+			orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080),
+			orchProfile("llamacpp", "coder", "/models/coder-13b.gguf", "127.0.0.1", 8080),
+		} {
+			f := &fakeOps{
+				startingAddrs: map[string]bool{target: true},
+				instances:     []*RunningInstance{startingOccupant()},
+			}
+
+			_, started, err := loadProfile(f, &Config{}, profile, false, nil)
+
+			if err == nil || !strings.Contains(err.Error(), "still starting up") {
+				t.Errorf("profile %s: err = %v, want still-starting-up refusal", profile.Name, err)
+			}
+			if started {
+				t.Errorf("profile %s: started = true, want false", profile.Name)
+			}
+			if len(f.stopped) != 0 || len(f.started) != 0 {
+				t.Errorf("profile %s: stopped=%v started=%v, want neither — the sweep skips the target occupant and a plain load never displaces it",
+					profile.Name, f.stopped, f.started)
+			}
+		}
+	})
+
+	t.Run("--restart displaces: stop, start, wait", func(t *testing.T) {
+		t.Parallel()
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		f := &fakeOps{
+			startingAddrs: map[string]bool{target: true},
+			instances:     []*RunningInstance{startingOccupant()},
+		}
+
+		inst, started, err := loadProfile(f, &Config{}, profile, true, nil)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true for --restart displacement")
+		}
+		if want := []string{target}; !slices.Equal(f.stopped, want) {
+			t.Errorf("stopped = %v, want exactly %v (once, from the managed displacement)", f.stopped, want)
+		}
+		if want := []string{"chat"}; !slices.Equal(f.started, want) {
+			t.Errorf("started profiles = %v, want %v", f.started, want)
+		}
+		if want := []string{target}; !slices.Equal(f.waited, want) {
+			t.Errorf("waited = %v, want %v", f.waited, want)
+		}
+		if inst == nil || inst.ActiveProfile != "chat" || inst.ActiveModel != "/models/test-7b.gguf" {
+			t.Errorf("instance = %+v, want active profile and model set", inst)
+		}
+	})
+
+	t.Run("auto_stop_server sweeps a Starting instance at another address", func(t *testing.T) {
+		t.Parallel()
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		f := &fakeOps{
+			instances: []*RunningInstance{
+				{Backend: "llamacpp", Host: "127.0.0.1", Port: 8081, Starting: true},
+			},
+		}
+
+		_, started, err := loadProfile(f, &Config{}, profile, false, nil)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true")
+		}
+		if want := []string{"127.0.0.1:8081"}; !slices.Equal(f.stopped, want) {
+			t.Errorf("stopped = %v, want %v — the sweep includes Starting instances", f.stopped, want)
+		}
+	})
+
+	t.Run("auto_unload skips a Starting instance", func(t *testing.T) {
+		t.Parallel()
+		off := false
+		on := true
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		// An external-backend instance, so the managed-backend skip in
+		// shouldCrossServerUnload cannot mask the gate under test: a
+		// Starting instance reports no ActiveModel (ADR-0010), and that
+		// empty-model gate is what keeps auto_unload off it.
+		f := &fakeOps{
+			instances: []*RunningInstance{
+				{Backend: "ollama", Host: "127.0.0.1", Port: 11434, Starting: true},
+			},
+		}
+		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
+
+		_, started, err := loadProfile(f, cfg, profile, false, nil)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !started {
+			t.Error("started = false, want true")
+		}
+		if len(f.unloadedInstances) != 0 || len(f.stopped) != 0 {
+			t.Errorf("unloaded=%v stopped=%v, want neither for a Starting instance under auto_unload",
+				f.unloadedInstances, f.stopped)
 		}
 	})
 }
@@ -1447,8 +1602,9 @@ func TestStartServer_BinaryNotFound(t *testing.T) {
 // TestLoadProfile_Orchestration_WaitTimeout pins the managed health-wait
 // failure: when the started server never turns healthy, loadProfile reports
 // started=false and the error carries the recovery guidance — the spawned
-// server's PID, its log path, and the `kill` escape hatch — because the
-// server is deliberately left running (a large model may still be loading).
+// server's PID, its log path, and the `llama-launcher stop` escape hatch
+// (ADR-0010) — because the server is deliberately left running (a large
+// model may still be loading).
 func TestLoadProfile_Orchestration_WaitTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -1465,7 +1621,7 @@ func TestLoadProfile_Orchestration_WaitTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("loadProfile = nil error, want the health-wait timeout surfaced")
 	}
-	for _, want := range []string{"did not become healthy", "PID 4242", "/logs/fake.log", "kill 4242"} {
+	for _, want := range []string{"did not become healthy", "PID 4242", "/logs/fake.log", "llama-launcher stop llamacpp"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %v, want it to contain %q", err, want)
 		}

@@ -435,7 +435,10 @@ func (realOps) unloadModel(b LLMServer, addr, modelID string) error {
 // launcher queries the running server (llama-server /props) instead of
 // reading a persisted snapshot. For backends that do not expose their
 // parameters (Ollama, LM Studio), model-name match alone is enough for the
-// idempotency no-op. Pass restart=true to force re-activation.
+// idempotency no-op. Pass restart=true to force re-activation. A Starting
+// occupant at the target address (ADR-0010) is never displaced by a plain
+// load — the call refuses with guidance; with restart=true it is stopped
+// and replaced like a healthy one.
 func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
 	return loadProfile(realOps{}, cfg, profile, restart, progress)
 }
@@ -452,6 +455,7 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 	}
 
 	healthy := ops.healthy(b, targetAddr)
+	starting := ops.starting(b, targetAddr)
 
 	if !restart && healthy {
 		liveModel := ops.loadedModel(b, targetAddr)
@@ -505,7 +509,7 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 	}
 
 	if _, ok := b.(ManagedLLMServer); ok {
-		return loadProfileManaged(ops, cfg, profile, targetAddr, healthy, b, progress)
+		return loadProfileManaged(ops, cfg, profile, targetAddr, healthy, starting, restart, b, progress)
 	}
 	return loadProfileExternal(ops, cfg, profile, targetAddr, healthy, b, progress)
 }
@@ -706,8 +710,20 @@ func shouldCrossServerUnload(inst *RunningInstance, targetBackend string) bool {
 	return !isManaged
 }
 
-func loadProfileManaged(ops activationOps, cfg *Config, profile *ResolvedProfile, targetAddr string, healthy bool, b LLMServer, progress ProgressFunc) (*RunningInstance, bool, error) {
-	if healthy {
+// loadProfileManaged is the managed-backend arm of the activation: stop
+// the current occupant of the target address when there is one, start a
+// fresh server, and wait for it to turn healthy. A Starting occupant
+// (ADR-0010) is displaced only by an explicit --restart — a plain load
+// refuses with guidance instead of silently killing an in-flight model
+// load. The StartingUp guard inside startManagedServer stays as the
+// backstop for the race where an occupant appears between this decision
+// and the spawn.
+func loadProfileManaged(ops activationOps, cfg *Config, profile *ResolvedProfile, targetAddr string, healthy, starting, restart bool, b LLMServer, progress ProgressFunc) (*RunningInstance, bool, error) {
+	if starting && !restart {
+		return nil, false, stillStartingUpErr(cfg, b, targetAddr)
+	}
+
+	if healthy || starting {
 		reportStep(progress, "Stopping current server")
 		if _, err := ops.stop(targetAddr, nil); err != nil && !errors.Is(err, ErrNotRunning) {
 			return nil, false, fmt.Errorf("stopping current server: %w", err)
@@ -784,18 +800,22 @@ func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 // killing it would throw away a legitimately slow model load (a 30–70 GB
 // GGUF on a cold disk can exceed the wait window) — so the error names
 // its PID and log path instead of orphaning the process silently. A
-// retry while it is still loading is refused (see stillStartingUpErr); a
-// retry after it turns healthy is the idempotent no-op (ADR-0007).
+// plain retry while it is still loading is refused (see
+// stillStartingUpErr); a retry after it turns healthy is the idempotent
+// no-op (ADR-0007). Stopping a Starting server is the launcher's own job
+// now (ADR-0010), so the guidance points at `llama-launcher stop`, not
+// at a manual `kill`.
 func startupTimeoutErr(err error, inst *RunningInstance) error {
-	return fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `kill %d`",
-		err, inst.PID, inst.LogFile, inst.Backend, inst.PID)
+	return fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `llama-launcher stop %s`",
+		err, inst.PID, inst.LogFile, inst.Backend, inst.Backend)
 }
 
-// stillStartingUpErr builds the refusal for a managed start onto an
-// address where an earlier-spawned server is still coming up (the
-// startup probe answers "still loading"). PID and log-path details are
-// best-effort — the loading server fails its backend's health check, so
-// discovery cannot see it and the PID comes straight from lsof.
+// stillStartingUpErr builds the refusal for activating an address where
+// a server of the same managed backend is still coming up (Starting,
+// ADR-0010): neither a plain load nor a bare start displaces an
+// in-flight model load — only an explicit stop or --restart does. PID
+// and log-path details are best-effort — a Starting server cannot answer
+// a model list, so the PID comes straight from lsof.
 func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
 	pid, err := findListeningPID(addr)
 	if err != nil || pid <= 0 {
@@ -810,10 +830,7 @@ func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
 	if logFile := findManagedLogFile(cfg.LogDir, b.Name()); logFile != "" {
 		fmt.Fprintf(&sb, "\nLog: %s", logFile)
 	}
-	fmt.Fprintf(&sb, "\nWatch it with `llama-launcher logs %s` and retry once it is healthy", b.Name())
-	if pid > 0 {
-		fmt.Fprintf(&sb, ", or stop it with `kill %d`", pid)
-	}
+	fmt.Fprintf(&sb, "\nWatch it with `llama-launcher logs %s` and retry once it is healthy, stop it with `llama-launcher stop %s`, or pass `--restart` to replace it", b.Name(), b.Name())
 	return errors.New(sb.String())
 }
 
