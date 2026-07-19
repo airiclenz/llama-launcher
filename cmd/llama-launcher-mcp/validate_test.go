@@ -150,10 +150,11 @@ func TestEndToEndReadOnlyTailLogRejectsInjection(t *testing.T) {
 	}
 }
 
-// stop_server and unload_model forward a free-form argument as a CLI
-// positional (`stop [target]`, `unload [profile]`). Adversarial values must
-// be rejected in the adapter — before the CLI is ever invoked — so the CLI's
-// argument grammar is not the security boundary (same rule as tail_log).
+// stop_server, unload_model, and load_profile forward a free-form argument
+// as a CLI positional (`stop [target]`, `unload [profile]`, `load <name>`).
+// Adversarial values must be rejected in the adapter — before the CLI is
+// ever invoked — so the CLI's argument grammar is not the security boundary
+// (same rule as tail_log).
 func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 	bin, record := recordingCLI(t)
 	cfg := &config{llamaLauncherBin: bin}
@@ -174,6 +175,11 @@ func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 		{"unload_model", map[string]any{"profile": "; rm"}},
 		{"unload_model", map[string]any{"profile": "$(reboot)"}},
 		{"unload_model", map[string]any{"profile": "qwen --restart"}},
+		{"load_profile", map[string]any{"name": "-f"}},
+		{"load_profile", map[string]any{"name": "--restart"}},
+		{"load_profile", map[string]any{"name": "; rm"}},
+		{"load_profile", map[string]any{"name": "$(reboot)"}},
+		{"load_profile", map[string]any{"name": "qwen --restart"}},
 	}
 	for _, tc := range rejected {
 		res := callTool(t, s, tc.tool, tc.args)
@@ -195,6 +201,8 @@ func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 		{"stop_server", map[string]any{"target": "ollama"}, "stop ollama"},
 		{"stop_server", map[string]any{"target": "127.0.0.1:8080"}, "stop 127.0.0.1:8080"},
 		{"unload_model", map[string]any{"profile": "qwen-7b"}, "unload qwen-7b"},
+		{"load_profile", map[string]any{"name": "qwen-7b"}, "load qwen-7b"},
+		{"load_profile", map[string]any{"name": "llama3.1", "restart": true}, "load llama3.1 --restart"},
 	}
 	for _, tc := range accepted {
 		res := callTool(t, s, tc.tool, tc.args)

@@ -105,6 +105,9 @@ func newServer(cfg *config) *mcp.Server {
 		Name:        "load_profile",
 		Description: "Activate a profile (start the server if needed and load its model). Idempotent: a no-op if already active unless restart is true.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args loadArgs) (*mcp.CallToolResult, any, error) {
+		if err := validateProfile(args.Name); err != nil {
+			return toolError(err.Error()), nil, nil
+		}
 		cmd := []string{"load", args.Name}
 		if args.Restart {
 			cmd = append(cmd, "--restart")

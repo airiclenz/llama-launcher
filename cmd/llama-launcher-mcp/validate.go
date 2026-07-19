@@ -60,12 +60,14 @@ func validateTarget(target string) error {
 }
 
 // validateProfile vets an untrusted profile name before it is forwarded as a
-// positional argument to the CLI (unload_model -> `unload [profile]`).
+// positional argument to the CLI (unload_model -> `unload [profile]`,
+// load_profile -> `load <name>`).
 // Profile names are user-defined in a config the adapter deliberately does
 // not parse (ADR-0008), so no pinned allowlist of names exists; the charset
 // allowlist plus the no-leading-dash rule keeps flag-shaped arguments,
 // extra words, and shell metacharacters out of the shell-out, and resolving
-// the name is left to the CLI, which fails cleanly on an unknown profile.
+// the name is left to the CLI, which fails cleanly on an unknown or empty
+// profile.
 func validateProfile(profile string) error {
 	if profile == "" {
 		return nil
