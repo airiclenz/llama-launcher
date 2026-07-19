@@ -447,14 +447,15 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 // tests exercise loadProfile's decision logic without forking a process,
 // sending a signal, or opening a socket.
 type fakeOps struct {
-	healthyAddrs map[string]bool   // addr → backend's own server answers there
-	models       map[string]string // addr → currently loaded model
-	drift        []string          // liveDrift result for any addr
-	instances    []*RunningInstance
-	startErr     error
-	waitErr      error
-	stopErr      error
-	loadErr      error
+	healthyAddrs  map[string]bool   // addr → backend's own server answers there
+	startingAddrs map[string]bool   // addr → still-starting server answers there (ADR-0010)
+	models        map[string]string // addr → currently loaded model
+	drift         []string          // liveDrift result for any addr
+	instances     []*RunningInstance
+	startErr      error
+	waitErr       error
+	stopErr       error
+	loadErr       error
 
 	stopped           []string // stop targets, in call order
 	unloadedInstances []string // unloadInstance targets
@@ -465,6 +466,8 @@ type fakeOps struct {
 }
 
 func (f *fakeOps) healthy(b LLMServer, addr string) bool { return f.healthyAddrs[addr] }
+
+func (f *fakeOps) starting(b LLMServer, addr string) bool { return f.startingAddrs[addr] }
 
 func (f *fakeOps) loadedModel(b LLMServer, addr string) string { return f.models[addr] }
 
