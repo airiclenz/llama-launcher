@@ -27,6 +27,10 @@ The API-level operation of putting Model weights into a running LLM Server's mem
 **Start** / **Stop** (an LLM Server):
 Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp`; for `ollama`, spawning `ollama serve` to start and signalling the process listening at the instance's address to stop — its CLI has no server-stop command, `ollama stop MODEL` only unloads a model; `lms server start` / `lms server stop` for `lmstudio`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
 
+**Starting** (state of an LLM Server):
+The window after Start in which the LLM Server already holds its address but is not yet ready to serve. For `llamacpp` this lasts as long as the Model load takes; Ollama and LM Studio have no such window — their server is ready before any Model is loaded. A Starting LLM Server is a first-class instance: it is visible (displayed as "starting…") and stoppable, but Activation will not displace it except via `--restart` — see [ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md).
+_Avoid_: "still-loading server", "booting", "warming up".
+
 ## Flagged ambiguities
 
 - The Go interface is `LLMServer` (renamed from `Backend` in 1.3.0) and the config key is `servers:`, both aligned with the domain term **LLM Server**. The word *backend* still survives on the transient `RunningInstance.Backend` field — a per-instance snapshot rebuilt from live probes on every command and never written to disk. The launcher persists no state: there is no on-disk state struct or schema, and instance identity is derived live from the `host:port` each server binds (see [ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md) and [ADR-0007](docs/adr/0007-profile-activation-idempotency.md)). Legacy `state-*.json` files written by pre-live-derivation versions are best-effort deleted on startup and carry no meaning.
