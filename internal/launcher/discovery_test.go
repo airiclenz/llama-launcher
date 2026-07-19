@@ -95,9 +95,10 @@ func TestLlamaCppQueryLiveParams(t *testing.T) {
 		if params.Parallel == nil || *params.Parallel != 2 {
 			t.Errorf("Parallel = %v, want 2", params.Parallel)
 		}
-		// Sampling parameters are deliberately not read: the launcher never
-		// passes sampling flags to llama-server, so comparing them would
-		// flag drift a --restart cannot fix.
+		// Sampling parameters are deliberately not read: the launch flags
+		// only set request defaults that API clients override per call, and
+		// /props floats need not round-trip the configured values exactly,
+		// so diffing them would raise spurious drift notices.
 		if params.Temperature != nil {
 			t.Errorf("Temperature = %v, want nil (not read)", params.Temperature)
 		}

@@ -60,9 +60,9 @@ func (b *LlamaCpp) StartingUp(addr string) bool {
 }
 
 // ParamSpecs lists, in display order, the parameters BuildServerArgs turns
-// into llama-server launch flags. Sampling parameters (temperature, top_k,
-// ...) are absent: the launcher passes no sampling flags to llama-server, so
-// displaying them would misreport what the server runs with.
+// into llama-server launch flags — including the sampling parameters, which
+// become the server-side defaults for API requests (per-request parameters
+// still override them).
 func (b *LlamaCpp) ParamSpecs() []ProfileParamSpec {
 	return []ProfileParamSpec{
 		specContextSize,
@@ -77,6 +77,11 @@ func (b *LlamaCpp) ParamSpecs() []ProfileParamSpec {
 		specNoMmap,
 		specEmbedding,
 		specJinja,
+		specTemperature,
+		specRepeatPenalty,
+		specTopK,
+		specTopP,
+		specMinP,
 	}
 }
 
@@ -98,9 +103,11 @@ func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 // reports *per slot*, so it is scaled by total_slots back to the profile's
 // total -c value) and parallel (from total_slots). All other fields remain
 // nil so liveParamDrift skips them. Sampling parameters are deliberately not
-// read: the launcher never passes sampling flags to llama-server, so a
-// mismatch against the server's own defaults is not drift a --restart could
-// fix. /props is available on recent llama.cpp builds; older builds return
+// read, even though BuildServerArgs passes them as launch flags: they only
+// set the server's request defaults (any API request overrides them per
+// call), and /props reports floats that need not round-trip the configured
+// values exactly, so diffing them would raise spurious drift notices.
+// /props is available on recent llama.cpp builds; older builds return
 // 404 and this function returns (nil, nil), which liveParamDrift treats as
 // "no drift".
 func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
@@ -222,6 +229,25 @@ func (b *LlamaCpp) BuildServerArgs(cfg *Config, profile *ResolvedProfile) []stri
 	}
 	if params.Jinja != nil && *params.Jinja {
 		args = append(args, "--jinja")
+	}
+
+	// Sampling flags set llama-server's request defaults; API requests can
+	// still override them per call. Placed before extra_args so a
+	// user-supplied override wins (llama-server uses the last occurrence).
+	if params.Temperature != nil {
+		args = append(args, "--temp", formatFloatParam(*params.Temperature))
+	}
+	if params.RepeatPenalty != nil {
+		args = append(args, "--repeat-penalty", formatFloatParam(*params.RepeatPenalty))
+	}
+	if params.TopK != nil {
+		args = append(args, "--top-k", strconv.Itoa(*params.TopK))
+	}
+	if params.TopP != nil {
+		args = append(args, "--top-p", formatFloatParam(*params.TopP))
+	}
+	if params.MinP != nil {
+		args = append(args, "--min-p", formatFloatParam(*params.MinP))
 	}
 
 	// Placed before extra_args so a user-supplied --api-key override wins

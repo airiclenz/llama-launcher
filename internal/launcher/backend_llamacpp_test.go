@@ -17,6 +17,7 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 	intPtr := func(v int) *int { return &v }
 	strPtr := func(v string) *string { return &v }
 	boolPtr := func(v bool) *bool { return &v }
+	floatPtr := func(v float64) *float64 { return &v }
 
 	t.Run("full parameter set", func(t *testing.T) {
 		t.Parallel()
@@ -48,6 +49,48 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 		assertFlagPresent(t, args, "--mlock")
 		assertFlagPresent(t, args, "--jinja")
 		assertFlagPresent(t, args, "--no-warmup")
+	})
+
+	t.Run("sampling params become flags", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{}
+		profile := &ResolvedProfile{
+			ProfileParams: ProfileParams{
+				Temperature:   floatPtr(0.7),
+				RepeatPenalty: floatPtr(1.1),
+				TopK:          intPtr(40),
+				TopP:          floatPtr(0.95),
+				MinP:          floatPtr(0.05),
+			},
+		}
+
+		args := b.BuildServerArgs(cfg, profile)
+		argSet := toArgMap(args)
+
+		assertArg(t, argSet, "--temp", "0.7")
+		assertArg(t, argSet, "--repeat-penalty", "1.1")
+		assertArg(t, argSet, "--top-k", "40")
+		assertArg(t, argSet, "--top-p", "0.95")
+		assertArg(t, argSet, "--min-p", "0.05")
+	})
+
+	t.Run("sampling flags come before extra args so overrides win", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{}
+		profile := &ResolvedProfile{
+			ProfileParams: ProfileParams{Temperature: floatPtr(0.7)},
+			ExtraArgs:     []string{"--temp", "0.2"},
+		}
+
+		args := b.BuildServerArgs(cfg, profile)
+
+		// llama-server honours the last occurrence of a repeated flag, so
+		// the extra_args value must appear after the profile value.
+		if len(args) < 2 || args[len(args)-2] != "--temp" || args[len(args)-1] != "0.2" {
+			t.Errorf("extra_args --temp override must come last, got: %v", args)
+		}
 	})
 
 	t.Run("nil params produce empty args", func(t *testing.T) {
@@ -143,6 +186,48 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestLlamaCppParamSpecs proves the display spec covers the sampling
+// parameters BuildServerArgs turns into launch flags — a param the server
+// receives must be visible in the "Show model config" pop-up, and one it
+// never receives must not be (see LLMServer.ParamSpecs).
+func TestLlamaCppParamSpecs(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+	intPtr := func(v int) *int { return &v }
+	floatPtr := func(v float64) *float64 { return &v }
+
+	params := &ProfileParams{
+		Temperature:   floatPtr(0.7),
+		RepeatPenalty: floatPtr(1.1),
+		TopK:          intPtr(40),
+		TopP:          floatPtr(0.95),
+		MinP:          floatPtr(0.05),
+	}
+
+	rendered := map[string]string{}
+	for _, spec := range b.ParamSpecs() {
+		if value, ok := spec.Format(params); ok {
+			rendered[spec.Label] = value
+		}
+	}
+
+	want := map[string]string{
+		"Temperature":    "0.7",
+		"Repeat penalty": "1.1",
+		"Top-k":          "40",
+		"Top-p":          "0.95",
+		"Min-p":          "0.05",
+	}
+	for label, wantValue := range want {
+		if got, ok := rendered[label]; !ok {
+			t.Errorf("spec missing sampling param %q", label)
+		} else if got != wantValue {
+			t.Errorf("spec %q = %q, want %q", label, got, wantValue)
+		}
+	}
 }
 
 func TestLlamaCppResolveModel(t *testing.T) {

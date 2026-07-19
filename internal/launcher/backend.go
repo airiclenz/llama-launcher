@@ -66,6 +66,25 @@ func boolParamSpec(label string, field func(*ProfileParams) *bool) ProfileParamS
 	}}
 }
 
+// floatParamSpec builds a ProfileParamSpec for an optional float field.
+func floatParamSpec(label string, field func(*ProfileParams) *float64) ProfileParamSpec {
+	return ProfileParamSpec{Label: label, Format: func(p *ProfileParams) (string, bool) {
+		v := field(p)
+		if v == nil {
+			return "", false
+		}
+		return formatFloatParam(*v), true
+	}}
+}
+
+// formatFloatParam renders a float parameter with the shortest decimal
+// representation that round-trips (0.7 stays "0.7", not "0.700000"). Shared
+// by the display specs and llamacpp's launch-flag assembly so the pop-up
+// shows exactly the value the server receives.
+func formatFloatParam(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
 // Display specs for the cross-backend profile parameters. Backends assemble
 // their ParamSpecs lists from these so a parameter honoured by several
 // backends keeps a single label and formatting.
@@ -82,6 +101,12 @@ var (
 	specNoMmap       = boolParamSpec("No mmap", func(p *ProfileParams) *bool { return p.NoMmap })
 	specEmbedding    = boolParamSpec("Embedding", func(p *ProfileParams) *bool { return p.Embedding })
 	specJinja        = boolParamSpec("Jinja", func(p *ProfileParams) *bool { return p.Jinja })
+
+	specTemperature   = floatParamSpec("Temperature", func(p *ProfileParams) *float64 { return p.Temperature })
+	specRepeatPenalty = floatParamSpec("Repeat penalty", func(p *ProfileParams) *float64 { return p.RepeatPenalty })
+	specTopK          = intParamSpec("Top-k", func(p *ProfileParams) *int { return p.TopK })
+	specTopP          = floatParamSpec("Top-p", func(p *ProfileParams) *float64 { return p.TopP })
+	specMinP          = floatParamSpec("Min-p", func(p *ProfileParams) *float64 { return p.MinP })
 )
 
 // apiKeyConfigurable is implemented by LLM Servers that accept a per-server

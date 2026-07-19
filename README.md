@@ -258,6 +258,11 @@ defaults:
   no_mmap: false
   embedding: false
   jinja: false
+
+  # Sampling defaults (llamacpp) — passed to llama-server as launch flags
+  # (--temp, --repeat-penalty, --top-k, --top-p, --min-p). They set the
+  # server-side defaults for API requests; parameters sent with a request
+  # still override them per call.
   temperature: 0.7
   repeat_penalty: 1.1
   top_k: 40
