@@ -22,9 +22,33 @@ the verb returns a clean sentinel instead of failing to build.**
 - **windows** — compiles, and actuates over HTTP: discovery, Ollama/LM Studio model
   load/unload, and activation against an **already-running** server all work; the `lms`
   shell-outs carry no unix dependency. What needs unix process control — forking a managed
-  `llama-server` or `ollama serve`, and every kill-by-PID stop path — returns the new exported
-  sentinel `ErrUnsupported`. The interactive menu is likewise not supported on windows (it
-  never was); the CLI degrades with a sentence rather than a build error.
+  `llama-server` or `ollama serve`, and every kill-by-PID stop path — does not act. Every
+  per-OS stub returns an error wrapping the new exported sentinel `ErrUnsupported`, but only
+  the paths that hand that error straight back let a client match it, and the split is
+  four-way: **starting a managed server** (`startManagedServer` asks `requireProcessControl()`
+  before it forks) and **the interactive menu** (`RunInteractiveMenu` asks
+  `requireInteractiveMenu()` — the menu never was supported on windows; the CLI now degrades
+  with a sentence rather than a build error) both return the wrapped sentinel unchanged, while
+  **auto-starting an external Ollama** loses it (`connectExternalServer` replaces every
+  `TryStart` failure with its own "not reachable … start it manually" advice) and **the stop
+  verbs** never produce one at all (`IsProcessAlive` is false on windows, so the escalation is
+  never entered, and `Stop`/`Unload` end at the generic "PID could not be determined" — except
+  for LM Studio, whose `lms server stop` hook genuinely stops the server). Carrying the
+  sentinel through those last two paths would be additive and would not change darwin
+  behaviour; it is a known gap in this decision's precision, left open only because there is
+  no windows host to prove it against, and tracked in `TODO.md`.
+
+> **Amended 2026-07-29** (same day as ratification, during the v1.6.1 documentation pass — no
+> prior amendment convention existed in `docs/adr/`, so this is it). The windows bullet above
+> originally read: "What needs unix process control — forking a managed `llama-server` or
+> `ollama serve`, and every kill-by-PID stop path — returns the new exported sentinel
+> `ErrUnsupported`." That sentence was written ahead of the implementation and the
+> implementation does not meet it: two of the four refusal paths replace the sentinel with
+> their own message. The bullet was corrected to describe the four-way split the code actually
+> implements, rather than changing working code to fit the prose — the decision itself
+> (compile everywhere, actuate where the mechanism exists, refuse cleanly instead of failing
+> to build) is unchanged; only its account of how each refusal surfaces is. TDD §16.6 states
+> the same split against the code.
 
 Two alternatives were rejected. **Client-side build tags** (each importer fences the launcher
 behind `//go:build darwin || linux` and stubs the rest) pushes one library's platform knowledge

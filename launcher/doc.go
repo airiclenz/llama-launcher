@@ -50,9 +50,19 @@
 // everything works. On windows everything the launcher drives over HTTP
 // works — DiscoverRunningInstances, model load and unload against Ollama or
 // LM Studio, and activating a profile on a server that is already running —
-// while everything that needs unix process control returns an error
-// wrapping ErrUnsupported instead of acting: starting a managed server
-// (llama-server, ollama serve) and every stop that signals a PID.
+// while what needs unix process control does not act: no managed server
+// (llama-server, ollama serve) is started there, and a stop that would have
+// to signal a PID cannot be carried out. LM Studio is the exception that
+// keeps working, since its server start and stop are lms CLI calls.
+//
+// Match on the sentinel only where a windows refusal preserves it. Starting
+// a managed llama-server refuses before it forks and returns an error
+// wrapping ErrUnsupported, so errors.Is finds it. Two paths report in their
+// own words instead: LoadProfile against a stopped Ollama cannot start the
+// daemon and reports the address as not reachable, and a Stop — or an Unload
+// that reduces to one on a managed backend — ends with the server still
+// reachable and its PID undetermined. Both are plain errors, not wrapped
+// sentinels.
 //
 // # One Config per process
 //

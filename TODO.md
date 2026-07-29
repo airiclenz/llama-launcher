@@ -22,3 +22,4 @@ Carried from the 2026-06-08 handoff when it was archived; small and independent.
 - [ ] README "Requirements" doesn't mention runtime host binaries — `lsof` in particular (used to find the listening PID for stop), documented only in the 1.3.0 CHANGELOG entry
 - [ ] `list --json` has no direct test coverage (`status --json` is covered in `cli_test.go`; a round-trip marshal/unmarshal test would be cheap)
 - [ ] `identifyBackend(addr)` health-checks the backends serially — parallelising would shave latency from `stop <host:port>`
+- [ ] `ErrUnsupported` does not survive two Windows paths (TDD §16.6): `connectExternalServer` replaces Ollama's `TryStart` refusal with its own "not reachable … start it manually" message, and the stop verbs never reach a seam function (`IsProcessAlive` is false there), ending at "PID could not be determined". Propagating the sentinel would be additive and would not change macOS behaviour — but there is no Windows host to prove it against
