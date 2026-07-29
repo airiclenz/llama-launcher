@@ -59,12 +59,14 @@
 
 ## Part C — Docs, version, release
 
-- [ ] **6. Documentation pass** — `llama-launcher.TDD.md`, `README.md`, `CHANGELOG.md`, `TODO.md`
+- [x] **6. Documentation pass** — `llama-launcher.TDD.md`, `README.md`, `CHANGELOG.md`, `TODO.md` — ✅ DONE (2026-07-29)
   - TDD: §1 overview gains the library sentence (importable via the `launcher/` facade, ADR-0011); §2 Goals gains the bullet; new **§16 "Public library facade"** documenting the surface table, the four contract decisions (notices/blocking/global-state/documented-surface), the two internal seams (`LoadConfigNotify`, `LoadProfileNotify`), and the MCP composition note (in-process = same machine, ADR-0008 adapter = remote; they compose); §5.2 file table gains rows for `launcher/doc.go` + `launcher/launcher.go` and the changed `progress.go`/`config.go`/`server.go` row texts; §15 gets a one-line cross-reference to §16.
   - README: "Using llama-launcher as a Go library" section — `go get github.com/airiclenz/llama-launcher/launcher@v1.6.0`, a ~15-line example (LoadConfig with a notice func → ResolveProfile → LoadProfile in a goroutine with progress → Stop), and the one-Config-per-process + blocking-verbs caveats in two sentences.
   - CHANGELOG: `## 1.6.0` — public library facade (ADR-0011), the two notice seams (internal, no behaviour change), docs.
   - TODO.md: delete the stale loose-end line "Stop/unload cannot target a still-loading (503) server …" — shipped by ADR-0010 (verify against the CHANGELOG 1.4.x/1.5.0 entries before deleting). Doc-accuracy fix owed by the TDD §14 convention, nothing more.
   - CONTEXT.md: **deliberately untouched** — the facade is implementation, not domain language; no new terms emerged from the grill.
+  - NOTES (2026-07-29): three additions beyond the enumerated TDD edits, all doc-accuracy under the §14 convention: §5.2 also gains a `launcher/launcher_test.go` row (the table is a full source-file inventory) with the matching §16.5 "Tests" subsection instead of a §12 row (§12's tables are `internal/launcher/`-scoped); TDD line 6's ADR index range now reads 0001–0011 (ADR-0011 exists); and README §Architecture's "All code lives in `internal/launcher/`" now names the facade over it.
+  - NOTES (2026-07-29): the README example is 26 lines rather than ~15 — the extra lines are the `if err != nil` blocks and the goroutine wrapper that make it real Go. It was compile-verified verbatim: pasted into a scratch module outside the repo (`replace` to this checkout) and built with `GOOS=darwin GOARCH=arm64 go build`, then diffed byte-for-byte against the README block. CHANGELOG carries a third "Fixed" bullet for the TODO.md deletion (the item lists it as docs work; the repo's convention is that a doc-accuracy fix gets its entry).
 
 - [ ] **7. Version bump + full verification sweep** — `VERSION`, whole repo
   - `VERSION` → `1.6.0`.

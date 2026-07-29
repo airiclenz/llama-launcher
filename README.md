@@ -506,6 +506,47 @@ llama-launcher-mcp --listen 192.168.64.1:7331 --allow-interface bridge100
 
 Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no token, just the URL. The bridge IP is the same container→host path you already use to reach the LLM server for inference.
 
+## Using llama-launcher as a Go library
+
+The launcher is importable as well as runnable: the `launcher/` package is a curated Go API over the same core, so your program can load a profile, see what is running, and stop or unload it in-process instead of shelling out to the CLI ([ADR-0011](docs/adr/0011-public-library-facade.md), [TDD §16](llama-launcher.TDD.md#16-public-library-facade)).
+
+```bash
+go get github.com/airiclenz/llama-launcher/launcher@v1.6.0
+```
+
+```go
+cfg, err := launcher.LoadConfig(launcher.DefaultConfigPath(), func(warning string) {
+	log.Printf("config warning: %s", warning) // raw text, one call per warning
+})
+if err != nil {
+	return err
+}
+profile, err := cfg.ResolveProfile("qwen-coder") // merged with defaults, model path resolved
+if err != nil {
+	return err
+}
+go func() { // the lifecycle verbs block — run them off your UI goroutine
+	inst, started, err := launcher.LoadProfile(cfg, profile, false,
+		func(step string) { log.Printf("step: %s", step) },       // progress
+		func(notice string) { log.Printf("notice: %s", notice) }, // e.g. the drift notice
+	)
+	if err != nil {
+		log.Printf("load failed: %v", err)
+		return
+	}
+	log.Printf("%s serving at %s (server started: %v)", profile.Name, inst.Addr(), started)
+
+	// Stop is also how you cancel a load that is still in flight.
+	if _, err := launcher.Stop(inst.Addr()); err != nil {
+		log.Printf("stop failed: %v", err)
+	}
+}()
+```
+
+The rest of the surface is `DiscoverRunningInstances(cfg)` (what is running right now, including servers still starting up), `Unload(backend, addr)`, and the `ErrConfigNotFound` / `ErrNotRunning` sentinels for `errors.Is`. The library never writes to your stderr — config warnings and the drift notice arrive through the callbacks above, and a `nil` callback simply discards them.
+
+Two caveats worth knowing before you wire it in. There is **one config per process**: per-server API keys are pushed onto a process-global backend registry, so the last `LoadConfig` wins for the whole program, and you re-read a changed file by calling `LoadConfig` again rather than `Config.Reload` (which is the CLI's entry point and prints to stderr). And the **lifecycle verbs block** — activation waits up to ~30 seconds for the new server to report healthy, plus up to ~20 more when a restart has to stop the current occupant first — so call them from a goroutine and serialize your own calls against the same address.
+
 ## Building
 
 Requires Go 1.26+.
@@ -525,7 +566,7 @@ The version is read from the `VERSION` file and injected at build time. Installi
 
 ## Architecture
 
-All code lives in `internal/launcher/`. Three LLM Servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, and LM Studio. The optional MCP control-plane adapter is a separate binary under `cmd/llama-launcher-mcp/` that shells out to the CLI and is the only component with a network listener. The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
+All code lives in `internal/launcher/`, with the public `launcher/` package a thin facade over it (see above). Three LLM Servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, and LM Studio. The optional MCP control-plane adapter is a separate binary under `cmd/llama-launcher-mcp/` that shells out to the CLI and is the only component with a network listener. The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
 
 Key paths:
 
