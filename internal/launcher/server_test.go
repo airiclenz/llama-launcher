@@ -397,11 +397,14 @@ func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
 // wait through the production activation: the stand-in answers 503 forever
 // (llama-server's reply while it loads a model), so the wait expires and
 // loadProfileManaged decorates the failure exactly as it does in production.
-// Only the wait window is substituted — injected at the activationOps seam,
-// because the production 30 s would stall the suite — so the poll loop, the
-// 503s and the decoration are all the real thing. A library client must be
-// able to recognise this outcome with errors.Is, without matching on the
-// message, and must still be told which server was left running.
+// waitHealthy is the one activationOps operation realWaitOps keeps real (with
+// a shortened wait window, because the production 30 s would stall the suite);
+// everything else comes from the embedded fakeOps, so nothing is forked,
+// signalled or discovered and the PID and log path in the message are the fake
+// instance's. The poll loop, the 503s and the decoration are the real thing. A
+// library client must be able to recognise this outcome with errors.Is,
+// without matching on the message, and must still be told which server was
+// left running.
 func TestLoadProfile_StartupTimeoutIsErrStartupTimeout(t *testing.T) {
 	t.Parallel()
 
