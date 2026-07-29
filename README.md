@@ -511,7 +511,7 @@ Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no t
 The launcher is importable as well as runnable: the `launcher/` package is a curated Go API over the same core, so your program can load a profile, see what is running, and stop or unload it in-process instead of shelling out to the CLI ([ADR-0011](docs/adr/0011-public-library-facade.md), [TDD §16](llama-launcher.TDD.md#16-public-library-facade)).
 
 ```bash
-go get github.com/airiclenz/llama-launcher/launcher@v1.6.0
+go get github.com/airiclenz/llama-launcher/launcher@v1.6.1
 ```
 
 ```go
@@ -543,9 +543,23 @@ go func() { // the lifecycle verbs block — run them off your UI goroutine
 }()
 ```
 
-The rest of the surface is `DiscoverRunningInstances(cfg)` (what is running right now, including servers still starting up), `Unload(backend, addr)`, and the `ErrConfigNotFound` / `ErrNotRunning` sentinels for `errors.Is`. The library never writes to your stderr — config warnings and the drift notice arrive through the callbacks above, and a `nil` callback simply discards them.
+The rest of the surface is `DiscoverRunningInstances(cfg)` (what is running right now, including servers still starting up), `Unload(backend, addr)`, and four sentinels for `errors.Is`: `ErrConfigNotFound`, `ErrNotRunning`, `ErrStartupTimeout` and `ErrUnsupported`. The library never writes to your stderr — config warnings and the drift notice arrive through the callbacks above, and a `nil` callback simply discards them.
+
+`ErrStartupTimeout` is the one worth handling explicitly: it means the activation wait expired, not that the load failed. The launcher deliberately leaves the server running (killing a legitimately slow model load would be worse), so a later health success still completes it — treat it as "not yet" and keep watching the address with `DiscoverRunningInstances` rather than reporting an error.
 
 Two caveats worth knowing before you wire it in. There is **one config per process**: per-server API keys are pushed onto a process-global backend registry, so the last `LoadConfig` wins for the whole program, and you re-read a changed file by calling `LoadConfig` again rather than `Config.Reload` (which is the CLI's entry point and prints to stderr). And the **lifecycle verbs block** — activation waits up to ~30 seconds for the new server to report healthy, plus up to ~20 more when a restart has to stop the current occupant first — so call them from a goroutine and serialize your own calls against the same address.
+
+### Supported platforms
+
+The package **compiles on macOS, Linux and Windows**, and each verb works wherever its mechanism exists ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md), [TDD §16.6](llama-launcher.TDD.md#166-platform-contract)) — importing the facade pulls in the whole core, so keeping it buildable is the library's job and not yours. No build tags, no stubs on your side.
+
+| Platform | What you get |
+|---|---|
+| macOS | Everything. |
+| Linux | Everything. (The launcher's own interactive menu drops only its macOS-specific memory readout — irrelevant to a library client.) |
+| Windows | Everything the launcher drives over HTTP: `DiscoverRunningInstances`, model load and unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio's start and stop work too — they go through the `lms` CLI. Starting `llama-server` or `ollama serve` is refused instead of attempted, because Windows offers none of the unix process control the launcher would need to stop it again. |
+
+On Windows, starting a managed `llama-server` fails with an error wrapping `ErrUnsupported`, so you can tell "this platform cannot" from "this attempt failed". Two paths are less precise and worth knowing about: a failed auto-start of an external Ollama comes back as `not reachable … start it manually`, and a `Stop`/`Unload` the launcher cannot carry out (no PID to signal) ends at `still reachable and its PID could not be determined` — the seams return the sentinel, but those two verbs replace it with their own message.
 
 ## Building
 
@@ -555,10 +569,14 @@ Requires Go 1.26+.
 make build             # Build the binary (for local testing)
 make build-mcp         # Build the optional MCP control-plane adapter (see above)
 make test              # Unit tests (go test ./...)
+make cross             # Cross-compile gate: build + vet for GOOS darwin/linux/windows
+make check             # test + cross — run this before committing; starts no process
 make test-integration  # Real-backend integration suite (host only; see below)
-make test-all          # Both test layers
+make test-all          # Both test layers (host only)
 make clean             # Remove the binaries
 ```
+
+`make cross` is the platform contract as a check ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)): it builds and vets the whole tree for macOS, Linux and Windows — test files included, which is what keeps unix-only calls out of them — so a portability regression fails here instead of in an importing client's CI. The unit tests themselves run natively on Linux as well as macOS.
 
 The version is read from the `VERSION` file and injected at build time. Installing the binaries is done via Homebrew (`brew install airiclenz/tap/llama-launcher`, upgrade with `brew upgrade llama-launcher`); `make install` deliberately points there instead of copying anything.
 
