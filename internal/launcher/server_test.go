@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -1591,7 +1590,7 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 			t.Fatalf("splitting %q: %v", addr, err)
 		}
 		cmd := exec.Command("nc", "-l", host, port)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.SysProcAttr = detachedSysProcAttr()
 		if err := cmd.Start(); err != nil {
 			t.Fatalf("starting nc: %v", err)
 		}

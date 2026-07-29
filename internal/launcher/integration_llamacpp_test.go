@@ -90,8 +90,8 @@ func killServerOnCleanup(t *testing.T, inst *RunningInstance) {
 	t.Cleanup(func() {
 		_, _ = Stop(inst.Addr())
 		if inst.PID > 0 && IsProcessAlive(inst.PID) {
-			_ = syscall.Kill(-inst.PID, syscall.SIGKILL)
-			_ = syscall.Kill(inst.PID, syscall.SIGKILL)
+			_ = signalGroup(inst.PID, syscall.SIGKILL)
+			_ = signalPID(inst.PID, syscall.SIGKILL)
 		}
 	})
 }
