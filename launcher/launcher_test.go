@@ -15,8 +15,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/airiclenz/llama-launcher/launcher"
@@ -30,6 +32,10 @@ const modelFileName = "test-7b.gguf"
 // basename with modelFileName, which is what makes a profile "already
 // active" on the ADR-0007 idempotent path.
 const liveModelName = "/models/" + modelFileName
+
+// liveOllamaModel is the model the Ollama stand-in reports as running, and
+// therefore the one an unload against it must name.
+const liveOllamaModel = "llama3.1:8b"
 
 // deprecationConfig enables two servers and lets the "chat" profile omit
 // server:, so it relies on the soft-deprecated defaults.server fallback and
@@ -165,6 +171,81 @@ func TestUnload_UnreachableAddressIsErrNotRunning(t *testing.T) {
 	}
 	if result == nil {
 		t.Error("result = nil, want a non-nil StopResult carrying the steps taken before the failure")
+	}
+}
+
+// TestUnload_ExternalBackendUnloadsModelAndLeavesServerRunning covers the
+// external half of the ADR-0003/0004 unload rule through the facade: the
+// model goes away over the backend's own API and the server is left running,
+// which the result reports as ServerStopped false. The stand-in records the
+// unload it receives, so the proof is what actually reached the server, not
+// the returned struct alone.
+func TestUnload_ExternalBackendUnloadsModelAndLeavesServerRunning(t *testing.T) {
+	t.Parallel()
+	standIn := newOllamaStandIn(t, liveOllamaModel)
+
+	result, err := launcher.Unload("ollama", standIn.addr)
+
+	if err != nil {
+		t.Fatalf("Unload: %v", err)
+	}
+	if result.ServerStopped {
+		t.Error("ServerStopped = true, want false — an external backend keeps running once its model is unloaded")
+	}
+	if want := []string{"Unloading model"}; !slices.Equal(result.Steps, want) {
+		t.Errorf("Steps = %v, want %v — the signal-and-disconnect steps belong to the managed path", result.Steps, want)
+	}
+	if result.Instance == nil || result.Instance.Backend != "ollama" || result.Instance.Addr() != standIn.addr {
+		t.Errorf("Instance = %+v, want the ollama instance at %s", result.Instance, standIn.addr)
+	}
+	requests := standIn.unloadRequests()
+	if len(requests) != 1 {
+		t.Fatalf("unload requests = %q, want exactly one API unload", requests)
+	}
+	for _, want := range []string{`"model":"` + liveOllamaModel + `"`, `"keep_alive":0`} {
+		if !strings.Contains(requests[0], want) {
+			t.Errorf("unload request = %q, want it to contain %q", requests[0], want)
+		}
+	}
+}
+
+// TestUnload_ServerStoppedFollowsBackendKind pins the branch the external
+// success path cannot show on its own: Unload picks its mechanism from the
+// backend alone — a managed backend's unload stops the server process
+// (ADR-0003, ADR-0004), an external backend's never does — and
+// StopResult.ServerStopped reports which one it picked. Both cases run
+// against an address nothing listens on, so neither mechanism reaches a
+// server and the field is the only thing separating them.
+//
+// The managed *success* path stays out of the facade tests deliberately:
+// stopping a managed server signals whatever PID is listening at the
+// address, and an in-process httptest stand-in would hand it this test
+// binary's own PID. Reaching it needs a real llama-server, so the managed
+// stop mechanics are covered inside internal/launcher instead.
+func TestUnload_ServerStoppedFollowsBackendKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		backend           string
+		wantServerStopped bool
+	}{
+		{"managed backend unloads by stopping the server", "llamacpp", true},
+		{"external backend unloads without stopping the server", "ollama", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := launcher.Unload(tc.backend, deadAddr(t))
+
+			if !errors.Is(err, launcher.ErrNotRunning) {
+				t.Fatalf("err = %v, want it to wrap launcher.ErrNotRunning — neither mechanism may find a server here", err)
+			}
+			if result.ServerStopped != tc.wantServerStopped {
+				t.Errorf("ServerStopped = %v, want %v for the %s backend", result.ServerStopped, tc.wantServerStopped, tc.backend)
+			}
+		})
 	}
 }
 
@@ -314,6 +395,69 @@ func standInServer(t *testing.T, model string, ctxPerSlot, slots int) (string, i
 		t.Fatalf("parsing stand-in port %q: %v", portStr, err)
 	}
 	return host, port
+}
+
+// ollamaStandIn is a stand-in Ollama server on loopback. It answers exactly
+// the endpoints an external unload touches — the root probe that identifies
+// the backend, /api/ps for the live model, /api/generate for the unload
+// itself — and records every unload it receives. Everything else 404s, which
+// is what keeps the llama.cpp and LM Studio health checks from claiming the
+// address during backend identification.
+type ollamaStandIn struct {
+	addr string
+
+	mu      sync.Mutex
+	unloads []string
+}
+
+// newOllamaStandIn starts a stand-in reporting model as its one running
+// model. The server shuts down with the test.
+func newOllamaStandIn(t *testing.T, model string) *ollamaStandIn {
+	t.Helper()
+
+	standIn := &ollamaStandIn{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, "Ollama is running")
+		case "/api/ps":
+			fmt.Fprintf(w, `{"models":[{"name":%q,"size":4700000000}]}`, model)
+		case "/api/generate":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			standIn.record(string(body))
+			fmt.Fprint(w, `{}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parsing stand-in URL %q: %v", srv.URL, err)
+	}
+	standIn.addr = u.Host
+	return standIn
+}
+
+// record stores one /api/generate body. Called on the server's goroutine,
+// hence the mutex.
+func (s *ollamaStandIn) record(body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unloads = append(s.unloads, body)
+}
+
+// unloadRequests returns a copy of the /api/generate bodies received so far,
+// safe to read from the test goroutine.
+func (s *ollamaStandIn) unloadRequests() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.unloads)
 }
 
 // deadAddr returns a loopback host:port nothing listens on: a listener claims
