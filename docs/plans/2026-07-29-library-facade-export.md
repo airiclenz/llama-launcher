@@ -18,7 +18,7 @@
 
 ## Part A — Internal notice seams (behaviour-preserving; do first)
 
-- [ ] **1. Config warnings gain a notice sink** — `internal/launcher/progress.go`, `internal/launcher/config.go`
+- [x] **1. Config warnings gain a notice sink** — `internal/launcher/progress.go`, `internal/launcher/config.go` — ✅ DONE (2026-07-29)
   - In `progress.go`, next to `ProgressFunc`: add `type NoticeFunc func(notice string)` with a doc comment ("delivers user-facing notices — config warnings, the ADR-0007 drift notice — to the UI layer; nil discards") and a `reportNotice(fn NoticeFunc, notice string)` helper mirroring `reportStep`.
   - In `config.go`: add `LoadConfigNotify(path string, notify NoticeFunc) (*Config, error)` containing today's `LoadConfig` body (config.go:324–337) with the warning loop replaced by `reportNotice(notify, w)` per warning — raw warning text, no prefix. `LoadConfig(path)` becomes a one-line delegation binding the stderr printer: `func(w string) { fmt.Fprintf(os.Stderr, "warning: %s\n", w) }` — byte-identical output. `Config.Reload` (config.go:341) stays exactly as it is (it delegates to `LoadConfig`; the facade documents that library clients call `LoadConfig` again instead).
   - Tests (`config_test.go`): `LoadConfigNotify` with a config that triggers the `defaults.server` deprecation warning (fixture pattern already exists in the validate tests) collects the raw warning through the sink; a nil sink is safe; `LoadConfig`'s stderr behaviour is already pinned by existing tests — verify they still pass unchanged, don't rewrite them.

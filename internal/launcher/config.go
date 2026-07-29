@@ -322,6 +322,13 @@ func extractProfileOrder(root *yaml.Node) []string {
 // LoadConfig reads, parses, and validates the YAML configuration at the given path.
 // Non-fatal deprecation warnings are written to stderr after a successful validation.
 func LoadConfig(path string) (*Config, error) {
+	return LoadConfigNotify(path, func(w string) { fmt.Fprintf(os.Stderr, "warning: %s\n", w) })
+}
+
+// LoadConfigNotify reads, parses, and validates the YAML configuration at the
+// given path, delivering each non-fatal deprecation warning to notify as raw
+// text — one call per warning, no "warning: " prefix. A nil sink discards them.
+func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 	cfg, err := parseConfig(path)
 	if err != nil {
 		return nil, err
@@ -331,7 +338,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	applyAPIKeys(cfg)
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		reportNotice(notify, w)
 	}
 	return cfg, nil
 }

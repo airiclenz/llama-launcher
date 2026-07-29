@@ -15,6 +15,16 @@ func reportStep(fn ProgressFunc, step string) {
 	}
 }
 
+// NoticeFunc delivers user-facing notices — config warnings, the ADR-0007
+// drift notice — to the UI layer; nil discards.
+type NoticeFunc func(notice string)
+
+func reportNotice(fn NoticeFunc, notice string) {
+	if fn != nil {
+		fn(notice)
+	}
+}
+
 type progressTracker struct {
 	title    string
 	steps    []string
