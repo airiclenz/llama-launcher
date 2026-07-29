@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.0
+
+### Added
+
+- **`llama-launcher` is now importable as a Go library — a new `launcher/` package is its public API.** All launcher code lives in `internal/launcher/`, which other modules cannot import by Go rule, so driving the launcher from another program meant shelling out to the CLI. A curated facade now exports the actuation surface as `github.com/airiclenz/llama-launcher/launcher` ([ADR-0011](docs/adr/0011-public-library-facade.md)): type aliases for the domain types (`Config`, `Profile`, `ProfileParams`, `ResolvedProfile`, `RunningInstance`, `StopResult`, `ProgressFunc`, `NoticeFunc`), the two sentinel errors (`ErrConfigNotFound`, `ErrNotRunning` — the same values, so `errors.Is` works across the boundary), and one-line wrappers for the verbs: `LoadConfig`, `DefaultConfigDir`, `DefaultConfigPath`, `DiscoverRunningInstances`, `LoadProfile`, `Stop`, `Unload`. Four decisions define the contract: the documented symbols *are* the API (an alias unavoidably exposes every method of the aliased type, and those extras carry no compatibility promise); notices are callbacks, never stream writes, so the library never writes to its host's stderr; the verbs block and cancellation of an in-flight load is `Stop(addr)` on the Starting instance ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)) rather than a `context.Context`; and there is one `Config` per process, because per-server API keys land on the process-global backend registry. From this release on, changing a documented facade symbol is a breaking change and adding one is a minor bump, while `internal/launcher/` stays free to refactor. The facade adds no dependency to `go.mod` and leaves the CLI, the MCP adapter, and `internal/launcher/`'s behaviour untouched. Usage in the README, details in TDD §16.
+
+### Changed
+
+- **Two internal notice seams thread user-facing notices through a callback instead of printing them — CLI output is byte-identical.** The two places that wrote notices straight to stderr (`LoadConfig`'s non-fatal config warnings and the ADR-0007 drift notice inside the activation orchestration) now deliver them to a `NoticeFunc` sink, the same shape as the existing `ProgressFunc`. `LoadConfigNotify` and `LoadProfileNotify` take the caller's sink; the exported `LoadConfig`/`LoadProfile` keep their signatures and bind the stderr printers they used before, so every CLI and menu call site prints exactly the same bytes as in 1.5.0. Config warnings arrive one call per warning as raw text (the `warning: ` prefix belongs to the CLI printer), and the drift notice arrives as a single call carrying its full formatted text — header, one indented line per drifted field, and the `--restart` guidance. No behaviour change; this is the seam the library facade needed.
+
+### Fixed
+
+- **A shipped loose end is gone from `TODO.md`.** The "Stop/unload cannot target a still-loading (503) server" item was resolved by ADR-0010 in 1.5.0 — a Starting instance is discoverable and stoppable, and the `kill <PID>` guidance it complained about was removed from the error texts in the same release. Docs only.
+
 ## 1.5.0
 
 ### Added
