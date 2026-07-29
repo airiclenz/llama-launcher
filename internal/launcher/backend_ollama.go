@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -88,6 +87,12 @@ func (b *Ollama) UnloadModel(addr string, modelID string) error {
 }
 
 func (b *Ollama) TryStart(cfg *Config, addr string) error {
+	// Same refusal as the managed fork path: without a process group to stop
+	// it by, a spawned `ollama serve` could never be stopped again (ADR-0012).
+	if err := requireProcessControl(); err != nil {
+		return err
+	}
+
 	binary, err := exec.LookPath("ollama")
 	if err != nil {
 		return fmt.Errorf("ollama binary not found in PATH")
@@ -106,7 +111,7 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 	cmd := exec.Command(binary, "serve")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedSysProcAttr()
 	cmd.Env = append(os.Environ(), "OLLAMA_HOST="+addr, "OLLAMA_KEEP_ALIVE=24h")
 
 	if err := cmd.Start(); err != nil {

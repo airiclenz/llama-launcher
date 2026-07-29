@@ -56,6 +56,14 @@ func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error
 }
 
 func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServer) (*RunningInstance, error) {
+	// Refuse before forking on a platform without unix process control: a
+	// child spawned there would have no session of its own and no process
+	// group to stop it by, so every stop path would leave it running
+	// (ADR-0012).
+	if err := requireProcessControl(); err != nil {
+		return nil, err
+	}
+
 	// A server spawned by an earlier start may still be coming up at the
 	// target address (llama-server answers /health with 503 while it loads
 	// its model, and a large model can outlive the health-wait window).
@@ -86,7 +94,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedSysProcAttr()
 
 	if env := mb.BuildServerEnv(cfg, profile); env != nil {
 		cmd.Env = append(os.Environ(), env...)
@@ -279,7 +287,7 @@ func terminatePID(pid int, progress ProgressFunc) {
 		return
 	}
 	// Also signal the process group (Setsid gives the child PGID=PID).
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = signalGroup(pid, syscall.SIGTERM)
 
 	reportStep(progress, "Waiting for shutdown")
 	deadline := time.Now().Add(sigtermTimeout)
@@ -291,7 +299,7 @@ func terminatePID(pid int, progress ProgressFunc) {
 	}
 
 	_ = proc.Signal(syscall.SIGKILL)
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = signalGroup(pid, syscall.SIGKILL)
 
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1000,7 +1008,7 @@ func IsProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	return syscall.Kill(pid, 0) == nil
+	return signalPID(pid, 0) == nil
 }
 
 func TailLog(logPath string, follow bool) error {
