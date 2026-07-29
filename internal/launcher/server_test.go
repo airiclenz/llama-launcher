@@ -240,7 +240,7 @@ func TestLoadProfile_StopsForeignBackendAtSharedAddr(t *testing.T) {
 	// forking a real llama-server.
 	t.Setenv("PATH", t.TempDir())
 
-	_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil)
+	_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil, nil)
 
 	// The auto-stop loop must have cleared the foreign occupant before the
 	// managed start was attempted: the recorded stop targets the shared
@@ -297,7 +297,7 @@ func TestLoadProfile_SameBackendSameModelIsNoOp(t *testing.T) {
 	// instead of forking a real llama-server.
 	t.Setenv("PATH", t.TempDir())
 
-	inst, started, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil)
+	inst, started, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 
 	t.Run("plain load refuses without touching the occupant", func(t *testing.T) {
 		var stopped []string
-		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil)
+		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "still starting up") {
 			t.Fatalf("err = %v, want still-starting-up refusal", err)
 		}
@@ -457,7 +457,7 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 
 	t.Run("restart stops first; a survived occupant still blocks the spawn", func(t *testing.T) {
 		var stopped []string
-		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, true, nil)
+		_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, true, nil, nil)
 		if want := []string{targetAddr}; !slices.Equal(stopped, want) {
 			t.Errorf("stopped addresses = %v, want %v — --restart displaces the Starting occupant", stopped, want)
 		}
@@ -583,7 +583,7 @@ func TestLoadProfile_Orchestration_IdempotentNoOp(t *testing.T) {
 			drift:        drift,
 			instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
 		}
-		inst, started, err := loadProfile(f, &Config{}, profile, false, nil)
+		inst, started, err := loadProfile(f, &Config{}, profile, false, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -611,6 +611,40 @@ func TestLoadProfile_Orchestration_IdempotentNoOp(t *testing.T) {
 	})
 }
 
+// TestLoadProfile_Orchestration_DriftNoticeReachesSink is the sibling of the
+// idempotent-no-op test: on the same ADR-0007 path the drift notice travels
+// to the caller's NoticeFunc as a single call carrying the whole formatted
+// text, so a library client can render it wherever it wants.
+func TestLoadProfile_Orchestration_DriftNoticeReachesSink(t *testing.T) {
+	t.Parallel()
+
+	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+	f := &fakeOps{
+		healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
+		models:       map[string]string{"127.0.0.1:8080": "/models/test-7b.gguf"},
+		drift:        []string{"context_size: 4096 → 8192"},
+		instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
+	}
+
+	var notices []string
+	_, _, err := loadProfile(f, &Config{}, profile, false, nil, func(n string) {
+		notices = append(notices, n)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(notices) != 1 {
+		t.Fatalf("notices = %v, want exactly one carrying the full notice text", notices)
+	}
+	if !strings.Contains(notices[0], "context_size") {
+		t.Errorf("notice = %q, want the drifted field name", notices[0])
+	}
+	if !strings.Contains(notices[0], "--restart") {
+		t.Errorf("notice = %q, want the --restart guidance", notices[0])
+	}
+}
+
 // TestLoadProfile_Orchestration_Restart pins the --restart path for a
 // managed backend: the same-backend instance at the target address is
 // skipped by the auto-stop loop (it is the one being re-activated), then
@@ -626,7 +660,7 @@ func TestLoadProfile_Orchestration_Restart(t *testing.T) {
 		instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
 	}
 
-	inst, started, err := loadProfile(f, &Config{}, profile, true, nil)
+	inst, started, err := loadProfile(f, &Config{}, profile, true, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -670,7 +704,7 @@ func TestLoadProfile_Orchestration_AutoStop(t *testing.T) {
 	t.Run("stops every other instance including the foreign occupant", func(t *testing.T) {
 		t.Parallel()
 		f, profile := newFake()
-		_, started, err := loadProfile(f, &Config{}, profile, false, nil)
+		_, started, err := loadProfile(f, &Config{}, profile, false, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -693,7 +727,7 @@ func TestLoadProfile_Orchestration_AutoStop(t *testing.T) {
 		t.Parallel()
 		f, profile := newFake()
 		f.stopErr = errors.New("boom")
-		_, _, err := loadProfile(f, &Config{}, profile, false, nil)
+		_, _, err := loadProfile(f, &Config{}, profile, false, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "auto-stopping") {
 			t.Errorf("err = %v, want auto-stopping failure", err)
 		}
@@ -731,7 +765,7 @@ func TestLoadProfile_Orchestration_AutoUnload(t *testing.T) {
 		t.Parallel()
 		f, profile := newFake()
 		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
-		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		_, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -750,7 +784,7 @@ func TestLoadProfile_Orchestration_AutoUnload(t *testing.T) {
 		t.Parallel()
 		f, profile := newFake()
 		cfg := &Config{AutoStopServer: &off, AutoUnload: &off}
-		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		_, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -790,7 +824,7 @@ func TestLoadProfile_Orchestration_StartingOccupant(t *testing.T) {
 				instances:     []*RunningInstance{startingOccupant()},
 			}
 
-			_, started, err := loadProfile(f, &Config{}, profile, false, nil)
+			_, started, err := loadProfile(f, &Config{}, profile, false, nil, nil)
 
 			if err == nil || !strings.Contains(err.Error(), "still starting up") {
 				t.Errorf("profile %s: err = %v, want still-starting-up refusal", profile.Name, err)
@@ -813,7 +847,7 @@ func TestLoadProfile_Orchestration_StartingOccupant(t *testing.T) {
 			instances:     []*RunningInstance{startingOccupant()},
 		}
 
-		inst, started, err := loadProfile(f, &Config{}, profile, true, nil)
+		inst, started, err := loadProfile(f, &Config{}, profile, true, nil, nil)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -844,7 +878,7 @@ func TestLoadProfile_Orchestration_StartingOccupant(t *testing.T) {
 			},
 		}
 
-		_, started, err := loadProfile(f, &Config{}, profile, false, nil)
+		_, started, err := loadProfile(f, &Config{}, profile, false, nil, nil)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -873,7 +907,7 @@ func TestLoadProfile_Orchestration_StartingOccupant(t *testing.T) {
 		}
 		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
 
-		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		_, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -907,7 +941,7 @@ func TestLoadProfile_Orchestration_External(t *testing.T) {
 			instances:    []*RunningInstance{orchInstance("ollama", "127.0.0.1", 11434, "qwen2.5:7b")},
 		}
 		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
-		inst, started, err := loadProfile(f, cfg, profile, false, nil)
+		inst, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -933,7 +967,7 @@ func TestLoadProfile_Orchestration_External(t *testing.T) {
 		profile := orchProfile("ollama", "chat", "llama3.1:8b", "127.0.0.1", 11434)
 		f := &fakeOps{healthyAddrs: map[string]bool{}}
 		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
-		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		_, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -959,7 +993,7 @@ func TestLoadProfile_Orchestration_External(t *testing.T) {
 			startErr:     errors.New("ollama binary not found in PATH"),
 		}
 		cfg := &Config{AutoStopServer: &off, AutoUnload: &on}
-		_, started, err := loadProfile(f, cfg, profile, false, nil)
+		_, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "ollama binary not found") {
 			t.Fatalf("err = %v, want the start failure surfaced", err)
 		}
@@ -1616,7 +1650,7 @@ func TestLoadProfile_Orchestration_WaitTimeout(t *testing.T) {
 	}
 	cfg := &Config{AutoStopServer: &off, AutoUnload: &off}
 
-	_, started, err := loadProfile(f, cfg, profile, false, nil)
+	_, started, err := loadProfile(f, cfg, profile, false, nil, nil)
 
 	if err == nil {
 		t.Fatal("loadProfile = nil error, want the health-wait timeout surfaced")
@@ -1635,20 +1669,43 @@ func TestLoadProfile_Orchestration_WaitTimeout(t *testing.T) {
 }
 
 // TestLoadProfile_DriftNoticeContent pins the drift notice's actionable
-// content (ADR-0007: the notice is the user's cue to act): it must name the
-// profile, list the drifted field, and point at `load --restart`. Not
-// parallel: captureStderr redirects the process-global os.Stderr.
+// content (ADR-0007: the notice is the user's cue to act) together with the
+// CLI's delivery of it: LoadProfile — the entry point the CLI calls — binds
+// the stderr printer itself, so the notice must reach stderr naming the
+// profile, listing the drifted field, and pointing at `load --restart`. It
+// runs against a llama-server stand-in rather than the fake ops seam so the
+// exported entry point is exercised end to end; the stand-in is healthy and
+// serving the profile's model, which takes the ADR-0007 idempotent path and
+// forks nothing. Not parallel: captureStderr redirects the process-global
+// os.Stderr.
 func TestLoadProfile_DriftNoticeContent(t *testing.T) {
-	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
-	f := &fakeOps{
-		healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
-		models:       map[string]string{"127.0.0.1:8080": "/models/test-7b.gguf"},
-		drift:        []string{"context_size: 4096 → 8192"},
-		instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, "/models/test-7b.gguf")},
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			w.Write([]byte(`{"data":[{"id":"/models/test-7b.gguf"}]}`))
+		case "/props":
+			// One slot of 4096 against the profile's 8192 below: the
+			// context size is the only parameter that drifts.
+			w.Write([]byte(`{"total_slots":1,"default_generation_settings":{"n_ctx":4096}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, port, ok := splitHostPort(addrFromURL(t, srv.URL))
+	if !ok {
+		t.Fatalf("unusable stand-in address %q", srv.URL)
 	}
+	contextSize, slots := 8192, 1
+	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", host, port)
+	profile.ContextSize = &contextSize
+	profile.Parallel = &slots
 
 	errOut := captureStderr(t, func() {
-		if _, _, err := loadProfile(f, &Config{}, profile, false, nil); err != nil {
+		if _, _, err := LoadProfile(&Config{}, profile, false, nil); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
 	})

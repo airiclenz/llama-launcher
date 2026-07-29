@@ -440,13 +440,21 @@ func (realOps) unloadModel(b LLMServer, addr, modelID string) error {
 // load — the call refuses with guidance; with restart=true it is stopped
 // and replaced like a healthy one.
 func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
-	return loadProfile(realOps{}, cfg, profile, restart, progress)
+	return LoadProfileNotify(cfg, profile, restart, progress, func(n string) { fmt.Fprint(os.Stderr, n) })
+}
+
+// LoadProfileNotify activates a profile exactly as LoadProfile does, but
+// delivers the ADR-0007 drift notice to notify instead of stderr: one call
+// carrying the full formatted text (header, one line per drifted field, the
+// --restart guidance). A nil sink discards it.
+func LoadProfileNotify(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc, notify NoticeFunc) (*RunningInstance, bool, error) {
+	return loadProfile(realOps{}, cfg, profile, restart, progress, notify)
 }
 
 // loadProfile is the activation orchestration behind LoadProfile. It drives
 // every process/health/probe effect through ops (ADR-0009) and carries the
 // single targetAddr derived from the resolved profile.
-func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
+func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc, notify NoticeFunc) (*RunningInstance, bool, error) {
 	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 
 	b, err := GetLLMServer(profile.Backend)
@@ -462,7 +470,7 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 		if liveModel != "" && profile.ModelPath != "" && modelNamesMatch(profile.ModelPath, liveModel) {
 			drifts := ops.liveDrift(b, targetAddr, profile.ProfileParams)
 			if len(drifts) > 0 {
-				printDriftNotice(profile.Name, targetAddr, drifts)
+				reportNotice(notify, driftNotice(profile.Name, targetAddr, drifts))
 			}
 			host, port, _ := splitHostPort(targetAddr)
 			return &RunningInstance{
@@ -686,12 +694,18 @@ func formatFloatPtr(p *float64) string {
 	return strconv.FormatFloat(*p, 'g', -1, 64)
 }
 
-func printDriftNotice(profileName, addr string, drifts []string) {
-	fmt.Fprintf(os.Stderr, "Notice: profile %q already active at %s, but its parameters have drifted:\n", profileName, addr)
+// driftNotice builds the ADR-0007 drift notice as one block of text: the
+// header naming the profile and its address, one indented line per drifted
+// field, and the --restart guidance. The CLI prints the result verbatim to
+// stderr; library clients receive it through their NoticeFunc.
+func driftNotice(profileName, addr string, drifts []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Notice: profile %q already active at %s, but its parameters have drifted:\n", profileName, addr)
 	for _, d := range drifts {
-		fmt.Fprintf(os.Stderr, "  %s\n", d)
+		fmt.Fprintf(&b, "  %s\n", d)
 	}
-	fmt.Fprintf(os.Stderr, "Run `llama-launcher load %s --restart` to apply the new parameters.\n", profileName)
+	fmt.Fprintf(&b, "Run `llama-launcher load %s --restart` to apply the new parameters.\n", profileName)
+	return b.String()
 }
 
 // shouldCrossServerUnload reports whether the given instance is a candidate
