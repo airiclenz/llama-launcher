@@ -26,7 +26,12 @@ const startingLabel = "starting…"
 
 // RunInteractiveMenu presents a menu based on current server state.
 // When auto_close is false, the menu re-displays after each action.
+// On a platform without the stdin poll the menu needs it runs nothing and
+// returns an error wrapping ErrUnsupported (ADR-0012).
 func RunInteractiveMenu(cfg *Config) error {
+	if err := requireInteractiveMenu(); err != nil {
+		return err
+	}
 	for {
 		cfg.Reload()
 		instances := DiscoverRunningInstances(cfg)
