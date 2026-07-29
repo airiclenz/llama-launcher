@@ -648,6 +648,64 @@ profiles:
 	}
 }
 
+// deprecationWarningConfig writes a config whose "no-server" profile relies on
+// the soft-deprecated defaults.server fallback, producing exactly one warning.
+func deprecationWarningConfig(t *testing.T) string {
+	t.Helper()
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := `
+servers:
+  llamacpp: true
+  ollama: true
+defaults:
+  server: llamacpp
+profiles:
+  no-server:
+    model: test.gguf
+  has-server:
+    server: ollama
+    model: llama3.1:8b
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	return cfgPath
+}
+
+func TestLoadConfigNotify_DeliversRawWarnings(t *testing.T) {
+	t.Parallel()
+
+	var notices []string
+	cfg, err := LoadConfigNotify(deprecationWarningConfig(t), func(n string) {
+		notices = append(notices, n)
+	})
+	if err != nil {
+		t.Fatalf("LoadConfigNotify: %v", err)
+	}
+	if len(notices) != 1 {
+		t.Fatalf("notices = %v, want exactly one", notices)
+	}
+	if notices[0] != cfg.Warnings[0] {
+		t.Errorf("notice = %q, want the raw warning %q", notices[0], cfg.Warnings[0])
+	}
+	if strings.HasPrefix(notices[0], "warning: ") {
+		t.Errorf("notice = %q, want no \"warning: \" prefix — that belongs to the CLI printer", notices[0])
+	}
+}
+
+func TestLoadConfigNotify_NilSink(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadConfigNotify(deprecationWarningConfig(t), nil)
+	if err != nil {
+		t.Fatalf("LoadConfigNotify: %v", err)
+	}
+	if len(cfg.Warnings) != 1 {
+		t.Errorf("Warnings = %v, want exactly one (a nil sink discards, it must not suppress)", cfg.Warnings)
+	}
+}
+
 func TestValidateAll_DefaultsServerFallbackWarning(t *testing.T) {
 	t.Parallel()
 
