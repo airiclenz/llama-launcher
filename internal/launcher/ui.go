@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -82,14 +81,11 @@ func readKey() keyCode {
 	return keyNone
 }
 
+// readKeyTimeout returns the key pressed within timeout, or keyNone when the
+// wait elapses first. The poll itself is per-OS (ui_poll_darwin.go and its
+// siblings) — it is the one place the menu touches a platform primitive.
 func readKeyTimeout(timeout time.Duration) keyCode {
-	tv := syscall.NsecToTimeval(int64(timeout))
-	var fds syscall.FdSet
-	fds.Bits[0] = 1
-	if err := syscall.Select(1, &fds, nil, nil, &tv); err != nil {
-		return keyNone
-	}
-	if fds.Bits[0]&1 == 0 {
+	if !pollStdin(timeout) {
 		return keyNone
 	}
 	return readKey()
