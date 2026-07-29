@@ -46,8 +46,12 @@
 
 ## Part C — Gate, docs, release
 
-- [ ] **4. Cross-compile gate + native-linux test run** — `Makefile`
+- [x] **4. Cross-compile gate + native-linux test run** — ✅ DONE (2026-07-29) — `Makefile`
   - `make check` (or the closest existing aggregate target) gains a `cross` step: `GOOS=linux`, `GOOS=windows`, `GOOS=darwin` `go build ./...` (+ `go vet` per OS where cheap). Record in the item note the first native `make test` pass on linux — the claim ADR-0012 makes checkable.
+  - NOTES (2026-07-29): there was no `make check`, and the closest existing aggregate (`test-all`) is host-only — it runs Layer 2 against real servers, which agents and CI must not do. So the gate is a **new `cross` target** plus a **new `check: test cross`** aggregate, leaving `test-all` untouched as the owner's host target.
+  - NOTES (2026-07-29): the windows step is **not** scoped to production code — instead the two unix-only lines in test files were made portable through Item 1's existing seams, so `go vet ./...` (which type-checks test files) runs unscoped on all three GOOS. `server_test.go:1594` is now `cmd.SysProcAttr = detachedSysProcAttr()` and `integration_llamacpp_test.go:93-94` now call `signalGroup`/`signalPID`; on unix each expands to exactly the call it replaced, so darwin behaviour is unchanged. The `nc` subtest that owns the first line skips in the agent container (no `nc` binary) — the change is compile-verified on all three GOOS, and its runtime path is unchanged on the owner's host.
+  - NOTES (2026-07-29): the cross step runs a third command per GOOS beyond the item's literal text — `go vet -tags=integration ./internal/launcher/` — because nothing else in the gate compiles the Layer-2 files, which is where one of the two portability defects lived. It is green on darwin, linux and windows.
+  - NOTES (2026-07-29): **first native linux run recorded.** `make cross` → clean for all three GOOS. `go test -count=1 ./...` on linux/arm64 with no overlay → `ok internal/launcher 1.527s`, `ok launcher 0.008s`, `ok cmd/llama-launcher-mcp 0.539s`, no failures. `make check` (test + cross) → exit 0. ADR-0012's "the layer-1 tests, being httptest/tempdir-only, now run natively on Linux" is checkable and checked.
 
 - [ ] **5. Documentation pass** — `llama-launcher.TDD.md`, `README.md`, `CHANGELOG.md`
   - TDD §16 gains the platform contract + the two sentinels in the surface table; §5.2 file rows for the new per-OS files. README: a "Supported platforms" note in the library section (darwin/linux full; windows = HTTP verbs + `ErrUnsupported` on process control). CHANGELOG `## 1.6.1`: portability (ADR-0012), the two sentinels, the cross-compile gate.
