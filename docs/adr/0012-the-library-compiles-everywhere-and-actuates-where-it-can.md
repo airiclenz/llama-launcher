@@ -38,8 +38,10 @@ Riding the same release because the first client's UX needs it: the activation t
 (`server did not become healthy…`, which deliberately leaves the server running and names the
 PID and log file) becomes `errors.Is`-able as the exported sentinel **`ErrStartupTimeout`**, so
 a client can distinguish "the load failed" from "the load outlived my patience and may yet
-finish" — the case its own observe loop can complete later. New exported API makes the release
-a **minor** (v1.7.0), not a patch.
+finish" — the case its own observe loop can complete later. Strict semver would call new
+exported API a minor; the owner's call (2026-07-29) is that this ships as **v1.6.1** — the
+1.6.x line is the library-facade line, and portability plus the two sentinels complete that
+line's own promise of importability rather than open a new one.
 
 Consequences: the facade's platform contract is documented in `launcher/doc.go` and TDD §16;
 the build gate grows a GOOS matrix (linux, windows, darwin) so a platform regression fails in

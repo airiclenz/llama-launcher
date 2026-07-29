@@ -56,6 +56,20 @@ var ErrConfigNotFound = core.ErrConfigNotFound
 // address. Stop and Unload wrap it, so test for it with errors.Is.
 var ErrNotRunning = core.ErrNotRunning
 
+// ErrStartupTimeout reports that a server LoadProfile started did not
+// become healthy inside its wait window. The server was left running and a
+// slow model load may still complete, so treat it as "not yet" rather than
+// as a failed load and keep observing the address with
+// DiscoverRunningInstances. LoadProfile wraps it, so test for it with
+// errors.Is.
+var ErrStartupTimeout = core.ErrStartupTimeout
+
+// ErrUnsupported reports an operation the platform this program was built
+// for cannot perform — on windows, everything that needs unix process
+// control; see the package documentation. The affected verbs wrap it, so
+// test for it with errors.Is.
+var ErrUnsupported = core.ErrUnsupported
+
 // LoadConfig reads, parses and validates the config file at path,
 // delivering each non-fatal deprecation warning to notice as raw text —
 // one call per warning, nil discards. It returns ErrConfigNotFound when
