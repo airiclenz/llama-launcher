@@ -33,7 +33,7 @@
 
 ## Part B — The facade package
 
-- [ ] **3. Public package `launcher/`** — new files `launcher/doc.go`, `launcher/launcher.go`
+- [x] **3. Public package `launcher/`** — new files `launcher/doc.go`, `launcher/launcher.go` — ✅ DONE (2026-07-29)
   - `launcher/launcher.go`, `package launcher`, importing `core "github.com/airiclenz/llama-launcher/internal/launcher"`:
     - Aliases: `type Config = core.Config`, `Profile`, `ProfileParams`, `ResolvedProfile`, `RunningInstance`, `StopResult`, `ProgressFunc`, `NoticeFunc` (Item 1's type).
     - Errors: `var ErrConfigNotFound = core.ErrConfigNotFound`, `var ErrNotRunning = core.ErrNotRunning` (same values, so `errors.Is` works across the boundary).
@@ -41,6 +41,7 @@
   - `launcher/doc.go`: the package doc carries the contract (ADR-0011): supported surface = documented symbols (alias-reachable extras excluded); one Config per process — last `LoadConfig`'s API keys win; verbs block (activation up to ~30 s health wait plus stop escalation — call from a goroutine; cancel an in-flight load with `Stop(addr)` per ADR-0010); read verbs concurrency-safe, lifecycle verbs serialized per address by the caller; re-read config via `LoadConfig`, not `Config.Reload` (which prints to stderr); remote control belongs to the MCP adapter (ADR-0008); the launcher manages servers on the local machine only and is not a router (ADR-0002).
   - Wrappers contain **zero logic** (the ADR-0009 `realOps` discipline, applied to the facade): if a wrapper wants an `if`, the seam is in the wrong place.
   - Owes Item 6: TDD §5.2/§16, README library section, CHANGELOG.
+  - NOTES (2026-07-29): `doc.go` carries one addition beyond the enumerated contract points — a short godoc "# Example" block (LoadConfig → ResolveProfile → LoadProfile) so `go doc`/pkg.go.dev shows usage at a glance. It duplicates nothing Item 6 owns beyond shape; the README's library example stays Item 6's.
 
 - [ ] **4. Facade tests** — new file `launcher/launcher_test.go`, external test package (`package launcher_test`) so the tests prove the *client's* view compiles and behaves
   - Config + notices: write a temp `config.yaml` (two servers enabled, one profile missing `server:` with `defaults.server` set — the deprecation-warning shape) → `LoadConfig` returns a usable Config, the sink received the warning, and `ResolveProfile` merges params (assert `ContextSize` lands — the "apogee reads model context info from the resolved profile" path). Nil-sink call is safe.
