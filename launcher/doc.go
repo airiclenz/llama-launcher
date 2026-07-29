@@ -38,6 +38,22 @@
 // that is still coming up is discoverable and stoppable (ADR-0010), which
 // is why the API does not duplicate that with Go-level cancellation.
 //
+// When the activation wait expires LoadProfile returns an error wrapping
+// ErrStartupTimeout: the server was left running, so a later health success
+// still completes the load — observe it yourself rather than treating the
+// call as a failure.
+//
+// # Platforms
+//
+// The package compiles on darwin, linux and windows, and each verb works
+// wherever its mechanism exists (ADR-0012). On darwin and on linux
+// everything works. On windows everything the launcher drives over HTTP
+// works — DiscoverRunningInstances, model load and unload against Ollama or
+// LM Studio, and activating a profile on a server that is already running —
+// while everything that needs unix process control returns an error
+// wrapping ErrUnsupported instead of acting: starting a managed server
+// (llama-server, ollama serve) and every stop that signals a PID.
+//
 // # One Config per process
 //
 // Backends live in a process-global registry and LoadConfig pushes the

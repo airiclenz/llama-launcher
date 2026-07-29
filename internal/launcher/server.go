@@ -27,6 +27,21 @@ const (
 
 var ErrNotRunning = errors.New("no server running")
 
+// ErrStartupTimeout reports that a managed server this launcher started did
+// not report healthy inside the activation wait window. It is not a failed
+// start: the server is deliberately left running (see startupTimeoutErr), so
+// a slow model load can still finish and turn the address healthy later. The
+// decorated timeout errors wrap it; test for it with errors.Is.
+var ErrStartupTimeout = errors.New("server startup timed out")
+
+// ErrUnsupported reports an operation the platform this binary was built for
+// cannot perform. Windows has neither a session to detach a spawned server
+// into nor a process group to signal, so the process-control paths return it
+// instead of acting, while everything the launcher drives over HTTP keeps
+// working there (ADR-0012). Errors from those paths wrap it; test for it with
+// errors.Is.
+var ErrUnsupported = errors.New("operation not supported on this platform")
+
 // StartServer launches a managed server or connects to an external one.
 func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
 	b, err := GetLLMServer(profile.Backend)
@@ -820,9 +835,20 @@ func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 // now (ADR-0010), so the guidance points at `llama-launcher stop`, not
 // at a manual `kill`.
 func startupTimeoutErr(err error, inst *RunningInstance) error {
-	return fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `llama-launcher stop %s`",
-		err, inst.PID, inst.LogFile, inst.Backend, inst.Backend)
+	return startupTimeout{fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `llama-launcher stop %s`",
+		err, inst.PID, inst.LogFile, inst.Backend, inst.Backend)}
 }
+
+// startupTimeout carries a decorated health-wait timeout unchanged and adds
+// ErrStartupTimeout as a second unwrap branch. Wrapping rather than
+// reformatting is what keeps the message — the PID and log path a user acts
+// on — byte-identical while errors.Is finds both the sentinel and the
+// underlying wait failure.
+type startupTimeout struct{ decorated error }
+
+func (e startupTimeout) Error() string { return e.decorated.Error() }
+
+func (e startupTimeout) Unwrap() []error { return []error{e.decorated, ErrStartupTimeout} }
 
 // stillStartingUpErr builds the refusal for activating an address where
 // a server of the same managed backend is still coming up (Starting,

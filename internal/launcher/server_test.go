@@ -394,6 +394,66 @@ func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
 	}
 }
 
+// TestLoadProfile_StartupTimeoutIsErrStartupTimeout drives the real health
+// wait through the production activation: the stand-in answers 503 forever
+// (llama-server's reply while it loads a model), so the wait expires and
+// loadProfileManaged decorates the failure exactly as it does in production.
+// Only the wait window is substituted — injected at the activationOps seam,
+// because the production 30 s would stall the suite — so the poll loop, the
+// 503s and the decoration are all the real thing. A library client must be
+// able to recognise this outcome with errors.Is, without matching on the
+// message, and must still be told which server was left running.
+func TestLoadProfile_StartupTimeoutIsErrStartupTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":{"code":503,"message":"Loading model","type":"unavailable_error"}}`))
+	}))
+	defer srv.Close()
+
+	host, port := hostPort(t, srv.URL)
+	f := &fakeOps{}
+	profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", host, port)
+
+	_, started, err := loadProfile(realWaitOps{fakeOps: f, window: 1200 * time.Millisecond}, &Config{}, profile, false, nil, nil)
+
+	if !errors.Is(err, ErrStartupTimeout) {
+		t.Fatalf("err = %v, want it to wrap ErrStartupTimeout", err)
+	}
+	if started {
+		t.Error("started = true, want false — the server never reported healthy")
+	}
+	for _, want := range []string{
+		"did not become healthy",
+		"PID 4242",
+		"/logs/fake.log",
+		"left running",
+		"llama-launcher stop llamacpp",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q — the sentinel must not cost the message", err, want)
+		}
+	}
+	if len(f.stopped) != 0 {
+		t.Errorf("stopped = %v, want none — a timed-out start is left running so a slow load can finish", f.stopped)
+	}
+}
+
+// realWaitOps is a fakeOps whose health wait is the production one: it runs
+// WaitForHealth against whatever is listening at addr, shortening the window
+// the activation asks for to keep the test quick. Every other operation stays
+// in memory, so nothing is forked or signalled.
+type realWaitOps struct {
+	*fakeOps
+	window time.Duration
+}
+
+func (o realWaitOps) waitHealthy(b LLMServer, addr string, timeout time.Duration) error {
+	o.waited = append(o.waited, addr)
+	return WaitForHealth(b, addr, o.window)
+}
+
 // TestLoadProfile_RefusesDoubleSpawnWhileStartingUp drives the real
 // llamacpp StartingUp probe against a live 503 server (llama-server
 // answers every request with 503 while loading) through loadProfile
