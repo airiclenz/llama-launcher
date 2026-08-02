@@ -16,7 +16,7 @@ func TestFrameBasic(t *testing.T) {
 		t.Errorf("missing bottom border:\n%s", out)
 	}
 
-	if !strings.Contains(out, "╍") {
+	if !strings.Contains(out, "╌") {
 		t.Errorf("missing title decoration line:\n%s", out)
 	}
 
@@ -36,8 +36,25 @@ func TestFrameNoTitle(t *testing.T) {
 	f := Frame{}
 	out := f.Render([]string{"content"})
 
-	if !strings.HasPrefix(out, cDarkGray+"╭━") {
+	if !strings.HasPrefix(out, cDarkGray+"╭─") {
 		t.Errorf("expected dark gray top border:\n%s", out)
+	}
+}
+
+func TestFrameUsesLightBoxDrawingOnly(t *testing.T) {
+	f := Frame{
+		Title:  "llama-launcher 1.6.2",
+		Header: []string{"Status: ok"},
+		Footer: []string{"press q to quit"},
+	}
+	out := f.Render([]string{"body line"})
+
+	// Heavy glyphs render thicker than the light corners and verticals the
+	// frame is built from, which makes the border look uneven.
+	for _, heavy := range []string{"━", "╍", "┃", "┅", "┏", "┓", "┗", "┛", "┣", "┫"} {
+		if strings.Contains(out, heavy) {
+			t.Errorf("frame mixes heavy glyph %q with light borders:\n%s", heavy, out)
+		}
 	}
 }
 
