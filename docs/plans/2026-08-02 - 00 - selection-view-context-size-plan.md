@@ -93,9 +93,19 @@ make check
 
 **Commit:** `feat(menu): add formatContextSize helper for compact token counts`
 
-## 2. Context column in the TUI selection menu (`buildProfileItems`)
+## 2. Context column in the TUI selection menu (`buildProfileItems`) — ✅ DONE (2026-08-02)
 
 Depends on item 1.
+
+NOTES (2026-08-02): The plan's authoritative source #2, `docs/context-design.txt`, does
+not exist in the repo (never committed), so the layout was derived solely from Design
+decisions D1/D4/D5/D6, which pin every question the mock would have answered. No
+approach change resulted; later items and the verifier should not expect that file.
+
+NOTES (2026-08-02): The per-profile cell computation landed as `profileContextCells`
+in `menu.go` rather than inline in `buildProfileItems`, so item 3 can share it without
+a refactor. Only `buildProfileItems` calls it in this item; `buildSimpleProfileLines`
+and `cmdList` are untouched.
 
 **What:** In `internal/launcher/menu.go`, extend `buildProfileItems` (currently
 ~L556–595) to build each row's description as

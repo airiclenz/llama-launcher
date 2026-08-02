@@ -96,6 +96,188 @@ func TestFormatContextSize(t *testing.T) {
 	}
 }
 
+// visibleColumnOf returns the visible column at which sub starts inside s, so
+// alignment assertions compare rendered columns rather than byte offsets (the
+// ★ marker and any multibyte title would drift under len()).
+func visibleColumnOf(t *testing.T, s, sub string) int {
+	t.Helper()
+	i := strings.Index(s, sub)
+	if i < 0 {
+		t.Fatalf("substring %q not found in %q", sub, s)
+	}
+	return visibleWidth(s[:i])
+}
+
+// TestBuildProfileItems_ContextColumn pins the context-size column of the TUI
+// selection menu: llama.cpp rows show their compact merged value, the Ollama
+// row stays blank because its LLM Server never receives the parameter, and
+// both the [server] tags and the ★ marker keep their columns.
+func TestBuildProfileItems_ContextColumn(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+		},
+		Profiles: map[string]Profile{
+			"big":   {Title: "Big", ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(131072)}},
+			"small": {Title: "Small", IsFavourite: true, ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(65536)}},
+			"olla":  {Title: "Olla", IsFavourite: true, ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(32768)}},
+		},
+	}
+	names := []string{"big", "small", "olla"}
+
+	items := buildProfileItems(cfg, names)
+
+	if len(items) != len(names) {
+		t.Fatalf("got %d items, want %d", len(items), len(names))
+	}
+	big, small, olla := items[0].Description, items[1].Description, items[2].Description
+
+	// Cells hold the merged value, right-aligned to the widest one; the Ollama
+	// row is blank spaces of that same width (its ParamSpecs omit the param).
+	wantCells := map[string]string{big: "131K", small: " 65K", olla: "    "}
+	for desc, want := range wantCells {
+		if got := desc[:visibleColumnOf(t, desc, "[")-len(contextColumnGap)]; got != want {
+			t.Errorf("context cell of %q = %q, want %q", desc, got, want)
+		}
+	}
+
+	// Both tag delimiters keep one column across every row.
+	for _, delim := range []string{"[", "]"} {
+		want := visibleColumnOf(t, big, delim)
+		for _, desc := range []string{small, olla} {
+			if got := visibleColumnOf(t, desc, delim); got != want {
+				t.Errorf("%q column of %q = %d, want %d", delim, desc, got, want)
+			}
+		}
+	}
+
+	// The ★ marker stays rightmost and aligned across the favourite rows.
+	if !strings.HasSuffix(small, "★") || !strings.HasSuffix(olla, "★") {
+		t.Errorf("★ is not the rightmost element of the favourite rows: %q / %q", small, olla)
+	}
+	if got, want := visibleColumnOf(t, olla, "★"), visibleColumnOf(t, small, "★"); got != want {
+		t.Errorf("★ column of %q = %d, want %d", olla, got, want)
+	}
+	if got, want := visibleColumnOf(t, small, "★"), visibleWidth(big)+1; got != want {
+		t.Errorf("★ column = %d, want %d (one space past the widest plain row)", got, want)
+	}
+}
+
+// TestBuildProfileItems_ContextFromDefaults pins Decision D5: the column shows
+// the effective value, so a profile without its own context_size inherits the
+// one from defaults and an explicit profile value still wins.
+func TestBuildProfileItems_ContextFromDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		Defaults: ProfileParams{ContextSize: ptrInt(32768)},
+		Profiles: map[string]Profile{
+			"inherits":  {Title: "Inherits", ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+			"overrides": {Title: "Overrides", ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(131072)}},
+		},
+	}
+
+	items := buildProfileItems(cfg, []string{"inherits", "overrides"})
+
+	if got, want := items[0].Description, " 32K"; got != want {
+		t.Errorf("inherited context cell = %q, want %q", got, want)
+	}
+	if got, want := items[1].Description, "131K"; got != want {
+		t.Errorf("overriding context cell = %q, want %q", got, want)
+	}
+}
+
+// TestBuildProfileItems_NoContextColumn pins Decision D6's presence gate: with
+// no displayable profile the descriptions keep their exact pre-column shape.
+func TestBuildProfileItems_NoContextColumn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("mixed servers without any context size keep the bare tag", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]ServerConfig{
+				"llamacpp": {Enabled: true},
+				"ollama":   {Enabled: true},
+			},
+			Profiles: map[string]Profile{
+				"cpp":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama")}},
+			},
+		}
+
+		items := buildProfileItems(cfg, []string{"cpp", "olla"})
+
+		if got, want := items[0].Description, "[LLaMA.cpp]"; got != want {
+			t.Errorf("description = %q, want %q", got, want)
+		}
+		if got, want := items[1].Description, "[Ollama   ]"; got != want {
+			t.Errorf("description = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a context size only Ollama carries does not open the column", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]ServerConfig{
+				"llamacpp": {Enabled: true},
+				"ollama":   {Enabled: true},
+			},
+			Profiles: map[string]Profile{
+				"cpp":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(65536)}},
+			},
+		}
+
+		items := buildProfileItems(cfg, []string{"cpp", "olla"})
+
+		if got, want := items[1].Description, "[Ollama   ]"; got != want {
+			t.Errorf("description = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("single server without context size keeps empty descriptions", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}},
+			Profiles: map[string]Profile{
+				"cpp": {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+			},
+		}
+
+		items := buildProfileItems(cfg, []string{"cpp"})
+
+		if got := items[0].Description; got != "" {
+			t.Errorf("description = %q, want empty", got)
+		}
+	})
+}
+
+// TestBuildProfileItems_SingleServerContextOnly pins the single-enabled-server
+// case: with no [server] tag column the context cell is the whole description.
+func TestBuildProfileItems_SingleServerContextOnly(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Servers: map[string]ServerConfig{"lmstudio": {Enabled: true}},
+		Profiles: map[string]Profile{
+			"big":   {ProfileParams: ProfileParams{Server: strPtrLocal("lmstudio"), ContextSize: ptrInt(131072)}},
+			"small": {ProfileParams: ProfileParams{Server: strPtrLocal("lmstudio"), ContextSize: ptrInt(4096)}},
+		},
+	}
+
+	items := buildProfileItems(cfg, []string{"big", "small"})
+
+	for i, want := range []string{"131K", "  4K"} {
+		if got := items[i].Description; got != want {
+			t.Errorf("description = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestPrimaryInstance(t *testing.T) {
 	t.Parallel()
 

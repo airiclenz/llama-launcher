@@ -110,6 +110,27 @@ var (
 	specMinP          = floatParamSpec("Min-p", func(p *ProfileParams) *float64 { return p.MinP })
 )
 
+// serverShowsContextSize reports whether the named LLM Server actually
+// receives the context-size parameter, i.e. whether specContextSize is part
+// of its ParamSpecs. The profile lists gate their context-size column on this
+// so a parameter the server never receives is never displayed (the
+// LLMServer.ParamSpecs contract above); Ollama, whose spec list is empty,
+// therefore renders a blank cell. Unknown or unregistered server names report
+// false. Identity is derived from specContextSize's own label because Go
+// forbids == on structs holding func fields.
+func serverShowsContextSize(serverName string) bool {
+	srv, err := GetLLMServer(serverName)
+	if err != nil {
+		return false
+	}
+	for _, spec := range srv.ParamSpecs() {
+		if spec.Label == specContextSize.Label {
+			return true
+		}
+	}
+	return false
+}
+
 // apiKeyConfigurable is implemented by LLM Servers that accept a per-server
 // API key for the launcher's own HTTP calls (and, for managed servers, for
 // enforcing client auth at launch).
