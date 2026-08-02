@@ -134,14 +134,6 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 		}
 	}
 
-	labelWidth := 0
-	for _, item := range items {
-		if !item.Separator && len(item.Label) > labelWidth {
-			labelWidth = len(item.Label)
-		}
-	}
-	labelWidth += 2
-
 	var buf strings.Builder
 	for {
 		if headerFn != nil {
@@ -152,21 +144,7 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 			frame.Header = header
 		}
 
-		var body []string
-
-		for i, item := range items {
-			if item.Separator {
-				body = append(body, "")
-				continue
-			}
-			if i == selected {
-				body = append(body, fmt.Sprintf("%s▶ %-*s%s %s", cBoldCyan, labelWidth, item.Label, cReset, item.Description))
-			} else {
-				body = append(body, fmt.Sprintf("· %-*s %s%s%s", labelWidth, item.Label, cDim, item.Description, cReset))
-			}
-		}
-
-		rendered := frame.Render(body)
+		rendered := frame.Render(renderMenuRows(items, selected))
 		renderedLines := strings.Split(strings.TrimSuffix(rendered, "\r\n"), "\r\n")
 
 		frameWidth := visibleWidth(renderedLines[0])
@@ -238,6 +216,44 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 			}
 		}
 	}
+}
+
+// menuLabelWidth returns the width of the menu's label column: the widest
+// non-separator label plus the two-space gap that follows it. Labels are
+// measured with visibleWidth rather than len, so a multibyte title costs the
+// column the one place it occupies on screen instead of one per byte.
+func menuLabelWidth(items []menuItem) int {
+	width := 0
+	for _, item := range items {
+		if item.Separator {
+			continue
+		}
+		if w := visibleWidth(item.Label); w > width {
+			width = w
+		}
+	}
+	return width + 2
+}
+
+// renderMenuRows formats the menu body: one line per item, separators as blank
+// lines, the item at selected highlighted. Every label is padded to the common
+// label-column width, so the description — the context-size cell, the [server]
+// tag and the ★ marker — starts at the same column on every row.
+func renderMenuRows(items []menuItem, selected int) []string {
+	labelWidth := menuLabelWidth(items)
+	body := make([]string, 0, len(items))
+	for i, item := range items {
+		if item.Separator {
+			body = append(body, "")
+			continue
+		}
+		if i == selected {
+			body = append(body, fmt.Sprintf("%s▶ %-*s%s %s", cBoldCyan, labelWidth, item.Label, cReset, item.Description))
+		} else {
+			body = append(body, fmt.Sprintf("· %-*s %s%s%s", labelWidth, item.Label, cDim, item.Description, cReset))
+		}
+	}
+	return body
 }
 
 func firstSelectable(items []menuItem) int {

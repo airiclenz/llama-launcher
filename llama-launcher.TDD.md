@@ -54,9 +54,9 @@ Running `llama-launcher` with no arguments enters a one-shot interactive menu wi
 
     Status  ● stopped
 
-    ▸ DeepSeek Coder V2 Lite  65K
-      Qwen 2.5 32B           131K
-      reasoning-phi           32K
+    ▸ DeepSeek Coder V2 Lite    65K
+      Qwen 2.5 32B             131K
+      reasoning-phi             32K
       ─
       Start server only
 
@@ -118,9 +118,9 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
     Status   ● running (no model)
     Server   127.0.0.1:8080  PID 41023  Uptime 5m 30s
 
-    ▸ DeepSeek Coder V2 Lite  65K
-      Qwen 2.5 32B           131K
-      reasoning-phi           32K
+    ▸ DeepSeek Coder V2 Lite    65K
+      Qwen 2.5 32B             131K
+      reasoning-phi             32K
       ─
       Stop server
       Show log
