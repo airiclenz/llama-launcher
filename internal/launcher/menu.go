@@ -575,9 +575,53 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	return lines
 }
 
+// contextColumnGap separates the context-size cell from the [server] tag that
+// follows it, matching the two-space column separator used by cmdList.
+const contextColumnGap = "  "
+
+// profileContextCells returns one context-size cell per named profile, all
+// padded to the same visible width so the column right-aligns and whatever
+// follows it stays aligned across rows. A profile contributes a value only
+// when its resolved LLM Server actually receives the parameter and the merged
+// (defaults + profile) context size is set; every other row gets a blank cell
+// of the column width. When no profile in the listing qualifies, the column is
+// absent and the result is nil, so callers render exactly the pre-column
+// layout. The merged value is read directly rather than via ResolveProfile:
+// resolving stats model files, and the menu rebuilds its rows on every repaint
+// tick.
+func profileContextCells(cfg *Config, names []string) []string {
+	values := make([]string, len(names))
+	columnWidth := 0
+	for i, name := range names {
+		p := cfg.Profiles[name]
+		if !serverShowsContextSize(resolveProfileServer(cfg, &p)) {
+			continue
+		}
+		merged := mergeParams(cfg.Defaults, p.ProfileParams)
+		if merged.ContextSize == nil {
+			continue
+		}
+		values[i] = formatContextSize(*merged.ContextSize)
+		if w := visibleWidth(values[i]); w > columnWidth {
+			columnWidth = w
+		}
+	}
+
+	if columnWidth == 0 {
+		return nil
+	}
+
+	cells := make([]string, len(names))
+	for i, value := range values {
+		cells[i] = strings.Repeat(" ", columnWidth-visibleWidth(value)) + value
+	}
+	return cells
+}
+
 func buildProfileItems(cfg *Config, names []string) []menuItem {
 	hasMixed := hasMultipleBackends(cfg)
 	anyFav := anyProfileFavourite(cfg, names)
+	contextCells := profileContextCells(cfg, names)
 
 	maxTagLen := 0
 	if hasMixed {
@@ -595,11 +639,19 @@ func buildProfileItems(cfg *Config, names []string) []menuItem {
 	maxDescWidth := 0
 	for i, name := range names {
 		desc := ""
+		if contextCells != nil {
+			desc = contextCells[i]
+		}
 		if hasMixed {
 			p := cfg.Profiles[name]
 			server := resolveProfileServer(cfg, &p)
 			tag := backendDisplayName(server)
-			desc = fmt.Sprintf("[%-*s]", maxTagLen, tag)
+			tagCell := fmt.Sprintf("[%-*s]", maxTagLen, tag)
+			if contextCells != nil {
+				desc += contextColumnGap + tagCell
+			} else {
+				desc = tagCell
+			}
 		}
 		descs[i] = desc
 		if w := visibleWidth(desc); w > maxDescWidth {
