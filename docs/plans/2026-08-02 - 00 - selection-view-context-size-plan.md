@@ -279,7 +279,7 @@ make check
 
 **Commit:** `docs: document the context-size column in TDD, README, and CHANGELOG`
 
-## 6. Version bump to 1.6.2
+## 6. Version bump to 1.6.2 — ✅ DONE (2026-08-02)
 
 Depends on item 5. Authorized by Decision D3 (explicit user request, 2026-08-02).
 
