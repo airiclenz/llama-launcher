@@ -532,9 +532,16 @@ func formatContextSize(n int) string {
 	return strconv.Itoa(n/contextSizeMillion) + "M"
 }
 
+// buildSimpleProfileLines renders the numbered plain-text selection list shown
+// when stdin is not a terminal. Each row is
+// "<title><context cell><[server] tag><★>", carrying the same columns as the
+// TUI menu: the title pads to the widest one whenever a column follows it, the
+// context-size cell appears only when some profile in the listing qualifies for
+// it, and the tag appears only with more than one enabled server.
 func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	hasMixed := hasMultipleBackends(cfg)
 	anyFav := anyProfileFavourite(cfg, names)
+	contextCells := profileContextCells(cfg, names)
 
 	maxLabelLen := 0
 	maxTagLen := 0
@@ -554,15 +561,21 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	rows := make([]string, len(names))
 	maxRowWidth := 0
 	for i, name := range names {
-		label := profileDisplayName(cfg, name)
+		row := profileDisplayName(cfg, name)
+		if hasMixed || contextCells != nil {
+			row += strings.Repeat(" ", maxLabelLen-visibleWidth(row))
+		}
+		if contextCells != nil {
+			row += contextColumnGap + contextCells[i]
+		}
 		if hasMixed {
 			p := cfg.Profiles[name]
 			server := resolveProfileServer(cfg, &p)
 			tag := backendDisplayName(server)
-			label = fmt.Sprintf("%-*s  [%-*s]", maxLabelLen, label, maxTagLen, tag)
+			row += fmt.Sprintf("%s[%-*s]", contextColumnGap, maxTagLen, tag)
 		}
-		rows[i] = label
-		if w := visibleWidth(label); w > maxRowWidth {
+		rows[i] = row
+		if w := visibleWidth(row); w > maxRowWidth {
 			maxRowWidth = w
 		}
 	}
@@ -575,8 +588,8 @@ func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	return lines
 }
 
-// contextColumnGap separates the context-size cell from the [server] tag that
-// follows it, matching the two-space column separator used by cmdList.
+// contextColumnGap separates the context-size cell from the columns on either
+// side of it, matching the two-space column separator used by cmdList.
 const contextColumnGap = "  "
 
 // profileContextCells returns one context-size cell per named profile, all

@@ -278,6 +278,100 @@ func TestBuildProfileItems_SingleServerContextOnly(t *testing.T) {
 	}
 }
 
+// TestBuildSimpleProfileLines_ContextColumn pins the context-size column of the
+// non-TTY numbered list: same merged values, right-alignment and ParamSpecs
+// gate as the TUI menu, with the [server] tag and ★ columns still aligned.
+func TestBuildSimpleProfileLines_ContextColumn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("mixed servers keep every column aligned", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]ServerConfig{
+				"llamacpp": {Enabled: true},
+				"ollama":   {Enabled: true},
+			},
+			Profiles: map[string]Profile{
+				"big":   {Title: "Big", ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(131072)}},
+				"small": {Title: "Small", IsFavourite: true, ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(65536)}},
+				"olla":  {Title: "Olla", IsFavourite: true, ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(32768)}},
+			},
+		}
+		names := []string{"big", "small", "olla"}
+
+		lines := buildSimpleProfileLines(cfg, names)
+
+		// Cells hold the merged value right-aligned to the widest one; the
+		// Ollama row is blank because its ParamSpecs omit the parameter.
+		want := []string{
+			"Big    131K  [LLaMA.cpp]",
+			"Small   65K  [LLaMA.cpp] ★",
+			"Olla         [Ollama   ] ★",
+		}
+		if len(lines) != len(want) {
+			t.Fatalf("got %d lines, want %d", len(lines), len(want))
+		}
+		for i := range want {
+			if lines[i] != want[i] {
+				t.Errorf("line %d = %q, want %q", i, lines[i], want[i])
+			}
+		}
+
+		// The tag delimiters and the ★ marker each keep one column.
+		for _, marker := range []string{"[", "]"} {
+			for _, line := range lines[1:] {
+				if got, want := visibleColumnOf(t, line, marker), visibleColumnOf(t, lines[0], marker); got != want {
+					t.Errorf("%q column of %q = %d, want %d", marker, line, got, want)
+				}
+			}
+		}
+		if got, want := visibleColumnOf(t, lines[2], "★"), visibleColumnOf(t, lines[1], "★"); got != want {
+			t.Errorf("★ column of %q = %d, want %d", lines[2], got, want)
+		}
+	})
+
+	t.Run("no displayable profile keeps the pre-column shape", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]ServerConfig{
+				"llamacpp": {Enabled: true},
+				"ollama":   {Enabled: true},
+			},
+			Profiles: map[string]Profile{
+				"cpp":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(65536)}},
+			},
+		}
+
+		lines := buildSimpleProfileLines(cfg, []string{"cpp", "olla"})
+
+		for i, want := range []string{"cpp   [LLaMA.cpp]", "olla  [Ollama   ]"} {
+			if lines[i] != want {
+				t.Errorf("line %d = %q, want %q", i, lines[i], want)
+			}
+		}
+	})
+
+	t.Run("single enabled server shows the cell without a tag", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Servers: map[string]ServerConfig{"lmstudio": {Enabled: true}},
+			Profiles: map[string]Profile{
+				"big":   {ProfileParams: ProfileParams{Server: strPtrLocal("lmstudio"), ContextSize: ptrInt(131072)}},
+				"small": {ProfileParams: ProfileParams{Server: strPtrLocal("lmstudio"), ContextSize: ptrInt(4096)}},
+			},
+		}
+
+		lines := buildSimpleProfileLines(cfg, []string{"big", "small"})
+
+		for i, want := range []string{"big    131K", "small    4K"} {
+			if lines[i] != want {
+				t.Errorf("line %d = %q, want %q", i, lines[i], want)
+			}
+		}
+	})
+}
+
 func TestPrimaryInstance(t *testing.T) {
 	t.Parallel()
 

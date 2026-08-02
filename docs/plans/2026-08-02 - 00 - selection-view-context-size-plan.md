@@ -155,9 +155,16 @@ make check
 
 **Commit:** `feat(menu): show configured context size in the selection menu`
 
-## 3. Context column in the non-TTY fallback (`buildSimpleProfileLines`)
+## 3. Context column in the non-TTY fallback (`buildSimpleProfileLines`) — ✅ DONE (2026-08-02)
 
 Depends on item 2.
+
+NOTES (2026-08-02): No new factoring was needed — item 2 already landed the shared
+cell computation as `profileContextCells`, so this item only consumes it. The
+`contextColumnGap` constant now also separates the profile title from the cell (its
+doc comment was generalised accordingly), which keeps the pre-existing two-space
+title→`[` gap of this list unchanged when the column is absent. As noted under item 2,
+`docs/context-design.txt` does not exist in the repo; the layout follows D1/D5/D6.
 
 **What:** In `internal/launcher/menu.go`, mirror the identical column rules
 (D1/D5/D6) in `buildSimpleProfileLines` (currently ~L513–554), which renders the
