@@ -63,6 +63,39 @@ func TestFormatUptime(t *testing.T) {
 	}
 }
 
+func TestFormatContextSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		size int
+		want string
+	}{
+		{"zero", 0, "0"},
+		{"below one thousand", 512, "512"},
+		{"four thousand", 4096, "4K"},
+		{"sixteen thousand", 16384, "16K"},
+		{"thirty-two thousand", 32768, "32K"},
+		{"sixty-five thousand", 65536, "65K"},
+		{"ninety-eight thousand", 98304, "98K"},
+		{"one hundred thirty-one thousand", 131072, "131K"},
+		{"one million", 1048576, "1M"},
+		{"thousand boundary", 1000, "1K"},
+		{"just below the thousand boundary", 999, "999"},
+		{"just below the million boundary", 999999, "999K"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatContextSize(tt.size)
+			if got != tt.want {
+				t.Errorf("formatContextSize(%d) = %q, want %q", tt.size, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPrimaryInstance(t *testing.T) {
 	t.Parallel()
 

@@ -510,6 +510,28 @@ func anyProfileFavourite(cfg *Config, names []string) bool {
 	return false
 }
 
+// Unit boundaries for the compact context-size cell in the profile list:
+// counts of 1000 render with a K suffix, counts of a million with an M.
+const (
+	contextSizeThousand = 1_000
+	contextSizeMillion  = 1_000_000
+)
+
+// formatContextSize renders a token count in the compact form used by the
+// profile list column: values below a thousand verbatim, thousands as "<n>K"
+// and millions as "<n>M". Division is integer floor division, so 65536 shows
+// as "65K" and 131072 as "131K". Callers own the nil check for the optional
+// *int fields the value comes from.
+func formatContextSize(n int) string {
+	if n < contextSizeThousand {
+		return strconv.Itoa(n)
+	}
+	if n < contextSizeMillion {
+		return strconv.Itoa(n/contextSizeThousand) + "K"
+	}
+	return strconv.Itoa(n/contextSizeMillion) + "M"
+}
+
 func buildSimpleProfileLines(cfg *Config, names []string) []string {
 	hasMixed := hasMultipleBackends(cfg)
 	anyFav := anyProfileFavourite(cfg, names)
