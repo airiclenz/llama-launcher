@@ -458,9 +458,9 @@ When more than one instance is running, the relevant actions (stop, unload, show
 Each profile row shows its title (or its name), then the configured context size, then a `[server]` tag when more than one backend is enabled, then the `★` favourite marker — every column right-aligned across the list:
 
 ```
-▸ DeepSeek Coder V2 Lite  65K  [LLaMA.cpp]
-  Qwen 2.5 32B           131K  [LLaMA.cpp]
-  reasoning-phi                [Ollama   ]
+▸ DeepSeek Coder V2 Lite    65K  [LLaMA.cpp]
+  Qwen 2.5 32B             131K  [LLaMA.cpp]
+  reasoning-phi                  [Ollama   ]
 ```
 
 The Ollama row is blank because Ollama's load request carries no context length: the column only shows what the backend is actually sent.
