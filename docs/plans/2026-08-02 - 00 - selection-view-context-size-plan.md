@@ -74,7 +74,7 @@
 - **D7 — `extra_args` is ignored.** A `-c` value smuggled into `extra_args` is not
   parsed; item 5 records this as a known limitation.
 
-## 1. `formatContextSize` helper
+## 1. `formatContextSize` helper — ✅ DONE (2026-08-02)
 
 **What:** In `internal/launcher/menu.go` (near the other list-rendering helpers such
 as `favouriteSuffix`), add `formatContextSize(n int) string` implementing Decision D4
