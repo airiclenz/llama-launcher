@@ -185,9 +185,15 @@ make check
 
 **Commit:** `feat(menu): mirror the context column in the non-TTY profile list`
 
-## 4. Context column in `llama-launcher list` (`cmdList`)
+## 4. Context column in `llama-launcher list` (`cmdList`) — ✅ DONE (2026-08-02)
 
 Depends on item 2.
+
+NOTES (2026-08-02): As recorded under items 2–3, the plan's authoritative source #2,
+`docs/context-design.txt`, does not exist in the repo; the row layout follows D1/D5/D6,
+which pin every question the mock would have answered. The shared helper
+`profileContextCells` was reused unchanged — no new factoring was needed — so the only
+`cmdList` change is the extra column between the name and the `[server]` tag.
 
 **What:** In `internal/launcher/cli.go`, extend `cmdList` (currently ~L468–526) to
 insert the same right-aligned context column between the Profile title column and the

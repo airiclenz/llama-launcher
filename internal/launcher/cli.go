@@ -465,6 +465,12 @@ func statusDetailsLead(cfg *Config, inst *RunningInstance) string {
 	return fmt.Sprintf("Active: %s", profileLabel)
 }
 
+// cmdList prints the profile listing as
+// "<name><context cell>[<server> tag] <description><★>". The context-size
+// column carries the same contract as the menu builders (TDD §4.7): it appears
+// only when some listed profile has an effective context size its LLM Server
+// actually receives, and its cells are right-aligned so the tag column stays
+// put. The JSON form is handled by cmdListJSON, which already emits the value.
 func cmdList(cfg *Config, args []string) int {
 	jsonOutput := false
 	for _, a := range args {
@@ -482,6 +488,7 @@ func cmdList(cfg *Config, args []string) int {
 
 	names := cfg.ProfileNames()
 	anyFav := anyProfileFavourite(cfg, names)
+	contextCells := profileContextCells(cfg, names)
 
 	maxNameLen := 0
 	maxTagLen := 0
@@ -509,7 +516,7 @@ func cmdList(cfg *Config, args []string) int {
 
 	fmt.Println("Profiles:")
 	fmt.Println()
-	for _, name := range names {
+	for i, name := range names {
 		p := cfg.Profiles[name]
 		server := resolveProfileServer(cfg, &p)
 		desc := descs[name]
@@ -520,7 +527,13 @@ func cmdList(cfg *Config, args []string) int {
 				suffix = pad + " ★"
 			}
 		}
-		fmt.Printf("  %-*s  [%-*s] %s%s\n", maxNameLen, name, maxTagLen, backendDisplayName(server), desc, suffix)
+		contextColumn := ""
+		if contextCells != nil {
+			contextColumn = contextColumnGap + contextCells[i]
+		}
+		fmt.Printf("  %-*s%s%s[%-*s] %s%s\n",
+			maxNameLen, name, contextColumn, contextColumnGap,
+			maxTagLen, backendDisplayName(server), desc, suffix)
 	}
 	return 0
 }
