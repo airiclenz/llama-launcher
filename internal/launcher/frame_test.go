@@ -36,7 +36,7 @@ func TestFrameNoTitle(t *testing.T) {
 	f := Frame{}
 	out := f.Render([]string{"content"})
 
-	if !strings.HasPrefix(out, cDarkGray+"╭─") {
+	if !strings.HasPrefix(out, cNoIntensity+cDarkGray+"╭─") {
 		t.Errorf("expected dark gray top border:\n%s", out)
 	}
 }
@@ -54,6 +54,33 @@ func TestFrameUsesLightBoxDrawingOnly(t *testing.T) {
 	for _, heavy := range []string{"━", "╍", "┃", "┅", "┏", "┓", "┗", "┛", "┣", "┫"} {
 		if strings.Contains(out, heavy) {
 			t.Errorf("frame mixes heavy glyph %q with light borders:\n%s", heavy, out)
+		}
+	}
+}
+
+// A bold title or a bold selected row leaves the intensity attribute set, and
+// terminals that hold bold and dim in one attribute do not reliably clear it on
+// \033[0m — the next border segment then renders brighter than the rest of the
+// frame. Every border color must therefore re-assert normal intensity.
+func TestFrameBorderColorAlwaysClearsIntensity(t *testing.T) {
+	f := Frame{
+		Title:  cBoldLightGray + "llama-launcher " + cReset + cDim + "1.6.2" + cReset,
+		Header: []string{cBoldCyan + "▶ selected row" + cReset},
+		Footer: []string{cDim + "hints" + cReset},
+	}
+	out := f.Render([]string{cBoldCyan + "bold body" + cReset})
+
+	for _, color := range []string{cDarkGray, cLightGray} {
+		for i := 0; i < len(out); {
+			at := strings.Index(out[i:], color)
+			if at < 0 {
+				break
+			}
+			at += i
+			if !strings.HasSuffix(out[:at], cNoIntensity) {
+				t.Errorf("border color at byte %d is not preceded by %q:\n%q", at, cNoIntensity, out)
+			}
+			i = at + len(color)
 		}
 	}
 }
@@ -143,7 +170,7 @@ func TestFrameDarkGrayBorders(t *testing.T) {
 	f := Frame{Title: "test"}
 	out := f.Render([]string{"content"})
 
-	if !strings.HasPrefix(out, cDarkGray) {
+	if !strings.HasPrefix(out, cNoIntensity+cDarkGray) {
 		t.Errorf("border should start with dark gray color code")
 	}
 }

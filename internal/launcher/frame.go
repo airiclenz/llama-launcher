@@ -10,6 +10,15 @@ import (
 const (
 	cDarkGray  = "\033[90m"
 	cLightGray = "\033[37m"
+
+	// cNoIntensity clears bold and dim. Every border glyph re-asserts it
+	// alongside the color: the content between two border glyphs — a bold
+	// title, a bold-cyan selected row — sets the intensity attribute, and
+	// terminals that hold bold and dim in one attribute do not always clear
+	// it on \033[0m. The border segment after such content then renders in
+	// the bright variant of the border color, which is why the top rail
+	// right of the title used to look lighter than the two glyphs left of it.
+	cNoIntensity = "\033[22m"
 )
 
 type Frame struct {
@@ -65,6 +74,7 @@ func (f Frame) Render(body []string) string {
 	if bc == "" {
 		bc = cDarkGray
 	}
+	bc = cNoIntensity + bc
 
 	var buf strings.Builder
 	buf.Grow(outerWidth * (len(f.Header) + len(body) + len(f.Footer) + 4))
@@ -103,7 +113,7 @@ func (f Frame) Render(body []string) string {
 	if f.Title != "" {
 		buf.WriteString(bc + "│ " + cReset)
 		bar := strings.Repeat("╌", innerWidth-2)
-		buf.WriteString(cDarkGray + bar + cReset)
+		buf.WriteString(bc + bar + cReset)
 		buf.WriteString(bc + " │" + cReset)
 		buf.WriteString(nl)
 	}
