@@ -493,6 +493,69 @@ func TestCmdList_StarColumnAlignmentMultibyte(t *testing.T) {
 	}
 }
 
+// TestCmdList_ContextColumnAlignment pins the context-size column of the text
+// `list` output: the cells are right-aligned between the name and the tag, the
+// Ollama row stays blank because its LLM Server never receives the parameter,
+// and a multibyte profile name keeps every following column in place (the row
+// is measured by visible width, not bytes).
+func TestCmdList_ContextColumnAlignment(t *testing.T) {
+	host := "127.0.0.1"
+	port := 8080
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+		},
+		LogDir: t.TempDir(),
+		Profiles: map[string]Profile{
+			"bravo": {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(65536)}},
+			"café":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(131072)}},
+			"olla":  {ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(32768)}},
+		},
+	}
+	cfg.Defaults = ProfileParams{Host: &host, Port: &port}
+
+	var code int
+	out := captureStdout(t, func() { code = cmdList(cfg, nil) })
+
+	if code != 0 {
+		t.Fatalf("cmdList exit = %d, want 0", code)
+	}
+	var rows []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "[") {
+			rows = append(rows, line)
+		}
+	}
+	want := []string{
+		"  bravo   65K  [LLaMA.cpp] -",
+		"  café   131K  [LLaMA.cpp] -",
+		"  olla         [Ollama   ] -",
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d profile rows, want %d in:\n%s", len(rows), len(want), out)
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Errorf("row %d = %q, want %q", i, rows[i], want[i])
+		}
+	}
+
+	// The tag column keeps one visible position across every row, including the
+	// one whose name carries a multibyte rune.
+	for _, row := range rows[1:] {
+		if got, want := visibleColumnOf(t, row, "["), visibleColumnOf(t, rows[0], "["); got != want {
+			t.Errorf("\"[\" column of %q = %d, want %d", row, got, want)
+		}
+	}
+
+	// Nothing but spaces stands between the Ollama name and its tag: the cell is
+	// blank because the server's ParamSpecs omit the context size.
+	if got := strings.TrimPrefix(rows[2], "  olla"); strings.TrimLeft(got, " ") != "[Ollama   ] -" {
+		t.Errorf("Ollama row %q does not carry a blank context cell", rows[2])
+	}
+}
+
 // writeRunConfig writes a minimal valid config for driving the real Run
 // dispatcher and returns its path.
 func writeRunConfig(t *testing.T) string {
