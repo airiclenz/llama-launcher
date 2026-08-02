@@ -343,6 +343,8 @@ Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. Al
 
 Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then alphabetically by server, then alphabetically by name. Set the top-level `sort_alphabetically: false` to instead list profiles in the order they appear in your config file.
 
+Every profile list — the TUI menu, its non-terminal fallback, and `llama-launcher list` — shows the profile's effective context size (defaults merged with the profile's own `context_size`) in a right-aligned column between the title and the `[server]` tag, compacted to `4K` / `65K` / `131K` / `1M`. Only values the backend actually receives are shown, so Ollama rows stay blank — its load request carries no context length — and a context size smuggled into `extra_args` as `-c 65536` is not parsed. The column is omitted entirely when no listed profile has a value to show.
+
 ### Memory readout placeholders
 
 `memory_status_format` accepts these placeholders:
@@ -452,6 +454,16 @@ The menu adapts to three states:
 - **Running (no model)** -- load a profile, stop server, show log, edit config
 
 When more than one instance is running, the relevant actions (stop, unload, show log) present an instance picker disambiguated by `host:port`.
+
+Each profile row shows its title (or its name), then the configured context size, then a `[server]` tag when more than one backend is enabled, then the `★` favourite marker — every column right-aligned across the list:
+
+```
+▸ DeepSeek Coder V2 Lite  65K  [LLaMA.cpp]
+  Qwen 2.5 32B           131K  [LLaMA.cpp]
+  reasoning-phi                [Ollama   ]
+```
+
+The Ollama row is blank because Ollama's load request carries no context length: the column only shows what the backend is actually sent.
 
 ### CLI commands
 
