@@ -216,9 +216,27 @@ make check
 
 **Commit:** `feat(cli): show configured context size in list output`
 
-## 5. Documentation: TDD, README, CHANGELOG
+## 5. Documentation: TDD, README, CHANGELOG — ✅ DONE (2026-08-02)
 
 Depends on items 1–4. This item owns every doc amendment of the plan.
+
+NOTES (2026-08-02): As recorded under items 2–4, the plan's authoritative source #2,
+`docs/context-design.txt`, does not exist in the repo; the documented layout was read
+off the landed code and Decisions D1/D4/D5/D6/D7. The §3.1 ASCII mock-ups and the
+README example were rendered by driving `buildProfileItems`/`buildSimpleProfileLines`
+against a throwaway test, so the spacing in the docs is the real output, not a sketch.
+
+NOTES (2026-08-02): Three deviations from the item's literal file/section list, all
+placement-only — no contract was documented differently than the item specifies:
+(a) the §3.1 context-column contract landed as two new paragraphs immediately after the
+`[server]`-tag paragraph rather than inside it, because the two columns have different
+presence gates and merging them into one paragraph read as one rule;
+(b) §5.2 has no `cli.go` row — `cli.go`'s responsibilities are described in the
+`main.go` row, so the `cmdList` prose was appended there;
+(c) §3.2's `llama-launcher list` row *did* enumerate the output columns ("with
+descriptions and target LLM Server"), so it was corrected to name the context column
+too — the README's `list` line does not enumerate columns and was left untouched, as
+the item directs.
 
 **What:**
 
