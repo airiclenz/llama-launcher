@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- **The framed screens draw a border of uniform weight.** The horizontal runs were heavy box-drawing glyphs — `━` along the top and bottom rails and the dividers, `╍` for the dashed rule under the title — while the corners, the verticals and the divider tees they join (`╭ ╮ ╰ ╯ │ ├ ┤`) are light. Terminals render the two weights at visibly different thicknesses, so the top of the frame read as a thick bar bolted onto thin sides. The horizontals are now the light `─` and `╌`, matching the glyphs they connect to; nothing about the frame's geometry, width or padding changed. A regression test asserts the rendered frame contains no heavy glyph.
+
 - **A Profile title containing multibyte characters no longer widens the gap before the interactive menu's context-size, `[server]` and `★` columns.** The menu measured its label column with `len()`, which counts bytes, while the padding `fmt` then applies counts runes — so a title like `café latte` was billed for eleven columns and drew ten. That width is shared by the whole list, so the phantom columns pushed *every* row's description right, one place per extra byte (two for a CJK character), past the three spaces TDD §3.1 documents; the rows stayed aligned with each other, just no longer at the column the docs promise. The measurement now goes through `visibleWidth`, the same rune-based count the context-size cell, the `[server]` tag and the `★` marker already use. Rendering is otherwise untouched: the measurement and the row formatting moved into `menuLabelWidth` and `renderMenuRows`, the only seam these rows can be tested through (`selectMenu` needs a TTY and blocks), and the §3.1 and README menu mock-ups are now re-rendered from the real row builders instead of drawn by hand.
 
 ## 1.6.1

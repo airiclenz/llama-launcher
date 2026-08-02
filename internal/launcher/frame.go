@@ -71,7 +71,7 @@ func (f Frame) Render(body []string) string {
 
 	leftSpace := strings.Repeat(" ", pad)
 	rightSpace := strings.Repeat(" ", rightPad)
-	hBar := strings.Repeat("━", innerWidth)
+	hBar := strings.Repeat("─", innerWidth)
 
 	writeLine := func(line string) {
 		buf.WriteString(bc + "│" + cReset)
@@ -89,9 +89,9 @@ func (f Frame) Render(body []string) string {
 	// top border
 	buf.WriteString(bc + "╭")
 	if f.Title != "" {
-		buf.WriteString("━ " + cReset + f.Title + bc + " ")
+		buf.WriteString("─ " + cReset + f.Title + bc + " ")
 		if remaining := innerWidth - titleVis - 3; remaining > 0 {
-			buf.WriteString(strings.Repeat("━", remaining))
+			buf.WriteString(strings.Repeat("─", remaining))
 		}
 	} else {
 		buf.WriteString(hBar)
@@ -102,7 +102,7 @@ func (f Frame) Render(body []string) string {
 	// title decoration
 	if f.Title != "" {
 		buf.WriteString(bc + "│ " + cReset)
-		bar := strings.Repeat("╍", innerWidth-2)
+		bar := strings.Repeat("╌", innerWidth-2)
 		buf.WriteString(cDarkGray + bar + cReset)
 		buf.WriteString(bc + " │" + cReset)
 		buf.WriteString(nl)
