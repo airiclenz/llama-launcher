@@ -91,7 +91,11 @@ func (b *LlamaCpp) TryStop(_ string) error                       { return nil }
 
 // ListRunningModels reports the model llama-server is currently serving by
 // reading /v1/models. The OpenAI-style endpoint returns one entry whose `id`
-// is the model path or alias the server was launched with.
+// is the model path or alias the server was launched with; current llama.cpp
+// builds report the absolute --model path verbatim, in the id and in every
+// entry of `aliases`, so the value is a filesystem path whenever the launcher
+// started the server. Display sites shorten it (see modelDisplayName); the id
+// stored on RunningInstance stays raw.
 func (b *LlamaCpp) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 	return openAIModelList(addr, b.apiKey())
 }
