@@ -170,10 +170,11 @@ func instancesSignature(instances []*RunningInstance) string {
 
 // modelNamesMatch reports whether a profile's resolved model path refers to
 // the model a server reports as loaded. Exact equality wins; otherwise the
-// basenames are compared, because servers started outside the launcher
-// report whatever path or alias they were launched with — llama-server
-// defaults the id to the model file's basename — so the full resolved path
-// rarely equals the reported name.
+// basenames are compared, because a server reports whatever path or alias it
+// was launched with: current llama.cpp builds report the absolute --model
+// path they were started with, and a server started outside the launcher may
+// name the same file by a different path or by a bare alias — so the full
+// resolved path rarely equals the reported name.
 func modelNamesMatch(profilePath, liveModel string) bool {
 	if profilePath == liveModel {
 		return true

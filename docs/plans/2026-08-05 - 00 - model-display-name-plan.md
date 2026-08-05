@@ -132,7 +132,9 @@ make check
 
 ---
 
-## 3. Correct the stale llama-server claim and document the display rule
+## 3. Correct the stale llama-server claim and document the display rule — ✅ DONE (2026-08-05)
+
+NOTES (2026-08-05): step 4 names "§14 file table", but §14 of the TDD is "Coding Standards" and carries no table; the file table holding the `menu.go` row (the plan's line 444) is **§5.2 Source Files**. `modelDisplayName` was added to that row instead. Cross-references written into §3.1 point at `#52-source-files` accordingly.
 
 Depends on items 1 and 2. This item owns **all** documentation and comment changes for this plan; no earlier item edits docs.
 
