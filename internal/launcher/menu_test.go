@@ -690,6 +690,70 @@ func TestServerStatusLines_StartingInstance(t *testing.T) {
 	}
 }
 
+// TestModelDisplayName pins the render-time shortening rule: path-shaped
+// server ids collapse to their base name, while ids that are names rather
+// than paths (LM Studio, Ollama) survive verbatim.
+func TestModelDisplayName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{"absolute gguf path", "/Users/airic/LL-Models/Qwen/qwen3.6-35B-A3B-Q4_K_M.gguf", "qwen3.6-35B-A3B-Q4_K_M.gguf"},
+		{"relative gguf path", "Qwen/qwen3.6-35B-A3B-Q4_K_M.gguf", "qwen3.6-35B-A3B-Q4_K_M.gguf"},
+		{"upper-case extension", "/models/Qwen/Model.GGUF", "Model.GGUF"},
+		{"lm studio style id", "qwen/qwen3-8b", "qwen/qwen3-8b"},
+		{"ollama style id", "llama3:8b", "llama3:8b"},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := modelDisplayName(tt.id); got != tt.want {
+				t.Errorf("modelDisplayName(%q) = %q, want %q", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestServerStatusLines_ShortensModelPath pins the menu header: an instance
+// with no matching profile falls back to its model id, and that fallback is
+// rendered as a file name rather than the absolute path llama-server reports.
+func TestServerStatusLines_ShortensModelPath(t *testing.T) {
+	t.Parallel()
+
+	noMem := false
+	cfg := &Config{
+		Servers:          map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		ShowMemoryStatus: &noMem,
+	}
+	instances := []*RunningInstance{
+		{Backend: "llamacpp", Host: "0.0.0.0", Port: 1111, ActiveModel: "/Users/airic/LL-Models/Qwen/qwen3.6-35B-A3B-Q4_K_M.gguf"},
+	}
+
+	lines := serverStatusLines(cfg, instances)
+
+	var modelLine string
+	for _, line := range lines {
+		if contains(line, "0.0.0.0:1111") {
+			modelLine = line
+		}
+	}
+	if modelLine == "" {
+		t.Fatalf("instance missing from header lines: %v", lines)
+	}
+	if !contains(modelLine, "qwen3.6-35B-A3B-Q4_K_M.gguf") {
+		t.Errorf("header line lost the model file name: %q", modelLine)
+	}
+	if contains(modelLine, "/Users/airic/LL-Models/Qwen") {
+		t.Errorf("header line still carries the directory portion: %q", modelLine)
+	}
+}
+
 // TestStopTargetItems_LabelsStartingInstance pins the stop sub-menu listing
 // (ADR-0010): a Starting instance is offered as a stop target and labelled,
 // so the user knows the stop kills an in-flight model load.
