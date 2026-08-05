@@ -19,6 +19,9 @@ type statusJSONEntry struct {
 	Running  bool   `json:"running"`
 	Starting bool   `json:"starting"`
 	Address  string `json:"address"`
+	// ActiveModel is the machine contract this plan deliberately leaves raw:
+	// clients match on the id the server reported, path and all.
+	ActiveModel string `json:"active_model"`
 }
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
@@ -337,6 +340,85 @@ func TestCmdStatusJSON_ReportsStartingInstance(t *testing.T) {
 	}
 }
 
+// modelPathFixture is the shape llama-server actually reports on /v1/models:
+// the absolute --model path it was launched with. Split into its directory
+// and base name so the display tests can assert on each half.
+const (
+	modelFixtureDir  = "/Users/airic/LL-Models/Qwen"
+	modelFixtureBase = "qwen3.6-35B-A3B-Q4_K_M.gguf"
+	modelFixturePath = modelFixtureDir + "/" + modelFixtureBase
+)
+
+// newFakeLlamaCppServerServingModel returns a healthy llamacpp stand-in whose
+// /v1/models answer carries modelID, so discovery fills ActiveModel with it.
+func newFakeLlamaCppServerServingModel(t *testing.T, modelID string) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": modelID}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestCmdStatus_ShortensModelPath pins the human rendering of a server whose
+// reported model id is an absolute path: both the status row and the
+// "Active:" details line (reached because no profile matches) name the file,
+// not the directory it lives in.
+func TestCmdStatus_ShortensModelPath(t *testing.T) {
+	srv := newFakeLlamaCppServerServingModel(t, modelFixturePath)
+	cfg := startingCfg(t, "llamacpp", addrFromURL(t, srv.URL))
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStatus(cfg, nil) })
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (an instance is running); output:\n%s", code, out)
+	}
+	if !strings.Contains(out, modelFixtureBase) {
+		t.Errorf("output does not name the model file %q:\n%s", modelFixtureBase, out)
+	}
+	if strings.Contains(out, modelFixtureDir) {
+		t.Errorf("output still shows the model's directory %q:\n%s", modelFixtureDir, out)
+	}
+	if !strings.Contains(out, "Active: "+modelFixtureBase) {
+		t.Errorf("the Active: line does not fall back to the shortened model name:\n%s", out)
+	}
+}
+
+// TestCmdStatusJSON_KeepsRawModelPath is the regression guard on the machine
+// contract (TDD §3.2): shortening is a render-time concern, so `status
+// --json` keeps emitting the raw server-reported id.
+func TestCmdStatusJSON_KeepsRawModelPath(t *testing.T) {
+	srv := newFakeLlamaCppServerServingModel(t, modelFixturePath)
+	cfg := startingCfg(t, "llamacpp", addrFromURL(t, srv.URL))
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStatusJSON(cfg) })
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (an instance is running); output:\n%s", code, out)
+	}
+	entries := decodeStatusJSON(t, out)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %+v", len(entries), entries)
+	}
+	if entries[0].ActiveModel != modelFixturePath {
+		t.Errorf("active_model = %q, want the raw path %q", entries[0].ActiveModel, modelFixturePath)
+	}
+}
+
 // TestCmdStop_StopsStartingInstance drives the full CLI stop path against a
 // Starting instance (ADR-0010): discovery must surface it so a bare `stop`
 // resolves it as the single target, and the stop mechanics must run the
@@ -442,6 +524,44 @@ func TestCmdUnload_AmbiguousListingLabelsStarting(t *testing.T) {
 	}
 	if len(stub.tryStops) != 0 {
 		t.Errorf("TryStop calls = %v, want none on an ambiguous unload", stub.tryStops)
+	}
+}
+
+// TestUnloadTargetLabel_ShortensModelPath: the ambiguous-unload listing names
+// each candidate by its model file, not by the absolute path llama-server
+// reports, while the matched-profile half of the label is untouched.
+func TestUnloadTargetLabel_ShortensModelPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		inst *RunningInstance
+		want string
+	}{
+		{
+			name: "path-shaped id with a matched profile",
+			inst: &RunningInstance{ActiveModel: modelFixturePath, ActiveProfile: "qwen"},
+			want: modelFixtureBase + " (qwen)",
+		},
+		{
+			name: "path-shaped id with no matched profile",
+			inst: &RunningInstance{ActiveModel: modelFixturePath},
+			want: modelFixtureBase + " ((no matching profile))",
+		},
+		{
+			name: "name-shaped id is left verbatim",
+			inst: &RunningInstance{ActiveModel: "qwen/qwen3-8b", ActiveProfile: "lms"},
+			want: "qwen/qwen3-8b (lms)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := unloadTargetLabel(tt.inst); got != tt.want {
+				t.Errorf("unloadTargetLabel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

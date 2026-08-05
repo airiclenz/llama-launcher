@@ -209,7 +209,7 @@ func unloadTargetLabel(inst *RunningInstance) string {
 	if profileLabel == "" {
 		profileLabel = "(no matching profile)"
 	}
-	return fmt.Sprintf("%s (%s)", inst.ActiveModel, profileLabel)
+	return fmt.Sprintf("%s (%s)", modelDisplayName(inst.ActiveModel), profileLabel)
 }
 
 func cmdStart(cfg *Config, args []string) int {
@@ -405,7 +405,7 @@ func cmdStatus(cfg *Config, args []string) int {
 			continue
 		}
 		state := statusStateLabel(inst)
-		modelStr := inst.ActiveModel
+		modelStr := modelDisplayName(inst.ActiveModel)
 		if modelStr != "" {
 			fmt.Printf("  ● %-*s  %s  %-22s %s\n", maxLen, b.DisplayName(), state, inst.Addr(), modelStr)
 		} else {
@@ -460,7 +460,7 @@ func statusDetailsLead(cfg *Config, inst *RunningInstance) string {
 	}
 	profileLabel := profileDisplayName(cfg, inst.ActiveProfile)
 	if inst.ActiveProfile == "" {
-		profileLabel = inst.ActiveModel
+		profileLabel = modelDisplayName(inst.ActiveModel)
 	}
 	return fmt.Sprintf("Active: %s", profileLabel)
 }
