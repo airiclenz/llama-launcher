@@ -99,7 +99,7 @@ make check
 
 ---
 
-## 2. Route the `cli.go` Model surfaces through `modelDisplayName`
+## 2. Route the `cli.go` Model surfaces through `modelDisplayName` — ✅ DONE (2026-08-05)
 
 Depends on item 1.
 
