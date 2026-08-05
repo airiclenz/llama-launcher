@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -390,7 +391,7 @@ func doUnloadModel(cfg *Config) error {
 		for i, inst := range loaded {
 			label := profileDisplayName(cfg, inst.ActiveProfile)
 			if inst.ActiveProfile == "" {
-				label = inst.ActiveModel
+				label = modelDisplayName(inst.ActiveModel)
 			}
 			items[i] = menuItem{Label: label}
 		}
@@ -407,7 +408,7 @@ func doUnloadModel(cfg *Config) error {
 
 	displayName := profileDisplayName(cfg, target.ActiveProfile)
 	if displayName == "" {
-		displayName = target.ActiveModel
+		displayName = modelDisplayName(target.ActiveModel)
 	}
 
 	res, err := Unload(target.Backend, target.Addr())
@@ -432,7 +433,7 @@ func doShowConfig(cfg *Config, inst *RunningInstance) error {
 	if inst.ActiveProfile == "" {
 		showPopup("Active model", []string{
 			fmt.Sprintf("Backend: %s", backendDisplayName(inst.Backend)),
-			fmt.Sprintf("Model:   %s", inst.ActiveModel),
+			fmt.Sprintf("Model:   %s", modelDisplayName(inst.ActiveModel)),
 			"No matching profile in config.",
 		})
 		return nil
@@ -487,6 +488,27 @@ func profileDisplayName(cfg *Config, profileName string) string {
 		return p.Title
 	}
 	return profileName
+}
+
+// modelDisplayName renders a server-reported model id for the terminal.
+// llama-server reports the id it was launched with, and the launcher launches
+// it with an absolute --model path, so the raw id is a filesystem path that
+// nobody wants in a status row. Path-shaped ids collapse to their base name;
+// every other id is left verbatim, because for the other backends the id is a
+// name rather than a path — LM Studio's "qwen/qwen3-8b" and Ollama's
+// "llama3:8b" would lose meaning if their separators were cut. The stored
+// RunningInstance.ActiveModel keeps the raw value: matching (modelNamesMatch,
+// the ADR-0007 idempotency check) and `status --json` compare and report what
+// the server actually said.
+func modelDisplayName(id string) string {
+	if id == "" {
+		return ""
+	}
+	base := filepath.Base(id)
+	if filepath.IsAbs(id) || strings.HasSuffix(strings.ToLower(base), ".gguf") {
+		return base
+	}
+	return id
 }
 
 // favouriteSuffix returns the trailing fragment appended to a description so
@@ -784,7 +806,7 @@ func serverStatusLines(cfg *Config, instances []*RunningInstance) []string {
 			case inst.ActiveProfile != "":
 				detail += " · " + fmt.Sprintf("%s%s%s", cBoldLightGray, profileDisplayName(cfg, inst.ActiveProfile), cReset)
 			case inst.ActiveModel != "":
-				detail += " · " + inst.ActiveModel
+				detail += " · " + modelDisplayName(inst.ActiveModel)
 			}
 			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
 		}
@@ -833,7 +855,7 @@ func runLoadedMenuSimple(cfg *Config, inst *RunningInstance) error {
 	displayName := backendDisplayName(inst.Backend)
 	profileLabel := profileDisplayName(cfg, inst.ActiveProfile)
 	if inst.ActiveProfile == "" {
-		profileLabel = inst.ActiveModel
+		profileLabel = modelDisplayName(inst.ActiveModel)
 	}
 	if inst.PID > 0 {
 		fmt.Printf("  Status:  running\n  Model:   %s\n  Server:  %s · %s:%d · PID %d · Uptime %s\n\n",
