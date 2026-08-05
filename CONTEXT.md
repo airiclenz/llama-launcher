@@ -16,6 +16,10 @@ _Avoid_: Weights file, GGUF (too narrow), checkpoint.
 A named, user-defined launch recipe = LLM Server + Model + parameter overrides + description. The only artefact the user names directly; everything else (which server is running, which model is loaded) is derived from the selected Profile at runtime.
 _Avoid_: Preset, config entry, model config (too narrow — a Profile is more than its Model).
 
+**Gateway**:
+The optional resident data-plane sibling binary (decided, not yet built — [ADR-0013](docs/adr/0013-gateway-data-plane-sibling.md)): one OpenAI-compatible endpoint that treats a request's `"model"` field as a Profile name, activates that Profile on demand through the library facade, queues requests during activation (priority-ordered, `interactive` above `background`, with an interactive stickiness window against background displacement), and proxies inference to the serving LLM Server — side-by-side with other Profiles when declared memory budgets fit. A conscious, scoped exception to [ADR-0002](docs/adr/0002-not-a-router.md) for this binary only; the CLI stays a one-shot process manager with no listener.
+_Avoid_: "router" / "proxy" as names (ADR-0002 reserves the plain words for what the CLI is *not*; this component is the Gateway), "load balancer" (it serializes onto scarce slots; it does not balance replicas).
+
 ## Verbs
 
 **Activate** (a Profile):
