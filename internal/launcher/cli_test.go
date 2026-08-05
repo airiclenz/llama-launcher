@@ -546,7 +546,7 @@ func TestUnloadTargetLabel_ShortensModelPath(t *testing.T) {
 		{
 			name: "path-shaped id with no matched profile",
 			inst: &RunningInstance{ActiveModel: modelFixturePath},
-			want: modelFixtureBase + " ((no matching profile))",
+			want: modelFixtureBase + " (no matching profile)",
 		},
 		{
 			name: "name-shaped id is left verbatim",
