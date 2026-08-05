@@ -207,7 +207,7 @@ func unloadTargetLabel(inst *RunningInstance) string {
 	}
 	profileLabel := inst.ActiveProfile
 	if profileLabel == "" {
-		profileLabel = "(no matching profile)"
+		profileLabel = "no matching profile"
 	}
 	return fmt.Sprintf("%s (%s)", modelDisplayName(inst.ActiveModel), profileLabel)
 }
