@@ -108,6 +108,39 @@ func migrateKey(store secretStore, path, name, key string) error {
 	return SaveServerKeyCommand(path, name, command)
 }
 
+// migrateKeys carries out a "move them" answer for a whole run of entries: one migrateKey each, in
+// the order the offer named them, stopping at the first failure.
+//
+// The lines it returns name the entries that actually moved, and it returns them alongside the error
+// that stopped it rather than instead of them: each successful entry has already had the config file
+// rewritten under it, so a run that gives up half way must still be able to say which half.
+func migrateKeys(store secretStore, cfg *Config, names []string) ([]string, error) {
+	moved := make([]string, 0, len(names))
+	for _, name := range names {
+		if err := migrateKey(store, cfg.ConfigPath, name, cfg.Servers[name].APIKey); err != nil {
+			return moved, err
+		}
+		moved = append(moved, fmt.Sprintf("%s: key moved into %s — %s now reads it with api_key_cmd",
+			name, store.Name(), cfg.ConfigPath))
+	}
+	return moved, nil
+}
+
+// keepPlaintextKeys carries out a "never for these entries" answer: plaintext_key_ok: true on each
+// named entry, which is what stops the offer coming back for it. Same order and same stop-at-the-
+// first-failure rule as migrateKeys; the key itself is not touched, because keeping it where it is
+// was the answer.
+func keepPlaintextKeys(cfg *Config, names []string) ([]string, error) {
+	kept := make([]string, 0, len(names))
+	for _, name := range names {
+		if err := SaveServerPlaintextKeyOK(cfg.ConfigPath, name); err != nil {
+			return kept, err
+		}
+		kept = append(kept, fmt.Sprintf("%s: plaintext_key_ok: true recorded in %s", name, cfg.ConfigPath))
+	}
+	return kept, nil
+}
+
 // The two reasons a plaintext key is reported rather than offered a move. Which one is true is the
 // caller's knowledge, not the notice's: the interactive path reaches the notice only after a probe
 // found no store, while a command that will never prompt does not probe at all and would be
@@ -143,4 +176,31 @@ func plaintextKeyNotice(path string, reason string, names []string) string {
 		"to a shell, so a pipeline works), or at least keep the file to your own account (chmod 600 %s). "+
 		"Adding `plaintext_key_ok: true` to an entry answers this for good.",
 		subject, path, reason, path)
+}
+
+// keyOffer is what a run should do about the plaintext keys it found, decided before any of it is
+// drawn: nothing at all (no Names), say something (Notice), or ask (Store non-nil).
+type keyOffer struct {
+	Names  []string
+	Store  secretStore
+	Notice string
+}
+
+// decideKeyOffer answers "ask, tell, or stay quiet?" — the whole decision, with no terminal in it,
+// so the interactive path's behaviour can be checked from a machine of any kind.
+//
+// The probe is a parameter rather than a call, and it is reached only when there is something to
+// offer: a probe is a subprocess, and a run whose keys are all somewhere sensible has no question to
+// ask, so it must not pay for the answer.
+func decideKeyOffer(cfg *Config, probe func() (secretStore, bool)) keyOffer {
+	names := plaintextKeyServers(cfg)
+	if len(names) == 0 {
+		return keyOffer{}
+	}
+
+	store, ok := probe()
+	if !ok {
+		return keyOffer{Names: names, Notice: plaintextKeyNotice(cfg.ConfigPath, reasonNoStore, names)}
+	}
+	return keyOffer{Names: names, Store: store}
 }

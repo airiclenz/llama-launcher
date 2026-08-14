@@ -216,7 +216,17 @@ NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item 
 
 **Depends on items 4, 5, 6.**
 
-## 8. Raise the offer in the interactive menu; notice everywhere else
+## 8. Raise the offer in the interactive menu; notice everywhere else — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): Deviation — `README.md` was edited beyond the item's Files list, as in items 3 and 5. Item 5's README text already forward-referenced this feature ("set `plaintext_key_ok: true` … so nothing offers to move it into a secret store"), so shipping the offer without describing it would have left the README promising a behaviour it never explained. Per the user's decision on the retry, the edit is exactly two sentences appended to the existing "### API keys" section — the offer's three answers, and the subcommand notice — and the rest of the file is untouched at HEAD.
+
+NOTES (2026-08-14): Deviation — the TDD file map (§5.2) gained rows for `configwrite.go`, `keymigrate.go`, `configwrite_test.go` and `keymigrate_test.go`, plus a clause each on the `main.go` and `menu.go` rows. The item names §3.1 and §4.2 only, but items 6 and 7 each recorded that item 8 owns the TDD updates for the feature they serve, and the map is the repo's per-file responsibility index (item 5's precedent) — after this item four files carrying the feature would otherwise appear nowhere in it.
+
+NOTES (2026-08-14): The no-store notice on the interactive path goes to stderr through the same `warning:` printer the config warnings use moments earlier, per the item's "print the notice … and continue into the menu". On a TTY the menu's first repaint clears the screen, so it shares those warnings' fate; that sink is the only one that exists before the menu takes the terminal, and the alternative — a popup demanding a keypress — would make a machine that simply has no store harder to launch than one that does.
+
+NOTES (2026-08-14): The result of an answer is shown through `showPopup` and a failure is reported the same way rather than returned from `RunInteractiveMenu`: an error returned there is printed by `Run` as `Error:` and exits 3, so a store that refused a write would take the whole menu down over a key the launcher can still read from the file. "Stop on the first error with its message" is honoured — the run stops, the message is shown, and the entries that already moved are shown with it.
+
+NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item and already recorded under items 3, 5, 6 and 7: `TestStopServerAt_StartingOccupant` fails because the container's `nc` never binds the test port. Every other test in `./internal/launcher/` passes, the 7 new ones included.
 
 **What:** Wire item 7 per ratified call 2:
 

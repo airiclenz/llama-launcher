@@ -73,6 +73,14 @@ func Run(args []string) int {
 		return 0
 	}
 
+	// Every path from here on is a command that runs and exits, so it says what it found and moves
+	// on: the offer to move the key into a secret store belongs to the menu above, the one surface
+	// that can ask. The store is deliberately not probed here — a probe is a subprocess, and its
+	// answer would only feed a question this run will never put.
+	if names := plaintextKeyServers(cfg); len(names) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", plaintextKeyNotice(cfg.ConfigPath, reasonNoPrompt, names))
+	}
+
 	switch args[0] {
 	case "load":
 		return cmdLoad(cfg, args[1:])

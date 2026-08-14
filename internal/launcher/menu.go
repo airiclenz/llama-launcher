@@ -33,6 +33,9 @@ func RunInteractiveMenu(cfg *Config) error {
 	if err := requireInteractiveMenu(); err != nil {
 		return err
 	}
+	// Before the loop, so the offer is raised once per launch rather than once per repaint. The
+	// loop's own Reload picks up whatever the answer wrote.
+	offerKeyMigration(cfg)
 	for {
 		cfg.Reload()
 		instances := DiscoverRunningInstances(cfg)
@@ -73,6 +76,120 @@ func RunInteractiveMenu(cfg *Config) error {
 			showErrorPopup(err)
 		}
 	}
+}
+
+// The three answers the offer takes. They are the indices of the rows askKeyMigration builds, in
+// that order, because the picker returns the row the user landed on.
+const (
+	keyOfferMove = iota
+	keyOfferLater
+	keyOfferNever
+)
+
+// offerKeyMigration is the interactive half of the key migration: the menu is the one surface that
+// can ask a question, so it is the one surface that offers the move. Everything it decides comes
+// from decideKeyOffer — this function only draws it and carries out the answer.
+//
+// A machine with no store gets the notice instead, on the same stderr sink as the config warnings
+// printed moments earlier, and the menu opens either way: a key in the file is a thing to say
+// something about, never a reason to refuse to run.
+func offerKeyMigration(cfg *Config) {
+	offer := decideKeyOffer(cfg, probeKeyStore)
+	if len(offer.Names) == 0 {
+		return
+	}
+	if offer.Store == nil {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", offer.Notice)
+		return
+	}
+
+	var (
+		lines []string
+		err   error
+	)
+	switch askKeyMigration(cfg, offer) {
+	case keyOfferMove:
+		lines, err = migrateKeys(offer.Store, cfg, offer.Names)
+	case keyOfferNever:
+		lines, err = keepPlaintextKeys(cfg, offer.Names)
+	default:
+		// Not now: nothing is written, and the offer comes back next launch.
+		return
+	}
+	showKeyMigrationResult(lines, err)
+}
+
+// askKeyMigration puts the question on screen and returns the answer: the arrow-key picker on a
+// terminal, the numbered prompt everywhere else — the same pair of surfaces every other menu action
+// is built on. Cancelling (q, escape, an unreadable answer) means "not now", the one answer that
+// writes nothing.
+func askKeyMigration(cfg *Config, offer keyOffer) int {
+	subject := fmt.Sprintf("The api_key for %s is stored in plain text in", strings.Join(offer.Names, ", "))
+	move := "Move it into " + offer.Store.Name()
+	if len(offer.Names) > 1 {
+		subject = fmt.Sprintf("The api_keys for %s are stored in plain text in", strings.Join(offer.Names, ", "))
+		move = "Move them into " + offer.Store.Name()
+	}
+
+	if !isTerminal() {
+		return askKeyMigrationSimple(cfg, subject, move)
+	}
+
+	items := []menuItem{
+		{Label: move, Description: "the entry will read it with api_key_cmd"},
+		{Label: "Not now", Description: "asked again next launch"},
+		{Label: "Never for these entries", Description: "records plaintext_key_ok: true"},
+	}
+	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
+	headerFn := func() ([]string, bool) {
+		return []string{subject, cfg.ConfigPath}, false
+	}
+	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q not now", cfg.ShouldDisplayCentered(), cfg.MenuRefreshInterval())
+	if idx < 0 {
+		return keyOfferLater
+	}
+	return idx
+}
+
+// askKeyMigrationSimple is the offer on the numbered fallback path, in the shape of the other Simple
+// menus below.
+func askKeyMigrationSimple(cfg *Config, subject, move string) int {
+	fmt.Printf("\nllama-launcher %s\n\n  %s\n  %s\n\n", Version, subject, cfg.ConfigPath)
+	fmt.Printf("    1  %s\n    2  Not now\n    3  Never for these entries\n\n  Select [1-3]: ", move)
+
+	idx := parseChoice(readLine(), 3)
+	if idx < 0 {
+		return keyOfferLater
+	}
+	return idx
+}
+
+// showKeyMigrationResult reports what the answer did before the menu takes the screen back: the
+// entries that changed, and the failure that stopped the rest when there was one. Both go in one
+// popup, because the entries already moved are exactly what the user needs to know when the run
+// stopped part way through.
+func showKeyMigrationResult(lines []string, err error) {
+	if err != nil {
+		lines = append(lines, err.Error())
+	}
+	if len(lines) == 0 {
+		return
+	}
+
+	maxWidth := terminalWidth() - 12
+	if maxWidth < 40 {
+		maxWidth = 40
+	}
+	var wrapped []string
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapLine(line, maxWidth)...)
+	}
+
+	title := fmt.Sprintf("%sAPI keys%s", cBoldLightGray, cReset)
+	if err != nil {
+		title = fmt.Sprintf("%sError%s", cRed, cReset)
+	}
+	showPopup(title, wrapped)
 }
 
 // primaryInstance selects the instance the menu renders details for

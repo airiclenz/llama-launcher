@@ -2,6 +2,8 @@ package launcher
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -279,6 +281,298 @@ func TestPlaintextKeyNotice_NoEntriesIsNoNotice(t *testing.T) {
 
 	if got := plaintextKeyNotice("/c.yaml", reasonNoStore, nil); got != "" {
 		t.Errorf("plaintextKeyNotice with no entries = %q, want empty", got)
+	}
+}
+
+// Two enabled entries, each holding its own key: what a run over several
+// candidates works on, and the only fixture where a store handing every entry
+// the same key back would go unnoticed.
+const twoPlaintextKeysFixture = `servers:
+  llamacpp:
+    enabled: true
+    api_key: sk-llamacpp
+  ollama:
+    enabled: true
+    api_key: sk-ollama
+
+profiles:
+  small:
+    model: small.gguf
+`
+
+// roundTripStore is a store that really stores: its read-back line prints what
+// Write was given for THAT entry, so a run over several entries only passes if
+// each key went in under its own name and came back out under it.
+type roundTripStore struct {
+	written map[string]string
+	failOn  string
+	err     error
+}
+
+func (s *roundTripStore) Name() string { return "Test Store" }
+
+func (s *roundTripStore) Write(entry, key string) error {
+	if entry == s.failOn {
+		return s.err
+	}
+	if s.written == nil {
+		s.written = make(map[string]string)
+	}
+	s.written[entry] = key
+	return nil
+}
+
+func (s *roundTripStore) ReadCmd(entry string) string {
+	return "printf %s " + s.written[entry]
+}
+
+// twoKeyConfig is the in-memory config matching twoPlaintextKeysFixture, with
+// the path of a freshly written copy of it.
+func twoKeyConfig(t *testing.T) *Config {
+	t.Helper()
+
+	return &Config{
+		ConfigPath: writeConfigFixture(t, twoPlaintextKeysFixture),
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true, APIKey: "sk-llamacpp"},
+			"ollama":   {Enabled: true, APIKey: "sk-ollama"},
+		},
+	}
+}
+
+// The "move them" answer, over more than one entry: every key reaches the store
+// under its own name, no literal is left in the file, and each line names the
+// entry and the file that changed — the user is about to be handed those lines
+// as the whole account of what just happened to their credentials.
+func TestMigrateKeys_MovesEveryEntryAndNamesWhatChanged(t *testing.T) {
+	requirePOSIXShell(t)
+
+	cfg := twoKeyConfig(t)
+	store := &roundTripStore{}
+
+	lines, err := migrateKeys(store, cfg, []string{"llamacpp", "ollama"})
+	if err != nil {
+		t.Fatalf("migrateKeys: %v", err)
+	}
+
+	if store.written["llamacpp"] != "sk-llamacpp" || store.written["ollama"] != "sk-ollama" {
+		t.Errorf("store holds %v, want each entry's own key", store.written)
+	}
+	// The fake's read-back line quotes the key it prints, so the file legitimately
+	// still contains the characters — what must be gone is the api_key: source.
+	text := configFileText(t, cfg.ConfigPath)
+	if strings.Contains(text, "api_key: sk-llamacpp") || strings.Contains(text, "api_key: sk-ollama") {
+		t.Errorf("a literal key source survived the move:\n%s", text)
+	}
+	if got := strings.Count(text, "api_key_cmd:"); got != 2 {
+		t.Errorf("config names %d key commands, want 2:\n%s", got, text)
+	}
+
+	if len(lines) != 2 {
+		t.Fatalf("reported %d lines, want one per entry: %v", len(lines), lines)
+	}
+	for i, name := range []string{"llamacpp", "ollama"} {
+		for _, want := range []string{name, store.Name(), cfg.ConfigPath} {
+			if !strings.Contains(lines[i], want) {
+				t.Errorf("line %q does not mention %q", lines[i], want)
+			}
+		}
+	}
+}
+
+// A failure part way through stops the run there and hands back what already
+// moved. The entry that failed keeps its literal — its key is still only in the
+// file — and the one that succeeded stays migrated, because its key really is
+// in the store now.
+func TestMigrateKeys_StopAtTheFirstFailureStillReportsWhatMoved(t *testing.T) {
+	requirePOSIXShell(t)
+
+	cfg := twoKeyConfig(t)
+	refused := errors.New("the store refused the key")
+	store := &roundTripStore{failOn: "ollama", err: refused}
+
+	lines, err := migrateKeys(store, cfg, []string{"llamacpp", "ollama"})
+	if !errors.Is(err, refused) {
+		t.Fatalf("migrateKeys error = %v, want the store's own refusal", err)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "llamacpp") {
+		t.Fatalf("reported %v, want only the entry that moved", lines)
+	}
+
+	text := configFileText(t, cfg.ConfigPath)
+	if strings.Contains(text, "api_key: sk-llamacpp") {
+		t.Errorf("the entry that moved kept its literal:\n%s", text)
+	}
+	if !strings.Contains(text, "api_key: sk-ollama") {
+		t.Errorf("the entry that failed was rewritten anyway:\n%s", text)
+	}
+}
+
+// The "never for these entries" answer writes the marker and nothing else: the
+// keys stay exactly where their owner said they should, and the run stops being
+// a candidate — which is what makes the answer stick across launches.
+func TestKeepPlaintextKeys_RecordsTheAnswerAndLeavesTheKeys(t *testing.T) {
+	t.Parallel()
+
+	cfg := twoKeyConfig(t)
+
+	lines, err := keepPlaintextKeys(cfg, []string{"llamacpp", "ollama"})
+	if err != nil {
+		t.Fatalf("keepPlaintextKeys: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("reported %d lines, want one per entry: %v", len(lines), lines)
+	}
+	for i, name := range []string{"llamacpp", "ollama"} {
+		for _, want := range []string{name, cfg.ConfigPath, "plaintext_key_ok"} {
+			if !strings.Contains(lines[i], want) {
+				t.Errorf("line %q does not mention %q", lines[i], want)
+			}
+		}
+	}
+
+	saved, err := parseConfig(cfg.ConfigPath)
+	if err != nil {
+		t.Fatalf("re-reading the config: %v", err)
+	}
+	for _, name := range []string{"llamacpp", "ollama"} {
+		entry := saved.Servers[name]
+		if !entry.PlaintextKeyOK {
+			t.Errorf("%s does not carry plaintext_key_ok", name)
+		}
+		if entry.APIKey != "sk-"+name {
+			t.Errorf("%s api_key = %q, want it left alone", name, entry.APIKey)
+		}
+	}
+	if got := plaintextKeyServers(saved); len(got) != 0 {
+		t.Errorf("plaintextKeyServers() = %v after the answer, want none", got)
+	}
+}
+
+// countingProbe reports what the machine has, and how many times it was asked —
+// the second half is the point: probing costs a subprocess.
+func countingProbe(store secretStore, ok bool, calls *int) func() (secretStore, bool) {
+	return func() (secretStore, bool) {
+		*calls++
+		return store, ok
+	}
+}
+
+// A run whose keys are all somewhere sensible says nothing and, above all, asks
+// the machine nothing: the probe must never run for a question that will not be
+// put.
+func TestDecideKeyOffer_NothingToOfferProbesNothing(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	cfg := &Config{ConfigPath: "/c.yaml", Servers: map[string]ServerConfig{
+		"llamacpp": {Enabled: true, APIKey: "sk-a", PlaintextKeyOK: true},
+	}}
+
+	offer := decideKeyOffer(cfg, countingProbe(newFakeStore("sk-a"), true, &calls))
+
+	if len(offer.Names) != 0 || offer.Store != nil || offer.Notice != "" {
+		t.Errorf("decideKeyOffer() = %+v, want an empty offer", offer)
+	}
+	if calls != 0 {
+		t.Errorf("probed %d times with nothing to offer, want 0", calls)
+	}
+}
+
+// No store on this machine: there is nothing to offer the key, so the run says
+// so — with the reason that is actually true of this path — and raises no offer
+// it could not carry out.
+func TestDecideKeyOffer_NoStoreYieldsTheNotice(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	cfg := &Config{ConfigPath: "/c.yaml", Servers: map[string]ServerConfig{
+		"llamacpp": {Enabled: true, APIKey: "sk-a"},
+	}}
+
+	offer := decideKeyOffer(cfg, countingProbe(nil, false, &calls))
+
+	if calls != 1 {
+		t.Errorf("probed %d times, want exactly 1", calls)
+	}
+	if offer.Store != nil {
+		t.Errorf("offer carries a store on a machine that has none: %+v", offer)
+	}
+	for _, want := range []string{"llamacpp", cfg.ConfigPath, reasonNoStore} {
+		if !strings.Contains(offer.Notice, want) {
+			t.Errorf("notice %q does not mention %q", offer.Notice, want)
+		}
+	}
+}
+
+// A store to move the key into makes it a question rather than a statement: the
+// offer carries the store and the entries it is about, and no notice — the user
+// is being asked, not told.
+func TestDecideKeyOffer_AStoreYieldsAnOfferNamingTheEntries(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	store := newFakeStore("sk-a")
+	cfg := &Config{ConfigPath: "/c.yaml", Servers: map[string]ServerConfig{
+		"llamacpp": {Enabled: true, APIKey: "sk-a"},
+		"ollama":   {Enabled: true, APIKey: "sk-b"},
+	}}
+
+	offer := decideKeyOffer(cfg, countingProbe(store, true, &calls))
+
+	if calls != 1 {
+		t.Errorf("probed %d times, want exactly 1", calls)
+	}
+	if offer.Store != secretStore(store) {
+		t.Errorf("offer.Store = %v, want the probed store", offer.Store)
+	}
+	if strings.Join(offer.Names, ",") != "llamacpp,ollama" {
+		t.Errorf("offer names %v, want both entries in sorted order", offer.Names)
+	}
+	if offer.Notice != "" {
+		t.Errorf("offer carries a notice as well as a question: %q", offer.Notice)
+	}
+}
+
+// The non-interactive half, end to end through the real dispatcher: a command
+// that runs and exits cannot ask, so it says what it found on stderr — naming
+// the entry, the config file this run actually read, and why no offer is coming
+// — and then does its job.
+func TestRun_NonInteractiveCommandNoticesAPlaintextKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := "servers:\n" +
+		"  llamacpp:\n" +
+		"    enabled: true\n" +
+		"    api_key: sk-plaintext\n" +
+		"log_dir: " + dir + "\n" +
+		"defaults:\n" +
+		"  server: llamacpp\n" +
+		"  host: 127.0.0.1\n" +
+		"  port: 1\n" +
+		"profiles:\n" +
+		"  small:\n" +
+		"    model: small.gguf\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing the config: %v", err)
+	}
+	// LoadConfig pushes configured keys onto the package-global backends; clear
+	// them again so this config's key does not outlive the test.
+	t.Cleanup(func() { applyAPIKeys(&Config{}) })
+
+	code := 0
+	var stderr string
+	captureStdout(t, func() {
+		stderr = captureStderr(t, func() { code = Run([]string{"--config", path, "list"}) })
+	})
+
+	if code != 0 {
+		t.Errorf("Run(list) = %d, want 0 — the notice must not stop the command", code)
+	}
+	for _, want := range []string{"warning: ", "llamacpp", path, reasonNoPrompt} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q does not mention %q", stderr, want)
+		}
 	}
 }
 

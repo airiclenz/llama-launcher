@@ -453,6 +453,8 @@ The launcher is not a proxy, so what the key does depends on the backend:
 
 In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). Keep in mind that the key is stored as plaintext in `config.yaml` (created with mode 0600). For `llamacpp`, note that llama-server reads `LLAMA_API_KEY` only when no `--api-key` flag is given, so an `extra_args` `--api-key` override still wins — but that literal override *is* visible in `ps`.
 
+While a literal key sits in the file without `plaintext_key_ok: true`, running `llama-launcher` with no arguments raises one offer before the menu — move the key(s) into your machine's secret store (the entry's `api_key` line becomes an `api_key_cmd` line, and only after the stored key has been read back through it), not now (asked again next launch), or never for these entries (records `plaintext_key_ok: true`). Subcommands never prompt, so they print a one-line warning naming the entries, the config file this run read, and the ways out by hand instead.
+
 ## Usage
 
 ### Interactive mode
