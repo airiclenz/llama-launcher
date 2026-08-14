@@ -26,13 +26,14 @@ func echoArgsCLI(t *testing.T) string {
 	return path
 }
 
-// startAdapter wires the real MCP server + allowlist behind an httptest server
-// and returns a connected client session.
+// startAdapter wires the real MCP server + allowlist + cross-origin protection
+// behind an httptest server — the production chain of main.go — and returns a
+// connected client session.
 func startAdapter(t *testing.T, cfg *config, allow []allowEntry) *mcp.ClientSession {
 	t.Helper()
 	server := newServer(cfg)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	ts := httptest.NewServer(allowlistMiddleware(allow, handler))
+	ts := httptest.NewServer(allowlistMiddleware(allow, crossOriginHandler(handler)))
 	t.Cleanup(ts.Close)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -144,6 +145,81 @@ func TestEndToEndAllowlistBlocksConnect(t *testing.T) {
 	if _, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL, MaxRetries: -1}, nil); err == nil {
 		t.Fatal("expected connect to fail for non-allowlisted client")
 	}
+}
+
+// The allowlist admits a whole machine, so a browser page running on an
+// allowlisted machine must not be able to drive the control plane from a
+// foreign origin. The handler chain built here is main.go's, with a counter
+// spliced in front of the MCP handler to prove a refused request never reaches
+// it — while the header shapes real (non-browser) MCP clients send, no Origin
+// at all or a same-origin one, pass straight through.
+func TestEndToEndCrossOriginProtection(t *testing.T) {
+	cfg := &config{llamaLauncherBin: echoArgsCLI(t)}
+	server := newServer(cfg)
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+
+	reached := 0
+	counted := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached++
+		mcpHandler.ServeHTTP(w, r)
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", allowlistMiddleware(loopbackAllow(t), crossOriginHandler(maxBytesHandler(counted, maxRequestBody))))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	const initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":` +
+		`{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
+
+	post := func(t *testing.T, origin string) *http.Response {
+		t.Helper()
+		reached = 0
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(initialize))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST /mcp: %v", err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	t.Run("foreign origin is refused before the MCP layer", func(t *testing.T) {
+		resp := post(t, "https://attacker.example")
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+		}
+		if reached != 0 {
+			t.Errorf("MCP handler saw %d requests, want none", reached)
+		}
+	})
+
+	t.Run("no Origin header passes through", func(t *testing.T) {
+		resp := post(t, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		if reached != 1 {
+			t.Errorf("MCP handler saw %d requests, want 1", reached)
+		}
+	})
+
+	t.Run("same-origin request passes through", func(t *testing.T) {
+		resp := post(t, ts.URL)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		if reached != 1 {
+			t.Errorf("MCP handler saw %d requests, want 1", reached)
+		}
+	})
 }
 
 // TestMaxBytesHandlerCapsRequestBody pins the request-ingress cap: the MCP

@@ -39,7 +39,11 @@
 
 ---
 
-## 1. Enable cross-origin protection on the MCP HTTP handler
+## 1. Enable cross-origin protection on the MCP HTTP handler — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): Deviation — the protection is installed as `http.NewCrossOriginProtection().Handler(...)` middleware (helper `crossOriginHandler`) rather than via `mcp.StreamableHTTPOptions{CrossOriginProtection: ...}` as the item's code block specifies. In the pinned go-sdk v1.6.1 that option field is marked `Deprecated:` (mcp/streamable.go:180-186), will be removed in SDK v1.8.0, silently ignores any deny handler, and its own doc comment names this middleware as the replacement. Behaviour is identical (403 on a cross-origin non-safe request) and the middleware form additionally satisfies the item's stated test criterion literally: the request never reaches the MCP handler at all, instead of being rejected inside it. Ratified call 3 (always on, no flag) is unchanged.
+
+NOTES (2026-08-14): The package doc comment in `cmd/llama-launcher-mcp/main.go` was updated alongside TDD §15.3 — it enumerates the adapter's access gates and would otherwise have been left stating the IP allowlist and narrow bind as the whole story.
 
 **What:** In `cmd/llama-launcher-mcp/main.go` (handler construction at lines 51–53), pass options as the second argument to `mcp.NewStreamableHTTPHandler`:
 

@@ -8,8 +8,9 @@
 // stays intact (see docs/adr/0008-mcp-control-plane-adapter.md).
 //
 // Access is gated by an IP allowlist plus a narrow bind to the container-facing
-// interface; no token or key is required, so a containerized client (e.g. a
-// cloud LLM agent) receives no secret it could leak.
+// interface, and cross-origin browser requests are refused outright; no token
+// or key is required, so a containerized client (e.g. a cloud LLM agent)
+// receives no secret it could leak.
 package main
 
 import (
@@ -53,7 +54,7 @@ func main() {
 	}, nil)
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", allowlistMiddleware(cfg.allow, maxBytesHandler(mcpHandler, maxRequestBody)))
+	mux.Handle("/mcp", allowlistMiddleware(cfg.allow, crossOriginHandler(maxBytesHandler(mcpHandler, maxRequestBody))))
 
 	fmt.Printf("llama-launcher-mcp %s listening on http://%s/mcp\n", Version, cfg.listen)
 	fmt.Printf("  allow: %s\n", describeAllow(cfg.allow))
@@ -196,6 +197,17 @@ func argsFor(sub, arg string) []string {
 // streamable handler buffers the entire body in memory, so an allowlisted
 // but hostile client could exhaust the adapter's memory with one huge POST.
 const maxRequestBody = 1 << 20
+
+// crossOriginHandler wraps next so non-safe cross-origin browser requests are
+// refused with 403 before they reach the MCP handler. The allowlist admits a
+// whole host (§15.3), so without this a page loaded in any browser on an
+// allowlisted machine could drive the control plane from an attacker's origin.
+// Protection is always on: non-browser MCP clients send neither `Origin` nor
+// `Sec-Fetch-Site` and are therefore unaffected, so there is nothing for a flag
+// to buy.
+func crossOriginHandler(next http.Handler) http.Handler {
+	return http.NewCrossOriginProtection().Handler(next)
+}
 
 // maxBytesHandler wraps next so every request body is capped at limit bytes;
 // a read past the limit fails and MaxBytesReader answers 413 for the handler.
