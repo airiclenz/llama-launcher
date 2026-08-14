@@ -156,7 +156,17 @@ NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item 
 
 **Commit:** `feat(config): add api_key_cmd and plaintext_key_ok key sources`
 
-## 6. Surgical config writer for a server entry's key source
+## 6. Surgical config writer for a server entry's key source — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): No CHANGELOG entry — this item adds an internal writer with no caller and no user-visible behaviour; the migration reaches the user in items 7 and 8, where it is announced.
+
+NOTES (2026-08-14): The refusal for "an `api_key` value spanning more than its own line" is enforced by re-reading the key's own line as a document of its own and comparing the scalar it yields (value and style) with the one the whole file yields. yaml.v3 reports where a scalar STARTS but not where it ends, so apogee's `ValueNode.Line == keyLine` test alone passes a folded plain scalar (`api_key: sk-a` continued on the next line) whose tail the rewrite would leave behind; the block-scalar and quoted-value-closing-further-down shapes fall out of the same check.
+
+NOTES (2026-08-14): The item's "mode 0600" is written as a fixed mode rather than apogee's carry-the-existing-mode-forward, so a config that was 0644 comes back 0600. The file names a key source and may still hold a literal beside it, and the rewrite is the moment the launcher touches it — narrowing never widens, and 0600 is the mode `GenerateExampleConfig` creates the file with.
+
+NOTES (2026-08-14): `llama-launcher.TDD.md` was deliberately not touched: the item names only the two Go files, its file map is not an exhaustive index (it already omits `cli.go` and `frame.go`), and item 8 owns the TDD updates for the migration feature this writer serves.
+
+NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item and already recorded under items 3 and 5: `TestStopServerAt_StartingOccupant` fails because the container's `nc` never binds the test port. Every other test in `./internal/launcher/` passes, the 13 new ones included.
 
 **What:** New file `internal/launcher/configwrite.go` with two functions mirroring the contract of apogee's `internal/config/configwrite_keysource.go` (reference at `1c0037b`), addressed to llama-launcher's config shape — `servers:` is a **map** (`servers.<name>` mapping value), not apogee's named list:
 
