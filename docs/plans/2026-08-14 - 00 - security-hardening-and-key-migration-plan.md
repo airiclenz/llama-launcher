@@ -185,7 +185,19 @@ Shared contract: read the file; splice text so every comment, key order and othe
 
 **Depends on item 5** (the parser must know the new keys for the re-parse verification).
 
-## 7. Key-migration engine and plaintext-key notice
+## 7. Key-migration engine and plaintext-key notice — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): Deviation — `plaintextKeyServers` tests `strings.TrimSpace(sc.APIKey) == ""` rather than the item's literal `APIKey != ""`. An entry whose literal is only whitespace holds no key at all — `APIKeyFor` trims it to "" and the launcher sends nothing — so counting it would name it in a notice about a secret that is not there, and taking the offer would ask `keystore.Write` to store a key it refuses as empty.
+
+NOTES (2026-08-14): Deviation — `migrateKey` trims the key once, up front, and it is the trimmed form that is both written to the store and compared against the read-back. The item says "compare to what went in"; trimming makes what went in the one form the round trip could ever hand back, since `runKeyCommand` trims what a command prints. Without it a literal the file surrounded with whitespace would fail its own read-back and be reported as a store mismatch.
+
+NOTES (2026-08-14): `plaintextKeyNotice` returns text with no `llama-launcher:` or `warning:` prefix of its own, where apogee's carries one: item 8 prints it on both paths through the existing `warning:` sink, which supplies the prefix.
+
+NOTES (2026-08-14): `llama-launcher.TDD.md` was deliberately not touched — the item names only the two Go files, and item 8 explicitly owns the TDD updates for the migration feature this engine serves (same call as item 6).
+
+NOTES (2026-08-14): No CHANGELOG entry — this item adds an internal engine with no caller and no user-visible behaviour, matching the call made for items 4 and 6; the migration reaches the user in item 8, where it is announced.
+
+NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item and already recorded under items 3, 5 and 6: `TestStopServerAt_StartingOccupant` fails because the container's `nc` never binds the test port. Every other test in `./internal/launcher/` passes, the 11 new ones included.
 
 **What:** New file `internal/launcher/keymigrate.go`, the policy layer adapted from apogee's `cmd/apogee/keymigrate.go` (reference at `1c0037b`), UI-free:
 
