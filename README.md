@@ -1,17 +1,19 @@
 # llama-launcher
 
+[![Release](https://img.shields.io/github/v/release/airiclenz/llama-launcher)](https://github.com/airiclenz/llama-launcher/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
+[![Go Reference](https://pkg.go.dev/badge/github.com/airiclenz/llama-launcher/launcher.svg)](https://pkg.go.dev/github.com/airiclenz/llama-launcher/launcher)
+
 A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), and [LM Studio](https://lmstudio.ai) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
 
-`llama-launcher` is a process manager, not a request router: it starts and stops LLM servers and tells them which model to load. Clients talk to each server directly via its native address. The launcher exits after dispatching work, consuming zero resident memory while the server runs. Multiple instances of any supported server may run concurrently as long as each binds a distinct `host:port`.
-
-See [CONTEXT.md](CONTEXT.md) for the project's domain language and [docs/adr/](docs/adr/) for the architectural decisions behind the design.
+`llama-launcher` is a process manager, not a request router: it starts and stops LLM servers and tells them which model to load. Clients talk to each server directly via its native address. The launcher exits after dispatching work, consuming zero resident memory while the server runs.
 
 <p align="center">
-  <img src="media/screen_1.png" alt="llama-launcher interactive menu" width="600">
+  <img src="media/screen_1.png" alt="llama-launcher interactive menu with server status, memory readout, and actions" width="600">
 </p>
 
 <p align="center">
-  <img src="media/screen_2.png" alt="llama-launcher interactive menu" width="550">
+  <img src="media/screen_2.png" alt="llama-launcher profile picker" width="550">
 </p>
 
 ## Install
@@ -23,7 +25,7 @@ brew tap airiclenz/tap
 brew install llama-launcher
 ```
 
-This installs both the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it, so installing it costs nothing if you don't use it.
+This installs the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it.
 
 ### From source
 
@@ -33,7 +35,7 @@ Requires Go 1.26+.
 make build      # => ./llama-launcher, for local testing
 ```
 
-Installation is deliberately Homebrew-only: `brew install airiclenz/tap/llama-launcher` (upgrade with `brew upgrade llama-launcher`). `make install` does not copy anything — it just points you there.
+Installation is deliberately Homebrew-only; `make install` just points you there.
 
 ## Quick start
 
@@ -48,386 +50,45 @@ llama-launcher
 
 ## Configuration
 
-The config lives at `~/.config/llama-launcher/config.yaml` (override with `--config` or `LLAMA_LAUNCHER_CONFIG`).
-
-### Default config generated on first run
-
-The first time you run `llama-launcher` without an existing config, this file is written verbatim from [`internal/launcher/defaults/config.yaml`](internal/launcher/defaults/config.yaml):
+The config lives at `~/.config/llama-launcher/config.yaml` (override with `--config` or `LLAMA_LAUNCHER_CONFIG`). The generated example is fully commented and documents every option — [`internal/launcher/defaults/config.yaml`](internal/launcher/defaults/config.yaml) is the complete reference. A minimal config looks like this:
 
 ```yaml
-# llama-launcher configuration
-#
-# Three server types are supported:
-#
-#   llamacpp   — llama.cpp's llama-server binary. The launcher forks the
-#                process, tracks PID, and restarts to switch models.
-#
-#   ollama     — Ollama. Connects to running instance or auto-starts
-#                "ollama serve". Models loaded/unloaded via HTTP API.
-#
-#   lmstudio   — LM Studio. Connects to running instance or auto-starts
-#                via "lms server start". Models loaded/unloaded via HTTP API.
-
-# ──────────────────────────────────────────────────────────────
-# Servers
-# ──────────────────────────────────────────────────────────────
-#
-# Enable the servers available on your system.
-# Binaries are auto-detected from PATH; default ports are
-# per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234).
-#
-# Each entry is either a plain bool or a mapping with an optional API key:
-#
-#   llamacpp:
-#     enabled: true        # optional in the mapping form, defaults to true
-#     api_key: "secret"    # optional
-#
-# The key can live outside this file instead. api_key_cmd names a command
-# whose standard output IS the key — a lookup in your secret store, e.g.
-#
-#   llamacpp:
-#     api_key_cmd: "security find-generic-password -s llama-launcher -a llamacpp -w"
-#
-# It is handed whole to a shell, so a pipeline works, and it runs once at
-# startup for every ENABLED server. Set api_key or api_key_cmd, never both.
-# A command that fails, hangs or prints nothing stops the launcher naming the
-# entry: a key source answering with nothing is a broken source, not a
-# keyless server.
-#
-# plaintext_key_ok: true records that an entry's literal api_key is meant to
-# stay in this file, so nothing offers to move it into a secret store.
-#
-# What the key does depends on the server:
-#
-#   llamacpp   — exported as LLAMA_API_KEY into the launched server's
-#                environment (never on the command line, so it stays out
-#                of ps); llama-server then rejects client requests without
-#                "Authorization: Bearer <key>".
-#   lmstudio   — LM Studio manages its own key: enable "Require API token"
-#                in its Server Settings and paste the generated token here
-#                so the launcher's health checks and model loads still work.
-#   ollama     — Ollama has no native auth; set a key only when the
-#                instance sits behind an authenticating reverse proxy.
-#                The launcher then sends the key with its own requests.
-
 servers:
   llamacpp: true
-  ollama: false
-  lmstudio: false
 
-# ──────────────────────────────────────────────────────────────
-# Paths
-# ──────────────────────────────────────────────────────────────
+models_dir: ~/Models     # base directory for model files (llamacpp)
 
-# Base directory for model files (llamacpp only - LM-Studio supports
-# re-loating it's models folder so LLaMA.cpp can share it).
-# Profile model paths are resolved relative to this directory
-# unless they are absolute. Supports ~ expansion.
-models_dir: ~/Models
-
-# Directory for server log files.
-log_dir: ~/.config/llama-launcher/logs
-
-# ──────────────────────────────────────────────────────────────
-# Loader / Launcher behaviour
-# ──────────────────────────────────────────────────────────────
-
-# Automatically stop the old server when switching to a different backend (default: true).
-# Set to false to allow multiple servers to run simultaneously.
-auto_stop_server: true
-
-# Automatically unload the current model when loading a different one on the same
-# server (default: true). Set to false to keep multiple models loaded at once.
-auto_unload: true
-
-# Automatically delete log files older than N days on server start.
-# Logs of running servers are never deleted. 0 or unset disables cleanup.
-log_retention: 7
-
-# ──────────────────────────────────────────────────────────────
-# UI behaviour
-# ──────────────────────────────────────────────────────────────
-
-# Display the llama-launcher UI centered in the terminal (default: false).
-display_centered: true
-
-# Close the launcher after selecting a menu action (default: true).
-# Set to false to keep the interactive menu open after each action.
-auto_close: false
-
-# Sort profiles alphabetically (favourites first, then by server, then by name)
-# in menus and `list` output (default: true). Set to false to list profiles in
-# the order they appear under `profiles:` below.
-sort_alphabetically: true
-
-# How often (seconds) the interactive menu polls the servers. Drives the
-# server / loaded-model status lines and how quickly the menu picks up
-# background changes — a model loaded or unloaded from another terminal
-# rebuilds the menu on the next tick. The memory readout below refreshes
-# on its own fixed 1-second tick, independent of this value.
-# Minimum 1 second; values below 1 are clamped. Default: 10.
-# refresh_duration: 10
-
-# Show a memory + swap readout in the status header (default: true).
-# Refreshes every second while the menu is open, independent of
-# refresh_duration; the underlying sysctl / vm_stat / ioreg shell-outs
-# are cached just below that tick.
-# show_memory_status: true
-
-# Template for the memory readout. Placeholders are substituted with
-# humanised byte values (e.g. "12.4GB") or rounded integer percentages
-# (e.g. "38%"). Unknown placeholders are passed through literally.
-# Available placeholders:
-#   {free_ram}        — available memory (free + inactive + speculative + purgeable)
-#   {used_ram}        — total_ram - free_ram
-#   {total_ram}       — physical RAM reported by hw.memsize
-#   {compressed_ram}  — bytes held by the kernel's memory compressor
-#   {swap_used}       — swap currently in use
-#   {swap_total}      — total swap allocated
-#   {free_swap}       — swap_total - swap_used
-#   {free_ram_pct}    — free_ram / total_ram as rounded integer percentage
-#   {used_ram_pct}    — used_ram / total_ram as rounded integer percentage
-#   {swap_used_pct}   — swap_used / swap_total as rounded integer percentage
-#                       (0% when swap is disabled)
-#   {gpu_util_pct}    — GPU "Device Utilization %" from ioreg (Apple Silicon only)
-#   {gpu_used_ram}    — unified RAM currently held by the GPU (Apple Silicon only)
-#   {gpu_alloc_ram}   — unified RAM allocated to the GPU (Apple Silicon only)
-# GPU values read 0 on Intel Macs or when ioreg is unavailable.
-#
-# Style tags color any span of the line:
-#   {black} {red} {green} {yellow} {blue} {magenta} {cyan} {white} {gray}
-#   {bright-red} {bright-green} {bright-yellow} {bright-blue}
-#   {bright-magenta} {bright-cyan} {bright-white}
-#   {bold} {dim} {reset}
-#   {0} … {255}  — 256-color palette index, e.g. {208}
-#   {#rrggbb}    — exact 24-bit color, e.g. {#7aa2f7} (short {#rgb} works too)
-# Named colors are rendered by your terminal theme, so their exact shade
-# varies between setups; palette-index and hex colors look the same
-# everywhere. A template without style tags or bars keeps the classic dim
-# rendering; as soon as it contains one, you control all styling yourself
-# and {reset} returns to the terminal's default style.
-#
-# Percentage placeholders can render as a value-less bar graph instead:
-#   {used_ram_pct:bar}                    — defaults from memory_status_bar below
-#   {used_ram_pct:bar:WIDTH:COLOR:BG}     — per-bar overrides, trailing parts
-#                                           optional ({swap_used_pct:bar:6:yellow})
-# Bars fill with block glyphs in COLOR on a solid BG background — one
-# continuous strip, no gap; eighth-block glyphs (▏▎▍▌▋▊▉) give 8 fill
-# levels per cell. COLOR and BG accept the same three forms as style tags
-# (name, palette index, #hex). Width is clamped to 1–40.
-# Unknown or malformed tokens are passed through literally.
-# memory_status_format: "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
-#
-# Plain alternative (no styling — rendered all-dim like older versions):
-# memory_status_format: "RAM: {free_ram} free · Swap: {swap_used} used"
-
-# Default geometry and colors for {..._pct:bar} tokens. Inline parts on a
-# token override these per bar. Colors accept a name, a 256-color palette
-# index ("240"), or a hex value ("#7aa2f7").
-# memory_status_bar:
-#   width: 10        # cells, clamped to 1–40
-#   color: green     # filled portion
-#   background: gray # empty portion
-
-# ──────────────────────────────────────────────────────────────
-# Default parameters
-# ──────────────────────────────────────────────────────────────
-#
-# Shared by all profiles. Per-profile values override these.
-# Each profile should declare `server:` explicitly (see ADR-0005);
-# `defaults.server` is soft-deprecated and only kept as a fallback
-# when more than one server is enabled.
-#
-# Not all parameters apply to all servers:
-#
-#   Parameter       llamacpp   ollama   lmstudio
-#   ─────────────   ────────   ──────   ────────
-#   gpu_layers      yes        -        -        (LM Studio manages GPU offload itself)
-#   threads         yes        -        -
-#   threads_batch   yes        -        -
-#   batch_size      yes        -        yes (mapped to eval_batch_size)
-#   context_size    yes        -        yes
-#   host / port     yes        yes      yes
-#   flash_attn      yes        -        yes (mapped to flash_attention)
-#   cont_batching   yes        -        -
-#   parallel        yes        -        yes
-#   mlock           yes        -        -
-#   no_mmap         yes        -        -
-#   embedding       yes        -        -
-#   jinja           yes        -        -        (enables Jinja chat template)
-#   temperature     yes        -        -
-#   repeat_penalty  yes        -        -
-#   top_k           yes        -        -
-#   top_p           yes        -        -
-#   min_p           yes        -        -
-
-defaults:
+defaults:                # shared by all profiles
   gpu_layers: 99
   threads: 8
-  threads_batch: 8
-  batch_size: 512
-  context_size: 4096
-  host: "127.0.0.1"
-  port: 8080
-  flash_attn: true
-  cont_batching: true
-  parallel: 1
-  mlock: false
-  no_mmap: false
-  embedding: false
-  jinja: false
-
-  # Sampling defaults (llamacpp) — passed to llama-server as launch flags
-  # (--temp, --repeat-penalty, --top-k, --top-p, --min-p). They set the
-  # server-side defaults for API requests; parameters sent with a request
-  # still override them per call.
-  temperature: 0.7
-  repeat_penalty: 1.1
-  top_k: 40
-  top_p: 0.95
-  min_p: 0.05
-
-# ──────────────────────────────────────────────────────────────
-# Profiles
-# ──────────────────────────────────────────────────────────────
-#
-# Each profile specifies a model to load. The "server" field
-# selects which server to use and should be set on every profile.
-# Profile parameters override any parameter from the defaults block.
-#
-# Profile fields:
-#   title         Optional human-readable label shown wherever the profile
-#                 appears (menus, status header). Falls back to the profile
-#                 name when unset.
-#   description   Optional longer text shown only in the "Show model config"
-#                 pop-up.
-#   model         Model reference (file path for llamacpp, name for ollama,
-#                 publisher/repo/file for lmstudio)
-#   server        Server to use (llamacpp, ollama, lmstudio)
-#   is_favourite  Pin this profile to the top of the menu (default: false).
-#                 Favourites sort before all other profiles.
-#   extra_args    Additional CLI flags appended verbatim (llamacpp only)
-#   <param>       Any parameter from the defaults block
+  context_size: 8192
 
 profiles:
-  # ── llama.cpp example ──────────────────────────────────────
-  # Model is a file path, resolved relative to models_dir.
-  example:
-    title: "Example Model"
-    description: "Example profile"
+  qwen-coder:
+    title: "Qwen 2.5 Coder 32B"
     server: llamacpp
-    model: your-model-file.gguf
-    context_size: 8192
-    # is_favourite: true
+    model: qwen2.5-coder-32b-q4_k_m.gguf   # relative to models_dir
+    context_size: 32768
+    is_favourite: true                     # pinned to the top of menus
 
-  # ── LM Studio examples ────────────────────────────────────
-  # Model is an LM Studio model key (publisher/repo or full path
-  # with quantization). Run "lms ls" to see available models.
-  # Uncomment lmstudio in the servers section above.
-  #
-  # lmstudio-llama:
-  #   description: "Llama 3.1 8B via LM Studio"
-  #   server: lmstudio
-  #   model: lmstudio-community/meta-llama-3.1-8b-instruct
-  #   context_size: 16384
-  #   flash_attn: true
-  #   batch_size: 512
-  #
-  # lmstudio-qwen:
-  #   description: "Qwen 2.5 32B via LM Studio"
-  #   server: lmstudio
-  #   model: lmstudio-community/qwen2.5-32b-instruct
-  #   context_size: 8192
-
-  # ── Ollama examples ────────────────────────────────────────
-  # Model is an Ollama model name (e.g. "llama3.1:8b").
-  # Must be pulled first: ollama pull <model>
-  # Uncomment ollama in the servers section above.
-  #
-  # ollama-llama3:
-  #   description: "Llama 3.1 8B via Ollama"
-  #   server: ollama
-  #   model: llama3.1:8b
-  #
-  # ollama-codellama:
-  #   description: "Code Llama 13B via Ollama"
-  #   server: ollama
-  #   model: codellama:13b
+  llama-8b:
+    server: llamacpp
+    model: llama-3.1-8b-instruct-q5_k_m.gguf
 ```
 
-Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. All numeric and boolean params use pointer types so "not set" is distinct from zero.
+Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. "Not set" is always distinct from zero. Not every parameter applies to every backend — the commented example config has the full parameter/backend matrix.
 
-Set `is_favourite: true` on a profile to pin it to the top of menus and `list` output. Profiles are sorted by favourite status first, then alphabetically by server, then alphabetically by name. Set the top-level `sort_alphabetically: false` to instead list profiles in the order they appear in your config file.
-
-Every profile list — the TUI menu, its non-terminal fallback, and `llama-launcher list` — shows the profile's effective context size (defaults merged with the profile's own `context_size`) in a right-aligned column between the title and the `[server]` tag, compacted to `4K` / `65K` / `131K` / `1M`. Only values the backend actually receives are shown, so Ollama rows stay blank — its load request carries no context length — and a context size smuggled into `extra_args` as `-c 65536` is not parsed. The column is omitted entirely when no listed profile has a value to show.
-
-### Memory readout placeholders
-
-`memory_status_format` accepts these placeholders:
-
-| Placeholder | Value |
-|-------------|-------|
-| `{free_ram}` | Available RAM (free + inactive + speculative + purgeable pages), humanised |
-| `{used_ram}` | `total_ram - free_ram`, humanised |
-| `{total_ram}` | Total physical RAM, humanised |
-| `{compressed_ram}` | Bytes held by the kernel's memory compressor, humanised |
-| `{swap_used}` | Swap currently in use, humanised |
-| `{swap_total}` | Swap file size, humanised |
-| `{free_swap}` | `swap_total - swap_used`, humanised |
-| `{free_ram_pct}` | `free_ram / total_ram` as a rounded integer percentage (e.g. `38%`) |
-| `{used_ram_pct}` | `used_ram / total_ram` as a rounded integer percentage (e.g. `63%`) |
-| `{swap_used_pct}` | `swap_used / swap_total` as a rounded integer percentage; `0%` when swap is disabled |
-| `{gpu_util_pct}` | GPU `Device Utilization %` from `ioreg` (Apple Silicon only; reads `0%` on Intel) |
-| `{gpu_used_ram}` | Unified RAM currently held by the GPU, humanised (Apple Silicon only) |
-| `{gpu_alloc_ram}` | Unified RAM allocated to the GPU, humanised (Apple Silicon only) |
-
-Byte values are rendered macOS-style: 1024-based units with one decimal (`12.4GB`, `512MB`), whole values drop the decimal (`8GB`). Unknown placeholders are left in place.
-
-#### Style tags
-
-The template can color any span of the line with inline tags:
-
-| Tags | Effect |
-|------|--------|
-| `{black}` `{red}` `{green}` `{yellow}` `{blue}` `{magenta}` `{cyan}` `{white}` `{gray}` | Standard ANSI colors |
-| `{bright-red}` … `{bright-white}` | Bright ANSI variants |
-| `{0}` … `{255}` | 256-color palette index, e.g. `{208}` |
-| `{#rrggbb}` | Exact 24-bit color, e.g. `{#7aa2f7}` (short `{#rgb}` works too) |
-| `{bold}` `{dim}` | Text styles |
-| `{reset}` | Back to the terminal's default style |
-
-Named colors are escape codes resolved by your terminal emulator's theme, so their exact shade varies between setups — `{gray}` occupies the ANSI "bright black" slot, which most themes draw as mid gray. Palette-index and hex colors render the same everywhere.
-
-A template without style tags or bars keeps the classic all-dim rendering. As soon as it contains one, the launcher stops applying its own dim wrap — you control all styling, and `{reset}` returns to the terminal default. Unknown tags are left in place, so typos are visible rather than silently dropped.
-
-#### Bar graphs
-
-Any percentage placeholder can render as a value-less bar graph instead of a number:
-
-```yaml
-memory_status_format: "{dim}RAM{reset} {used_ram_pct:bar} {free_ram} free · {dim}Swap{reset} {swap_used_pct:bar:6:yellow} {swap_used}"
-
-memory_status_bar:    # defaults for every {..._pct:bar} token
-  width: 10           # cells, clamped to 1–40
-  color: green        # filled portion
-  background: gray    # empty portion
-```
-
-The token is `{pct_name:bar[:width[:color[:bgcolor]]]}` — trailing parts are optional and fall back to `memory_status_bar` (which itself defaults to `10` / `green` / `gray`). Empty parts are allowed, so `{used_ram_pct:bar::red}` overrides only the color. Bar colors accept the same three forms as style tags (name, palette index, `#hex`). The filled portion uses full blocks with an eighth-block partial cell (`▏▎▍▌▋▊▉`) for 8 fill levels per cell; the rest of the bar is painted as a solid background in the background color, so the fill meets the background in one continuous strip with no gap. Any nonzero percentage shows at least a sliver; malformed tokens (bad width, unknown color, `:bar` on a non-percentage placeholder) are passed through literally.
-
-To show free memory as the *empty* part of the gauge, bar the complementary percentage: `{used_ram_pct:bar}` fills with used RAM, leaving the empty tail as what's free.
-
-See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
+Other top-level options control launcher behaviour (`auto_stop_server`, `auto_unload`, `log_retention`) and the TUI (`display_centered`, `auto_close`, `sort_alphabetically`, `refresh_duration`, and the memory readout below).
 
 ### Backends
 
 | Backend | Default address | Model reference |
 |---------|-----------------|-----------------|
 | `llamacpp` | `127.0.0.1:8080` | File path (relative to `models_dir` or absolute) |
-| `ollama` | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`) |
+| `ollama` | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`, pulled first) |
 | `lmstudio` | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
 
-For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)).
+For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
 
 ### API keys
 
@@ -443,37 +104,97 @@ servers:
   ollama: false
 ```
 
+The key doesn't have to live in the file. `api_key_cmd` names a command whose standard output *is* the key — typically a lookup in your secret store:
+
+```yaml
+servers:
+  llamacpp:
+    api_key_cmd: "security find-generic-password -s llama-launcher -a llamacpp -w"
+```
+
+The command is handed whole to a shell (pipelines work) and runs once at startup for every enabled server. Set `api_key` or `api_key_cmd`, never both. If you *do* want a literal key to stay in the file, set `plaintext_key_ok: true` on the entry so nothing offers to move it into a secret store.
+
+While a literal key sits in the file without `plaintext_key_ok: true`, running `llama-launcher` with no arguments raises one offer before the menu — move the key(s) into your machine's secret store (the entry's `api_key` line becomes an `api_key_cmd` line, and only after the stored key has been read back through it), not now (asked again next launch), or never for these entries (records `plaintext_key_ok: true`). Subcommands never prompt, so they print a one-line warning naming the entries, the config file this run read, and the ways out by hand instead.
+
 The launcher is not a proxy, so what the key does depends on the backend:
 
 | Backend | Effect of `api_key` |
 |---------|---------------------|
-| `llamacpp` | Exported as `LLAMA_API_KEY` into the launched server's environment — llama-server then rejects client requests without `Authorization: Bearer <key>` (its `/health` endpoint stays open). It is deliberately never put on the command line, so the key does not show up in `ps`. |
+| `llamacpp` | Exported as `LLAMA_API_KEY` into the launched server's environment — llama-server then rejects client requests without `Authorization: Bearer <key>` (its `/health` endpoint stays open). Deliberately never put on the command line, so the key does not show up in `ps`. |
 | `lmstudio` | LM Studio manages its own token: enable *Require API token* in its Server Settings, generate a token there, and paste it here so the launcher's health checks and model loads keep working. |
 | `ollama` | Ollama has no native authentication. Set a key only when the instance sits behind an authenticating reverse proxy; the launcher then sends it with its own requests. |
 
-In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). Keep in mind that the key is stored as plaintext in `config.yaml` (created with mode 0600). For `llamacpp`, note that llama-server reads `LLAMA_API_KEY` only when no `--api-key` flag is given, so an `extra_args` `--api-key` override still wins — but that literal override *is* visible in `ps`.
+In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). The config file is created with mode 0600. For `llamacpp`, llama-server reads `LLAMA_API_KEY` only when no `--api-key` flag is given, so an `extra_args` `--api-key` override still wins — but that literal override *is* visible in `ps`.
 
-While a literal key sits in the file without `plaintext_key_ok: true`, running `llama-launcher` with no arguments raises one offer before the menu — move the key(s) into your machine's secret store (the entry's `api_key` line becomes an `api_key_cmd` line, and only after the stored key has been read back through it), not now (asked again next launch), or never for these entries (records `plaintext_key_ok: true`). Subcommands never prompt, so they print a one-line warning naming the entries, the config file this run read, and the ways out by hand instead.
+### Memory readout
+
+The TUI's status header shows a live memory + swap readout (macOS), fully customizable via `memory_status_format` — colored spans, 24-bit colors, and bar-graph gauges:
+
+```yaml
+memory_status_format: "{bold}Free RAM:{reset} {yellow}{free_ram} {bright-blue}{free_ram_pct}{reset} {used_ram_pct:bar} ✦ {bold}Swap:{reset} {yellow}{swap_used}{reset} ✦ {bold}GPU:{reset} {gpu_util_pct:bar}"
+```
+
+<details>
+<summary>Placeholders, style tags, and bar syntax</summary>
+
+#### Placeholders
+
+| Placeholder | Value |
+|-------------|-------|
+| `{free_ram}` | Available RAM (free + inactive + speculative + purgeable pages), humanised |
+| `{used_ram}` | `total_ram - free_ram`, humanised |
+| `{total_ram}` | Total physical RAM, humanised |
+| `{compressed_ram}` | Bytes held by the kernel's memory compressor, humanised |
+| `{swap_used}` / `{swap_total}` / `{free_swap}` | Swap in use / allocated / remaining, humanised |
+| `{free_ram_pct}` / `{used_ram_pct}` | Rounded integer percentages of total RAM (e.g. `38%`) |
+| `{swap_used_pct}` | Percentage of allocated swap; `0%` when swap is disabled |
+| `{gpu_util_pct}` | GPU `Device Utilization %` from `ioreg` (Apple Silicon only) |
+| `{gpu_used_ram}` / `{gpu_alloc_ram}` | Unified RAM held by / allocated to the GPU (Apple Silicon only) |
+
+Byte values are rendered macOS-style: 1024-based units with one decimal (`12.4GB`), whole values drop the decimal (`8GB`). Unknown placeholders are left in place.
+
+#### Style tags
+
+| Tags | Effect |
+|------|--------|
+| `{black}` `{red}` `{green}` `{yellow}` `{blue}` `{magenta}` `{cyan}` `{white}` `{gray}` | Standard ANSI colors |
+| `{bright-red}` … `{bright-white}` | Bright ANSI variants |
+| `{0}` … `{255}` | 256-color palette index, e.g. `{208}` |
+| `{#rrggbb}` | Exact 24-bit color, e.g. `{#7aa2f7}` (short `{#rgb}` works too) |
+| `{bold}` `{dim}` `{reset}` | Text styles / back to terminal default |
+
+Named colors are resolved by your terminal theme; palette-index and hex colors render the same everywhere. A template without style tags or bars keeps the classic all-dim rendering; as soon as it contains one, you control all styling yourself.
+
+#### Bar graphs
+
+Any percentage placeholder can render as a value-less bar gauge: `{pct_name:bar[:width[:color[:bgcolor]]]}`. Trailing parts are optional and fall back to the `memory_status_bar` block:
+
+```yaml
+memory_status_bar:    # defaults for every {..._pct:bar} token
+  width: 10           # cells, clamped to 1–40
+  color: green        # filled portion
+  background: gray    # empty portion
+```
+
+Bars fill with block glyphs (eighth-block partials give 8 fill levels per cell) against a solid background — one continuous strip. Colors accept the same three forms as style tags. Malformed tokens are passed through literally, so typos are visible rather than silently dropped.
+
+</details>
+
+See the [technical design doc](llama-launcher.TDD.md) for full schema details and behavior.
 
 ## Usage
 
 ### Interactive mode
 
-Run without arguments to get the TUI menu:
+Run without arguments to get the TUI menu. It adapts to three states:
 
-```
-llama-launcher
-```
-
-The menu adapts to three states:
-
-- **Stopped** -- select a profile to start the server and load a model
-- **Running with model** -- switch models (hidden when only one profile is configured), unload model, stop server, show log, show model config, edit config
-- **Running (no model)** -- load a profile, stop server, show log, edit config
+- **Stopped** — select a profile to start the server and load a model
+- **Running with model** — switch models, unload model, stop server, show log, show model config, edit config
+- **Running (no model)** — load a profile, stop server, show log, edit config
 
 When more than one instance is running, the relevant actions (stop, unload, show log) present an instance picker disambiguated by `host:port`.
 
-Each profile row shows its title (or its name), then the configured context size, then a `[server]` tag when more than one backend is enabled, then the `★` favourite marker — every column right-aligned across the list:
+Each profile row shows its title, the effective context size the backend will actually receive (compacted to `4K` / `65K` / `131K` / `1M`), a `[server]` tag when more than one backend is enabled, and the `★` favourite marker:
 
 ```
 ▸ DeepSeek Coder V2 Lite    65K  [LLaMA.cpp]
@@ -481,7 +202,7 @@ Each profile row shows its title (or its name), then the configured context size
   reasoning-phi                  [Ollama   ]
 ```
 
-The Ollama row is blank because Ollama's load request carries no context length: the column only shows what the backend is actually sent.
+The Ollama row is blank because Ollama's load request carries no context length — the column only shows what the backend is actually sent.
 
 ### CLI commands
 
@@ -500,53 +221,41 @@ llama-launcher config reset                 # Reset config to the example (overw
 llama-launcher version                      # Print version
 ```
 
-A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it — no hunting for the PID by hand. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)).
-
-### Options
-
-```
---config <path>    Use a custom config file instead of the default
-```
+A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)).
 
 ## Remote control from a container (MCP)
 
-`llama-launcher` itself has no network surface — it is a one-shot CLI ([ADR-0002](docs/adr/0002-not-a-router.md)). When a client on another machine needs to control which model is running — typically a coding agent in a container reaching back to the host — an **optional, separate** binary, `llama-launcher-mcp`, exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP. It runs on the host and implements every tool by shelling out to the CLI; it dispatches control commands only and never proxies inference traffic ([ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)).
+`llama-launcher` itself has no network surface — it is a one-shot CLI ([ADR-0002](docs/adr/0002-not-a-router.md)). When a client on another machine needs to control which model is running — typically a coding agent in a container reaching back to the host — an **optional, separate** binary, `llama-launcher-mcp`, exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP. It runs on the host, implements every tool by shelling out to the CLI, and never proxies inference traffic ([ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)).
 
 Tools: `list_profiles`, `server_status`, `tail_log` (read) and `load_profile`, `unload_model`, `start_server`, `stop_server` (mutating, omitted under `--read-only`).
 
-**Trust model:** access is gated by a **source-IP allowlist**, not a token. Bind the listener to the host's container-facing bridge interface (not `0.0.0.0`) and allow the container — by its IP, CIDR, or hostname, or simply by naming the bridge interface (`--allow-interface bridge100`) so any IP the bridge hands the container is covered. The client receives no secret it could leak — appropriate when the remote is a cloud LLM agent you don't want to hand credentials to.
-
-Run on the host. The Homebrew install puts `llama-launcher-mcp` on your `PATH` (or build it from source with `make build-mcp`):
+**Trust model:** access is gated by a **source-IP allowlist**, not a token. Bind the listener to the host's container-facing bridge interface (not `0.0.0.0`) and allow the container — by IP, CIDR, hostname, or simply by naming the bridge interface so any IP the bridge hands the container is covered. The client receives no secret it could leak — appropriate when the remote is a cloud LLM agent you don't want to hand credentials to.
 
 ```bash
 llama-launcher-mcp --listen 192.168.64.1:7331 --allow-interface bridge100
 #   --listen           container-facing bridge IP:port (not 0.0.0.0)
-#   --allow-interface  local interface whose subnet(s) to allow, e.g. bridge100
-#                      (the container-facing bridge); repeatable. Covers whatever
-#                      IP the bridge gives the container — no IP to know or pin.
+#   --allow-interface  local interface whose subnet(s) to allow; repeatable
 #   --allow            client IP, CIDR, or hostname; repeatable; loopback by
-#                      default. A hostname is resolved to its IPs once at startup
-#                      (restart if the container's IP later changes). Beware: a
-#                      name like `devbox.dev` may resolve to a *public* address —
-#                      prefer --allow-interface or a private CIDR (192.168.64.0/24).
+#                      default. Hostnames resolve once at startup — prefer
+#                      --allow-interface or a private CIDR (192.168.64.0/24).
 #   --llama-launcher-bin  path to the CLI (default: PATH lookup)
 #   --config           llama-launcher config path, forwarded to each call
 #   --read-only        expose only the read tools
 ```
 
-Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no token, just the URL. The bridge IP is the same container→host path you already use to reach the LLM server for inference.
+Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no token, just the URL.
 
 ## Using llama-launcher as a Go library
 
 The launcher is importable as well as runnable: the `launcher/` package is a curated Go API over the same core, so your program can load a profile, see what is running, and stop or unload it in-process instead of shelling out to the CLI ([ADR-0011](docs/adr/0011-public-library-facade.md), [TDD §16](llama-launcher.TDD.md#16-public-library-facade)).
 
 ```bash
-go get github.com/airiclenz/llama-launcher/launcher@v1.6.1
+go get github.com/airiclenz/llama-launcher/launcher@v1.7.0
 ```
 
 ```go
 cfg, err := launcher.LoadConfig(launcher.DefaultConfigPath(), func(warning string) {
-	log.Printf("config warning: %s", warning) // raw text, one call per warning
+	log.Printf("config warning: %s", warning)
 })
 if err != nil {
 	return err
@@ -573,23 +282,21 @@ go func() { // the lifecycle verbs block — run them off your UI goroutine
 }()
 ```
 
-The rest of the surface is `DiscoverRunningInstances(cfg)` (what is running right now, including servers still starting up), `Unload(backend, addr)`, and four sentinels for `errors.Is`: `ErrConfigNotFound`, `ErrNotRunning`, `ErrStartupTimeout` and `ErrUnsupported`. The library never writes to your stderr — config warnings and the drift notice arrive through the callbacks above, and a `nil` callback simply discards them.
+The rest of the surface is `DiscoverRunningInstances(cfg)`, `Unload(backend, addr)`, and four sentinels for `errors.Is`: `ErrConfigNotFound`, `ErrNotRunning`, `ErrStartupTimeout` and `ErrUnsupported`. The library never writes to your stderr — warnings arrive through the callbacks, and a `nil` callback discards them.
 
-`ErrStartupTimeout` is the one worth handling explicitly: it means the activation wait expired, not that the load failed. The launcher deliberately leaves the server running (killing a legitimately slow model load would be worse), so a later health success still completes it — treat it as "not yet" and keep watching the address with `DiscoverRunningInstances` rather than reporting an error.
+`ErrStartupTimeout` is the one worth handling explicitly: it means the activation wait expired, not that the load failed. The launcher deliberately leaves the server running, so treat it as "not yet" and keep watching the address with `DiscoverRunningInstances`.
 
-Two caveats worth knowing before you wire it in. There is **one config per process**: per-server API keys are pushed onto a process-global backend registry, so the last `LoadConfig` wins for the whole program, and you re-read a changed file by calling `LoadConfig` again rather than `Config.Reload` (which is the CLI's entry point and prints to stderr). And the **lifecycle verbs block** — activation waits up to ~30 seconds for the new server to report healthy, plus up to ~20 more when a restart has to stop the current occupant first — so call them from a goroutine and serialize your own calls against the same address.
+Two caveats before you wire it in: there is **one config per process** (per-server API keys land on a process-global backend registry, so the last `LoadConfig` wins), and the **lifecycle verbs block** — activation waits up to ~30 seconds, plus up to ~20 more when a restart has to stop the current occupant — so call them from a goroutine and serialize your own calls against the same address.
 
 ### Supported platforms
 
-The package **compiles on macOS, Linux and Windows**, and each verb works wherever its mechanism exists ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md), [TDD §16.6](llama-launcher.TDD.md#166-platform-contract)) — importing the facade pulls in the whole core, so keeping it buildable is the library's job and not yours. No build tags, no stubs on your side.
+The package **compiles on macOS, Linux and Windows**, and each verb works wherever its mechanism exists ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)). No build tags, no stubs on your side.
 
 | Platform | What you get |
 |---|---|
 | macOS | Everything. |
-| Linux | Everything. (The launcher's own interactive menu drops only its macOS-specific memory readout — irrelevant to a library client.) |
-| Windows | Everything the launcher drives over HTTP: `DiscoverRunningInstances`, model load and unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio's start and stop work too — they go through the `lms` CLI. Starting `llama-server` or `ollama serve` is refused instead of attempted, because Windows offers none of the unix process control the launcher would need to stop it again. |
-
-On Windows, starting a managed `llama-server` fails with an error wrapping `ErrUnsupported`, so you can tell "this platform cannot" from "this attempt failed". Two paths are less precise and worth knowing about: a failed auto-start of an external Ollama comes back as `not reachable … start it manually`, and a `Stop`/`Unload` the launcher cannot carry out (no PID to signal) ends at `still reachable and its PID could not be determined` — the seams return the sentinel, but those two verbs replace it with their own message.
+| Linux | Everything. (Only the TUI's macOS-specific memory readout is dropped.) |
+| Windows | Everything the launcher drives over HTTP: discovery, model load/unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio start/stop works via the `lms` CLI. Starting `llama-server` or `ollama serve` is refused (wrapping `ErrUnsupported`) because Windows lacks the unix process control the launcher would need to stop it again. |
 
 ## Building
 
@@ -597,34 +304,34 @@ Requires Go 1.26+.
 
 ```bash
 make build             # Build the binary (for local testing)
-make build-mcp         # Build the optional MCP control-plane adapter (see above)
+make build-mcp         # Build the optional MCP control-plane adapter
 make test              # Unit tests (go test ./...)
-make cross             # Cross-compile gate: build + vet for GOOS darwin/linux/windows
+make cross             # Cross-compile gate: build + vet for darwin/linux/windows
 make check             # test + cross — run this before committing; starts no process
 make test-integration  # Real-backend integration suite (host only; see below)
 make test-all          # Both test layers (host only)
 make clean             # Remove the binaries
 ```
 
-`make cross` is the platform contract as a check ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)): it builds and vets the whole tree for macOS, Linux and Windows — test files included, which is what keeps unix-only calls out of them — so a portability regression fails here instead of in an importing client's CI. The unit tests themselves run natively on Linux as well as macOS.
+`make cross` is the platform contract as a check ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)): it builds and vets the whole tree — test files included — for macOS, Linux and Windows, so a portability regression fails here instead of in an importing client's CI.
 
-The version is read from the `VERSION` file and injected at build time. Installing the binaries is done via Homebrew (`brew install airiclenz/tap/llama-launcher`, upgrade with `brew upgrade llama-launcher`); `make install` deliberately points there instead of copying anything.
+`make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA`, and/or `INTEGRATION_MODEL_LMSTUDIO` to exercise the model load/unload steps.
 
-`make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA` (already-pulled model name), and/or `INTEGRATION_MODEL_LMSTUDIO` (already-downloaded model name) to exercise the model load/unload steps. Note that the LM Studio test drives the single app-owned LM Studio server, so it can interfere with an interactive LM Studio session.
+The version is read from the `VERSION` file and injected at build time.
 
 ## Architecture
 
-All code lives in `internal/launcher/`, with the public `launcher/` package a thin facade over it (see above). Three LLM Servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, and LM Studio. The optional MCP control-plane adapter is a separate binary under `cmd/llama-launcher-mcp/` that shells out to the CLI and is the only component with a network listener. The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
+All code lives in `internal/launcher/`, with the public `launcher/` package a thin facade over it. Three LLM servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, and LM Studio. The optional MCP adapter is a separate binary under `cmd/llama-launcher-mcp/` and is the only component with a network listener.
 
-Key paths:
+The launcher does not persist runtime state. Each command rediscovers running servers by probing the addresses in your config and asking each server's own API which model is loaded. `llama-launcher logs` covers launcher-managed servers only.
+
+The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
 
 | Path | Purpose |
 |------|---------|
 | `~/.config/llama-launcher/config.yaml` | Configuration |
 | `~/.config/llama-launcher/logs/` | Server log files for instances the launcher started |
 
-The launcher does not persist runtime state. Each command rediscovers running servers by probing the addresses in your config and asking each LLM Server's own API which model is loaded. `llama-launcher logs` covers launcher-managed servers only; servers started outside the launcher log wherever you started them.
-
 ## License
 
-See [LICENSE](LICENSE.md) for details.
+[MIT](LICENSE.md)
