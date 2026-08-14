@@ -75,6 +75,15 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 		return nil, stillStartingUpErr(cfg, mb, addr)
 	}
 
+	// Whatever else still listens on the port is a foreign occupant — the
+	// caller stops a healthy or starting server of this backend before
+	// reaching here, and the guard above catches the race that leaves one.
+	// A foreign occupant never steps aside, so the spawn could only end in a
+	// bind failure; refusing here names the port and who holds it instead.
+	if occupants := portOccupants(addr); len(occupants) > 0 {
+		return nil, portConflictErr(mb, addr, occupants)
+	}
+
 	binary := mb.ServerBinary(cfg)
 	if _, err := exec.LookPath(binary); err != nil {
 		return nil, fmt.Errorf("server binary not found: %s", binary)
@@ -311,14 +320,24 @@ func terminatePID(pid int, progress ProgressFunc) {
 	time.Sleep(startupGracePeriod)
 }
 
-// findListeningPID returns the PID of the process listening at host:port,
-// using lsof. Tries the host-specific filter first, then falls back to a
-// port-only filter so we still find servers bound to 0.0.0.0 or another
-// interface.
+// findListeningPID returns the PID of the first process listening at
+// host:port. See findListeningPIDs for how the lookup is made.
 func findListeningPID(addr string) (int, error) {
-	host, port, err := net.SplitHostPort(addr)
+	pids, err := findListeningPIDs(addr)
 	if err != nil {
 		return 0, err
+	}
+	return pids[0], nil
+}
+
+// findListeningPIDs returns the PIDs of every process listening at
+// host:port, using lsof. Tries the host-specific filter first, then falls
+// back to a port-only filter so we still find servers bound to 0.0.0.0 or
+// another interface. The result is never empty when the error is nil.
+func findListeningPIDs(addr string) ([]int, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
 	}
 	attempts := [][]string{
 		{"-nP", "-iTCP@" + host + ":" + port, "-sTCP:LISTEN", "-t"},
@@ -329,17 +348,97 @@ func findListeningPID(addr string) (int, error) {
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			if pid, err := strconv.Atoi(line); err == nil && pid > 0 {
-				return pid, nil
-			}
+		if pids := parseListeningPIDs(string(out)); len(pids) > 0 {
+			return pids, nil
 		}
 	}
-	return 0, fmt.Errorf("no process listening on %s (is lsof installed?)", addr)
+	return nil, fmt.Errorf("no process listening on %s (is lsof installed?)", addr)
+}
+
+// parseListeningPIDs extracts PIDs from `lsof -t` output, discarding
+// unparseable lines and repeats — a process listening on several interfaces
+// reports one line per socket — while keeping lsof's order.
+func parseListeningPIDs(out string) []int {
+	var pids []int
+	seen := make(map[int]bool)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err != nil || pid <= 0 || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
+// portOccupant is a process found listening on a port the launcher is about
+// to bind, carrying its executable name when ps could report one.
+type portOccupant struct {
+	PID  int
+	Name string
+}
+
+// portOccupants reports every process listening on addr's port, annotated
+// with its executable name. An empty result means the port is free — or that
+// lsof could not answer, which the caller treats the same way, since a check
+// that cannot run must not block a start that would have worked.
+func portOccupants(addr string) []portOccupant {
+	pids, err := findListeningPIDs(addr)
+	if err != nil {
+		return nil
+	}
+	occupants := make([]portOccupant, 0, len(pids))
+	for _, pid := range pids {
+		occupants = append(occupants, portOccupant{PID: pid, Name: processName(pid)})
+	}
+	return occupants
+}
+
+// processName reports a PID's executable name via ps, or "" when ps cannot
+// say. macOS reports the full path for a bundled executable, so only the
+// base name is kept — "Code Helper (Plugin)", not its whole bundle path.
+func processName(pid int) string {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return ""
+	}
+	return filepath.Base(name)
+}
+
+// portConflictErr builds the refusal for starting a managed server on a port
+// another process already holds. By this point the caller has established
+// that the address carries no healthy instance of this backend, and the
+// StartingUp guard has ruled out one of ours still coming up — so whatever is
+// listening will not step aside, and the server would fork only to die on
+// "couldn't bind HTTP server socket". That death surfaces as a log tail
+// naming neither the port's occupant nor, for a foreign listener on loopback,
+// the reason discovery reported nothing running: naming both here is what
+// makes the failure diagnosable without reaching for lsof.
+func portConflictErr(b LLMServer, addr string, occupants []portOccupant) error {
+	port := addr
+	if _, p, err := net.SplitHostPort(addr); err == nil {
+		port = p
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "port %s is already in use — %s cannot bind %s", port, b.DisplayName(), addr)
+	sb.WriteString("\nListening now:")
+	for _, o := range occupants {
+		fmt.Fprintf(&sb, "\n  PID %d", o.PID)
+		if o.Name != "" {
+			fmt.Fprintf(&sb, " (%s)", o.Name)
+		}
+	}
+	sb.WriteString("\nStop the occupying process, or give this profile a different `port` — in its own section or under `defaults`")
+	return errors.New(sb.String())
 }
 
 // EnsureServer returns the running server instance, starting one if needed.

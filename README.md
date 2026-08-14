@@ -223,6 +223,20 @@ llama-launcher version                      # Print version
 
 A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)).
 
+### When the port is already taken
+
+Starting a llama.cpp server checks the target port first, and refuses before forking if another process is listening there:
+
+```
+Error: port 1111 is already in use — LLaMA.cpp cannot bind 0.0.0.0:1111
+Listening now:
+  PID 15481 (llama-server)
+  PID 62070 (Code Helper (Plugin))
+Stop the occupying process, or give this profile a different `port` — in its own section or under `defaults`
+```
+
+Any interface counts: a process holding `127.0.0.1:<port>` blocks a `0.0.0.0` bind just as a wildcard listener does. That case is worth knowing about, because a foreign listener on loopback also *shadows* your server — the launcher's health probes reach the squatter instead, so `status` reports nothing running and every command waits out a timeout before answering. Editors and IDEs are a common source: VS Code's Remote-SSH and Dev Containers automatically forward ports from the remote machine onto the same local port number, which will quietly take over a port your local server already owns. `lsof -nP -iTCP:<port> -sTCP:LISTEN` shows every holder.
+
 ## Remote control from a container (MCP)
 
 `llama-launcher` itself has no network surface — it is a one-shot CLI ([ADR-0002](docs/adr/0002-not-a-router.md)). When a client on another machine needs to control which model is running — typically a coding agent in a container reaching back to the host — an **optional, separate** binary, `llama-launcher-mcp`, exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP. It runs on the host, implements every tool by shelling out to the CLI, and never proxies inference traffic ([ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)).

@@ -3,6 +3,7 @@ package launcher
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1777,4 +1778,134 @@ func TestLoadProfile_DriftNoticeContent(t *testing.T) {
 			t.Errorf("drift notice = %q, want it to contain %q", errOut, want)
 		}
 	}
+}
+
+func TestParseListeningPIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		out  string
+		want []int
+	}{
+		{"empty", "", nil},
+		{"whitespace only", "  \n\n ", nil},
+		{"single pid", "15481\n", []int{15481}},
+		{
+			// lsof -t prints one line per matching socket, so a process
+			// listening on several interfaces repeats.
+			name: "repeats collapse, order preserved",
+			out:  "15481\n46578\n15481\n",
+			want: []int{15481, 46578},
+		},
+		{"unparseable and non-positive lines are dropped", "abc\n0\n-3\n99\n", []int{99}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := parseListeningPIDs(tc.out); !slices.Equal(got, tc.want) {
+				t.Errorf("parseListeningPIDs(%q) = %v, want %v", tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPortConflictErr(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+	err := portConflictErr(b, "0.0.0.0:1111", []portOccupant{
+		{PID: 15481, Name: "llama-server"},
+		{PID: 46578, Name: "Code Helper (Plugin)"},
+		{PID: 777},
+	})
+
+	// The port, the address and every occupant have to be on screen: the
+	// whole point of the refusal is that the user never has to run lsof.
+	for _, want := range []string{
+		"port 1111 is already in use",
+		"LLaMA.cpp cannot bind 0.0.0.0:1111",
+		"PID 15481 (llama-server)",
+		"PID 46578 (Code Helper (Plugin))",
+		"different `port`",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q missing %q", err, want)
+		}
+	}
+
+	// An occupant ps could not name still gets a line, without empty brackets.
+	if !strings.Contains(err.Error(), "PID 777") || strings.Contains(err.Error(), "PID 777 ()") {
+		t.Errorf("refusal %q should name PID 777 bare, with no empty parentheses", err)
+	}
+}
+
+func TestStartManagedServer_RefusesWhenPortOccupied(t *testing.T) {
+	// Not parallel: rewrites PATH.
+
+	// 200 on every path, so the StartingUp probe reads "not one of ours
+	// coming up" and the port-conflict check is what fires.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	addr := addrFromURL(t, srv.URL)
+	if pid, err := findListeningPID(addr); err != nil || pid != os.Getpid() {
+		t.Skipf("lsof cannot see this test's own listener (pid=%d err=%v)", pid, err)
+	}
+
+	host, port := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	profile := &ResolvedProfile{
+		Name:          "test",
+		ModelPath:     "/models/test.gguf",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	// A PATH holding only the tools the check itself shells out to: a
+	// regression that spawns anyway fails at the binary lookup with a
+	// distinguishable error instead of forking a real llama-server.
+	t.Setenv("PATH", toolOnlyPATH(t, "lsof", "ps"))
+
+	_, err := StartServer(cfg, profile)
+	if err == nil {
+		t.Fatal("StartServer succeeded onto an occupied port, want a refusal")
+	}
+	if strings.Contains(err.Error(), "server binary not found") {
+		t.Fatalf("refusal must fire before the spawn attempt, got %v", err)
+	}
+	for _, want := range []string{
+		"is already in use",
+		fmt.Sprintf("PID %d", os.Getpid()),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q missing %q", err, want)
+		}
+	}
+}
+
+// toolOnlyPATH builds a directory holding just the named tools, symlinked to
+// wherever they resolve now, and returns it for use as PATH. It lets a test
+// deny the server binary while leaving the helpers the code under test shells
+// out to reachable.
+func toolOnlyPATH(t *testing.T, tools ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range tools {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not on PATH: %v", tool, err)
+		}
+		if err := os.Symlink(path, filepath.Join(dir, tool)); err != nil {
+			t.Fatalf("linking %s: %v", tool, err)
+		}
+	}
+	return dir
 }
