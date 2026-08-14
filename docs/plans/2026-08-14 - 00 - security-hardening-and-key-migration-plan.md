@@ -101,7 +101,17 @@ NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item:
 
 **Commit:** `fix(llamacpp): deliver api_key to llama-server via environment, not argv`
 
-## 4. Vendor apogee's keystore package
+## 4. Vendor apogee's keystore package — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): Deviation — `github.com/google/shlex` was imported by `keystore_test.go` too, not only by `live_test.go` as the item's text assumes: `TestReadCmdReadsBackWhatWriteStored` split `ReadCmd`'s line with it. Both round trips now go through one shared helper, `readKeyThroughShell`, which hands the line whole to a shell exactly as item 5's resolver will, so the item's "No new module dependency" holds (`go.mod`/`go.sum` are untouched).
+
+NOTES (2026-08-14): The read-back helper names the shell by absolute path (`/bin/sh`) rather than by PATH lookup, because the test fixture REPLACES PATH with the fake-tool directory — the store tool named INSIDE the line is still resolved through that replaced PATH, which is the lookup the round trip exists to exercise. It skips on windows, matching the item's rule for the live test.
+
+NOTES (2026-08-14): Comment prose that cited apogee's own decisions and packages (ADR 0042, `internal/config/keyresolve.go`, `internal/tools`, the `internal/present` opener idiom, "the fixture idiom internal/config and internal/mcp already use") was rewritten rather than copied — those references name nothing in this repository. Every behaviour-bearing line is unchanged; `api-key:`/`api-key-cmd:` became `api_key:`/`api_key_cmd:` per the plan's precedence rule.
+
+NOTES (2026-08-14): The fake-tool steering env vars were renamed with the live gate (`APOGEE_KEYSTORE_FAKE_*` → `LLAMA_LAUNCHER_KEYSTORE_FAKE_*`), as was the fixture's temp-dir prefix (`llama-launcher-keystore-tools`); the item names only the live-test gate, but the same rename rule applies.
+
+NOTES (2026-08-14): No CHANGELOG entry — this item adds an internal package with no caller and no user-visible behaviour; the migration story belongs to items 7 and 8, where it reaches the user.
 
 **What:** Copy `../apogee/internal/keystore/` (at commit `1c0037b`: `keystore.go`, `run.go`, `keystore_test.go`, `live_test.go`) into `internal/keystore/`, adapted:
 
