@@ -148,7 +148,18 @@ func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 	}, nil
 }
 
-func (b *LlamaCpp) BuildServerEnv(_ *Config, _ *ResolvedProfile) []string { return nil }
+// BuildServerEnv hands the configured api_key to llama-server through the
+// environment rather than argv, so the credential never shows up in ps output.
+// llama-server reads LLAMA_API_KEY only when no --api-key flag is present
+// (llama.cpp common/arg.cpp is the authority), so a user's extra_args
+// --api-key override still wins.
+func (b *LlamaCpp) BuildServerEnv(cfg *Config, _ *ResolvedProfile) []string {
+	key := cfg.APIKeyFor(b.Name())
+	if key == "" {
+		return nil
+	}
+	return []string{"LLAMA_API_KEY=" + key}
+}
 
 func (b *LlamaCpp) ServerBinary(_ *Config) string {
 	return "llama-server"
@@ -179,7 +190,7 @@ func (b *LlamaCpp) ResolveModel(cfg *Config, modelRef string) (string, error) {
 	return path, nil
 }
 
-func (b *LlamaCpp) BuildServerArgs(cfg *Config, profile *ResolvedProfile) []string {
+func (b *LlamaCpp) BuildServerArgs(_ *Config, profile *ResolvedProfile) []string {
 	var args []string
 	params := &profile.ProfileParams
 
@@ -251,12 +262,6 @@ func (b *LlamaCpp) BuildServerArgs(cfg *Config, profile *ResolvedProfile) []stri
 	}
 	if params.MinP != nil {
 		args = append(args, "--min-p", formatFloatParam(*params.MinP))
-	}
-
-	// Placed before extra_args so a user-supplied --api-key override wins
-	// (llama-server uses the last occurrence of a repeated flag).
-	if key := cfg.APIKeyFor(b.Name()); key != "" {
-		args = append(args, "--api-key", key)
 	}
 
 	args = append(args, profile.ExtraArgs...)

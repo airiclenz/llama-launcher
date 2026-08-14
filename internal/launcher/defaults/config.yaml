@@ -27,9 +27,10 @@
 #
 # What api_key does depends on the server:
 #
-#   llamacpp   — passed as --api-key at launch; llama-server then rejects
-#                client requests without "Authorization: Bearer <key>".
-#                Note: the key is visible in the process arguments (ps).
+#   llamacpp   — exported as LLAMA_API_KEY into the launched server's
+#                environment (never on the command line, so it stays out
+#                of ps); llama-server then rejects client requests without
+#                "Authorization: Bearer <key>".
 #   lmstudio   — LM Studio manages its own key: enable "Require API token"
 #                in its Server Settings and paste the generated token here
 #                so the launcher's health checks and model loads still work.

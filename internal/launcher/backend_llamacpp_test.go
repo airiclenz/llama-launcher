@@ -209,7 +209,7 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("api key from server config is passed before extra args", func(t *testing.T) {
+	t.Run("api key never reaches argv", func(t *testing.T) {
 		t.Parallel()
 
 		cfg := &Config{Servers: map[string]ServerConfig{
@@ -218,23 +218,48 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 		profile := &ResolvedProfile{ExtraArgs: []string{"--no-warmup"}}
 
 		args := b.BuildServerArgs(cfg, profile)
-		assertArg(t, toArgMap(args), "--api-key", "secret")
+		for _, arg := range args {
+			if arg == "--api-key" || arg == "secret" {
+				t.Errorf("api key must not appear in args (ps-visible): %v", args)
+			}
+		}
 		if args[len(args)-1] != "--no-warmup" {
-			t.Errorf("extra args must come after --api-key, got: %v", args)
+			t.Errorf("extra args must come last, got: %v", args)
+		}
+	})
+}
+
+// TestLlamaCppBuildServerEnv proves the api_key is handed to llama-server
+// through the environment instead of argv, so the credential stays out of ps
+// output (llama-server reads LLAMA_API_KEY only when no --api-key flag is
+// given, so an extra_args override still wins).
+func TestLlamaCppBuildServerEnv(t *testing.T) {
+	t.Parallel()
+
+	b := &LlamaCpp{}
+
+	t.Run("configured key becomes LLAMA_API_KEY", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Config{Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true, APIKey: "secret"},
+		}}
+
+		env := b.BuildServerEnv(cfg, &ResolvedProfile{})
+		if len(env) != 1 || env[0] != "LLAMA_API_KEY=secret" {
+			t.Errorf("BuildServerEnv = %v, want [LLAMA_API_KEY=secret]", env)
 		}
 	})
 
-	t.Run("no api key omits the flag", func(t *testing.T) {
+	t.Run("no key yields no env", func(t *testing.T) {
 		t.Parallel()
 
 		cfg := &Config{Servers: map[string]ServerConfig{
 			"llamacpp": {Enabled: true},
 		}}
-		args := b.BuildServerArgs(cfg, &ResolvedProfile{})
-		for _, arg := range args {
-			if arg == "--api-key" {
-				t.Errorf("unexpected --api-key in args: %v", args)
-			}
+
+		if env := b.BuildServerEnv(cfg, &ResolvedProfile{}); env != nil {
+			t.Errorf("BuildServerEnv = %v, want nil", env)
 		}
 	})
 }

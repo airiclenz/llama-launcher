@@ -84,9 +84,10 @@ The first time you run `llama-launcher` without an existing config, this file is
 #
 # What api_key does depends on the server:
 #
-#   llamacpp   — passed as --api-key at launch; llama-server then rejects
-#                client requests without "Authorization: Bearer <key>".
-#                Note: the key is visible in the process arguments (ps).
+#   llamacpp   — exported as LLAMA_API_KEY into the launched server's
+#                environment (never on the command line, so it stays out
+#                of ps); llama-server then rejects client requests without
+#                "Authorization: Bearer <key>".
 #   lmstudio   — LM Studio manages its own key: enable "Require API token"
 #                in its Server Settings and paste the generated token here
 #                so the launcher's health checks and model loads still work.
@@ -431,11 +432,11 @@ The launcher is not a proxy, so what the key does depends on the backend:
 
 | Backend | Effect of `api_key` |
 |---------|---------------------|
-| `llamacpp` | Passed as `--api-key` when the server is launched — llama-server then rejects client requests without `Authorization: Bearer <key>` (its `/health` endpoint stays open). |
+| `llamacpp` | Exported as `LLAMA_API_KEY` into the launched server's environment — llama-server then rejects client requests without `Authorization: Bearer <key>` (its `/health` endpoint stays open). It is deliberately never put on the command line, so the key does not show up in `ps`. |
 | `lmstudio` | LM Studio manages its own token: enable *Require API token* in its Server Settings, generate a token there, and paste it here so the launcher's health checks and model loads keep working. |
 | `ollama` | Ollama has no native authentication. Set a key only when the instance sits behind an authenticating reverse proxy; the launcher then sends it with its own requests. |
 
-In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). Keep in mind that the key is stored as plaintext in `config.yaml` (created with mode 0600) and, for `llamacpp`, is visible in the server's process arguments (`ps`).
+In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). Keep in mind that the key is stored as plaintext in `config.yaml` (created with mode 0600). For `llamacpp`, note that llama-server reads `LLAMA_API_KEY` only when no `--api-key` flag is given, so an `extra_args` `--api-key` override still wins — but that literal override *is* visible in `ps`.
 
 ## Usage
 

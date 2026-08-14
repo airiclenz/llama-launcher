@@ -75,7 +75,15 @@ Always on, no flag (ratified call 3). Non-browser MCP clients send no cross-orig
 
 **Commit:** `fix(launcher): stop following redirects from configured LLM servers`
 
-## 3. Deliver the llamacpp api_key via environment, not argv
+## 3. Deliver the llamacpp api_key via environment, not argv — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): Deviation — two files beyond the item's Files list were corrected because the change made their user-facing claims false: `README.md` (the config-sample comment block, the per-backend `api_key` table row, and the "visible in ps" caveat) and `internal/launcher/defaults/config.yaml` (the same comment block, which is the template written into a fresh user config). Item 5 also edits `defaults/config.yaml`, but for a different reason (documenting `api_key_cmd`); this edit only rewrites the existing llamacpp `api_key` comment.
+
+NOTES (2026-08-14): Deviation — `BuildServerArgs`'s first parameter became unused once the `--api-key` append was removed, so it was renamed `cfg` → `_` to match the file's own idiom (`ServerBinary(_ *Config)`). Signature and interface conformance are unchanged.
+
+NOTES (2026-08-14): The TDD §4.2 llamacpp bullet also corrected the env-var name it named as a "possible future alternative": it said `LLAMA_ARG_API_KEY`, but llama.cpp `common/arg.cpp` binds `--api-key` to `LLAMA_API_KEY`, which is what the code now sets.
+
+NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item: `TestStopServerAt_StartingOccupant` fails on a clean tree too (verified via `git stash`) — the container's `nc` never binds the test port.
 
 **What:** Close audit finding #4 (ps-visible credential). In `internal/launcher/backend_llamacpp.go`:
 
