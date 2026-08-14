@@ -23,3 +23,15 @@ Carried from the 2026-06-08 handoff when it was archived; small and independent.
 - [ ] `list --json` has no direct test coverage (`status --json` is covered in `cli_test.go`; a round-trip marshal/unmarshal test would be cheap)
 - [ ] `identifyBackend(addr)` health-checks the backends serially — parallelising would shave latency from `stop <host:port>`
 - [ ] `ErrUnsupported` does not survive two Windows paths (TDD §16.6): `connectExternalServer` replaces Ollama's `TryStart` refusal with its own "not reachable … start it manually" message, and the stop verbs never reach a seam function (`IsProcessAlive` is false there), ending at "PID could not be determined". Propagating the sentinel would be additive and would not change macOS behaviour — but there is no Windows host to prove it against
+
+## Deferred from the security-hardening and key-migration plan
+
+- [ ] `CHANGELOG.md` has no `## [Unreleased]` heading, so the security-hardening and key-migration changes carry no changelog entry yet; the release step must fold them in under the new version heading (`CHANGELOG.md:3`)
+- [ ] `TestStopServerAt_StartingOccupant` depends on a working `nc` listener and fails in containers without it — pre-existing and environment-dependent. It skips when `nc` is missing but hard-fails when `findListeningPID` never matches, which is what a container without `lsof` produces (`internal/launcher/server_test.go:1580`)
+- [ ] llama.cpp appends `--api-key` values rather than replacing, so an `extra_args` override likely makes both keys valid rather than the override strictly winning; confirm against `common/arg.cpp` before the release. The comment asserting that the override wins is at `internal/launcher/backend_llamacpp.go:153`
+- [ ] TDD §5.2's Source Files table gains no rows for `internal/keystore/*` (`llama-launcher.TDD.md:444`)
+- [ ] The same TDD file map omits `cli.go` and `frame.go` (pre-existing gap) (`llama-launcher.TDD.md:444`)
+- [ ] No test covers a keystore entry name containing a single quote — the `shellWord` quoting that `ReadCmd` relies on (`internal/keystore/keystore.go:271`; the `ReadCmd` spelling tests are at `internal/keystore/keystore_test.go:631`)
+- [ ] `Config.Reload()` runs on every menu probe tick, so with `api_key_cmd` set an entry's command re-runs every refresh interval while the menu is open — contradicting the "one subprocess per configured entry per run" wording; caching or a per-open resolve may be wanted (`internal/launcher/menu.go:874`)
+- [ ] README's per-backend `api_key` effect table documents only the literal key; whether `api_key_cmd` deserves a row there is untouched (`README.md:448`)
+- [ ] On a CRLF config the rewritten/inserted key-source line lands with a bare LF, giving mixed line endings (same as apogee's original) (`internal/launcher/configwrite.go:471`)
