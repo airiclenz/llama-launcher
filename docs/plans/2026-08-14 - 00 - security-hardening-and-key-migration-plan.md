@@ -63,7 +63,7 @@ Always on, no flag (ratified call 3). Non-browser MCP clients send no cross-orig
 
 **Commit:** `fix(mcp): enable cross-origin protection on the streamable HTTP handler`
 
-## 2. Stop following redirects from configured LLM servers
+## 2. Stop following redirects from configured LLM servers — ✅ DONE (2026-08-14)
 
 **What:** In `internal/launcher/backend_http.go`, both `authedGet` (line 67) and `authedPostJSON` (line 80) build `&http.Client{Timeout: timeout}` with the default redirect policy (follows up to 10 hops). Give both a shared client constructor whose `CheckRedirect` returns `http.ErrUseLastResponse`, so the first 3xx response is returned as-is and no second request is issued. Callers already treat any non-200 as an error, so a squatter's 3xx surfaces as an unexpected-status error instead of steering an outbound GET (audit finding #3). Add a short comment stating the constraint: whatever answers on a configured port is untrusted, so the client must never follow its redirects.
 

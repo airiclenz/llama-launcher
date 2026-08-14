@@ -78,6 +78,67 @@ func TestAuthedPostJSON(t *testing.T) {
 	}
 }
 
+func TestAuthedRequestsDoNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+
+	// redirectPair returns a server answering 302 towards a second server,
+	// plus a counter of how many requests that second server received.
+	redirectPair := func(t *testing.T) (redirector *httptest.Server, hits func() int) {
+		t.Helper()
+		var mu sync.Mutex
+		count := 0
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			count++
+			mu.Unlock()
+		}))
+		t.Cleanup(target.Close)
+		redirector = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+"/elsewhere", http.StatusFound)
+		}))
+		t.Cleanup(redirector.Close)
+		return redirector, func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return count
+		}
+	}
+
+	t.Run("authedGet returns the 302 itself", func(t *testing.T) {
+		t.Parallel()
+		srv, hits := redirectPair(t)
+
+		resp, err := authedGet(healthCheckTimeout, srv.URL, "secret")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusFound {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusFound)
+		}
+		if got := hits(); got != 0 {
+			t.Errorf("redirect target requests = %d, want 0", got)
+		}
+	})
+
+	t.Run("authedPostJSON returns the 302 itself", func(t *testing.T) {
+		t.Parallel()
+		srv, hits := redirectPair(t)
+
+		resp, err := authedPostJSON(healthCheckTimeout, srv.URL, "secret", []byte(`{"a":1}`))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusFound {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusFound)
+		}
+		if got := hits(); got != 0 {
+			t.Errorf("redirect target requests = %d, want 0", got)
+		}
+	})
+}
+
 func TestAuthFailedErr(t *testing.T) {
 	t.Parallel()
 

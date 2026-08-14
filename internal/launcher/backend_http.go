@@ -62,6 +62,22 @@ func authFailedErr(statusCode int) error {
 	return nil
 }
 
+// backendClient returns the HTTP client every request to a configured LLM
+// server goes through. Whatever answers on a configured port is untrusted, so
+// the client must never follow its redirects: CheckRedirect returns
+// http.ErrUseLastResponse, which hands the first 3xx response back unfollowed
+// and issues no second request. Callers treat any non-200 as an error, so a
+// squatter's redirect surfaces as an unexpected status instead of steering an
+// outbound request at a destination of its choosing.
+func backendClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 // authedGet issues a GET request, adding "Authorization: Bearer <apiKey>"
 // when apiKey is non-empty.
 func authedGet(timeout time.Duration, url, apiKey string) (*http.Response, error) {
@@ -72,7 +88,7 @@ func authedGet(timeout time.Duration, url, apiKey string) (*http.Response, error
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	return (&http.Client{Timeout: timeout}).Do(req)
+	return backendClient(timeout).Do(req)
 }
 
 // authedPostJSON issues a POST request with a JSON body, adding
@@ -86,7 +102,7 @@ func authedPostJSON(timeout time.Duration, url, apiKey string, body []byte) (*ht
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	return (&http.Client{Timeout: timeout}).Do(req)
+	return backendClient(timeout).Do(req)
 }
 
 // expectOK consumes and closes resp's body (reading at most maxResponseBytes)
