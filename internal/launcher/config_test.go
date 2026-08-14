@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1208,6 +1209,38 @@ func TestServerConfigUnmarshal(t *testing.T) {
 		}
 	})
 
+	t.Run("scalar bool form names no command and no plaintext answer", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp: true\n")
+		sc := cfg.Servers["llamacpp"]
+		if sc.APIKeyCmd != "" || sc.PlaintextKeyOK {
+			t.Errorf("scalar form = %+v, want no api_key_cmd and no plaintext_key_ok", sc)
+		}
+	})
+
+	t.Run("mapping form with api_key_cmd and plaintext_key_ok", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp:\n    api_key_cmd: \"printf sk-test\"\n    plaintext_key_ok: true\n")
+		sc := cfg.Servers["llamacpp"]
+		if sc.APIKeyCmd != "printf sk-test" {
+			t.Errorf("APIKeyCmd = %q, want %q", sc.APIKeyCmd, "printf sk-test")
+		}
+		if !sc.PlaintextKeyOK {
+			t.Error("plaintext_key_ok: true should round-trip")
+		}
+		if !sc.Enabled {
+			t.Error("mapping form without enabled should default to enabled")
+		}
+	})
+
+	t.Run("mapping form defaults plaintext_key_ok to false", func(t *testing.T) {
+		t.Parallel()
+		cfg := writeAndParse(t, "  llamacpp:\n    api_key: secret\n")
+		if cfg.Servers["llamacpp"].PlaintextKeyOK {
+			t.Error("plaintext_key_ok should default to false")
+		}
+	})
+
 	t.Run("invalid scalar returns error", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
@@ -1240,5 +1273,181 @@ func TestAPIKeyWhitespaceWarning(t *testing.T) {
 	}
 	if !strings.Contains(warnings[0], "servers.llamacpp") {
 		t.Errorf("warning = %q, want it to name servers.llamacpp", warnings[0])
+	}
+}
+
+// keySourceConfig writes a loadable config whose servers section is the given
+// text, and returns its path. The profile is there only so validation passes —
+// every test below is about the servers section.
+func keySourceConfig(t *testing.T, serversYAML string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := "servers:\n" + serversYAML + "profiles:\n  test:\n    model: test.gguf\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	return path
+}
+
+// requirePOSIXShell skips a test whose api_key_cmd is written for `sh -c`.
+// Windows runs the same commands through `cmd /C`, which speaks another
+// language; the resolver is exercised there by whatever a Windows user writes.
+func requirePOSIXShell(t *testing.T) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("the key command is written for a POSIX shell, which windows has not")
+	}
+}
+
+// An entry naming two key sources says two different things about where its key
+// lives, and a blank command names no program at all. Both must stop the load
+// rather than be resolved by a silent precedence rule.
+func TestValidate_APIKeySourceRefusals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		servers string
+		want    string
+	}{
+		{
+			name:    "api_key and api_key_cmd together",
+			servers: "  llamacpp:\n    api_key: secret\n    api_key_cmd: \"printf sk-test\"\n",
+			want:    "servers.llamacpp: api_key and api_key_cmd are both set",
+		},
+		{
+			name:    "whitespace-only api_key_cmd",
+			servers: "  llamacpp:\n    api_key_cmd: \"   \"\n",
+			want:    "servers.llamacpp: api_key_cmd is blank",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := keySourceConfig(t, tc.servers)
+
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatal("expected the load to be refused")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.want)
+			}
+
+			cfg, parseErr := parseConfig(path)
+			if parseErr != nil {
+				t.Fatalf("parseConfig: %v", parseErr)
+			}
+			problems := strings.Join(cfg.validateAll(), "\n")
+			if !strings.Contains(problems, tc.want) {
+				t.Errorf("validateAll = %q, want it to report %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// The key a command prints is the key the launcher sends, trimmed the way a
+// literal one is — a command that ends its output with a newline is every
+// command.
+func TestLoadConfig_ResolvesAPIKeyCmd(t *testing.T) {
+	requirePOSIXShell(t)
+
+	path := keySourceConfig(t, "  llamacpp:\n    api_key_cmd: \"echo  sk-test \"\n")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.APIKeyFor("llamacpp"); got != "sk-test" {
+		t.Errorf("APIKeyFor = %q, want %q", got, "sk-test")
+	}
+}
+
+// A key source that cannot answer is a broken source, not a keyless server: the
+// load fails, naming the entry, so the user hears it from the thing that read
+// the file rather than from a 401 later.
+func TestLoadConfig_KeyCommandFailure(t *testing.T) {
+	requirePOSIXShell(t)
+
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{
+			name:    "the command exits non-zero",
+			command: "echo no such secret >&2; exit 3",
+			want:    "failed",
+		},
+		{
+			name:    "the command prints nothing",
+			command: "true",
+			want:    "printed nothing",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := keySourceConfig(t, "  llamacpp:\n    api_key_cmd: \""+tc.command+"\"\n")
+
+			_, err := LoadConfig(path)
+			if err == nil {
+				t.Fatal("expected the load to be refused")
+			}
+			if !strings.Contains(err.Error(), "servers.llamacpp") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to name servers.llamacpp and contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A disabled server is one the launcher never talks to, so asking its store for
+// a secret would be a dialog the user cannot connect to anything they did — and
+// a broken command on an entry nobody uses must not stop the launcher.
+func TestLoadConfig_SkipsKeyCommandOfDisabledServer(t *testing.T) {
+	requirePOSIXShell(t)
+
+	path := keySourceConfig(t, "  llamacpp: true\n  ollama:\n    enabled: false\n    api_key_cmd: \"exit 1\"\n")
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.APIKeyFor("ollama"); got != "" {
+		t.Errorf("APIKeyFor(ollama) = %q, want the command never to have run", got)
+	}
+}
+
+// The output cap is what stops a misconfigured command — the wrong program on
+// the path, a binary that streams — from turning a typo into an out-of-memory
+// kill, so it is refused rather than truncated into a "key".
+func TestRunKeyCommand_RefusesOversizedOutput(t *testing.T) {
+	requirePOSIXShell(t)
+
+	_, err := runKeyCommand("llamacpp", "yes sk-test | head -c 100000", keyCommandTimeout)
+	if err == nil {
+		t.Fatal("expected the oversized output to be refused")
+	}
+	if !strings.Contains(err.Error(), "printed more than") {
+		t.Errorf("error = %q, want it to name the size cap", err)
+	}
+}
+
+// A command that never answers must be refused, not waited on: the load runs
+// before the launcher has drawn anything, so an unbounded wait is
+// indistinguishable from a hung binary.
+func TestRunKeyCommand_TimesOut(t *testing.T) {
+	requirePOSIXShell(t)
+
+	_, err := runKeyCommand("llamacpp", "sleep 5", 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected the hanging command to be refused")
+	}
+	if !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("error = %q, want it to say the command did not answer", err)
 	}
 }

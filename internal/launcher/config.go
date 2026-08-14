@@ -1,10 +1,13 @@
 package launcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,9 +56,24 @@ type Config struct {
 }
 
 // ServerConfig holds the per-server settings from the servers section.
+//
+// A server's API key comes from one of two sources, never both: the literal
+// api_key written in the file, or the standard output of api_key_cmd — a
+// command that prints the key, which is how the key can live in a secret store
+// instead of in the config file. plaintext_key_ok is the user's answer to the
+// offer to move a literal key into such a store: set, it means "this one stays
+// in the file, stop asking".
 type ServerConfig struct {
-	Enabled bool
-	APIKey  string
+	Enabled        bool
+	APIKey         string
+	APIKeyCmd      string
+	PlaintextKeyOK bool
+
+	// resolvedKey is what api_key_cmd printed. It is filled in once per load
+	// (resolveKeyCommands) rather than parsed, so it is deliberately not a
+	// YAML field: nothing in the file can set it, and a Config built by hand
+	// in a test carries a key only where it put one.
+	resolvedKey string
 }
 
 // UnmarshalYAML accepts both forms of a servers entry: the plain bool form
@@ -72,14 +90,18 @@ func (s *ServerConfig) UnmarshalYAML(node *yaml.Node) error {
 		return nil
 	case yaml.MappingNode:
 		var raw struct {
-			Enabled *bool  `yaml:"enabled"`
-			APIKey  string `yaml:"api_key"`
+			Enabled        *bool  `yaml:"enabled"`
+			APIKey         string `yaml:"api_key"`
+			APIKeyCmd      string `yaml:"api_key_cmd"`
+			PlaintextKeyOK bool   `yaml:"plaintext_key_ok"`
 		}
 		if err := node.Decode(&raw); err != nil {
 			return fmt.Errorf("server entry: %w", err)
 		}
 		s.Enabled = raw.Enabled == nil || *raw.Enabled
 		s.APIKey = raw.APIKey
+		s.APIKeyCmd = raw.APIKeyCmd
+		s.PlaintextKeyOK = raw.PlaintextKeyOK
 		return nil
 	default:
 		return fmt.Errorf("server entry must be a bool or a mapping")
@@ -209,10 +231,20 @@ func (c *Config) IsServerEnabled(name string) bool {
 	return c.Servers[name].Enabled
 }
 
-// APIKeyFor returns the configured API key for the named server with
-// surrounding whitespace trimmed, or "" when no key is set.
+// APIKeyFor returns the configured API key for the named server: the literal
+// api_key with surrounding whitespace trimmed when the file names one,
+// otherwise what the entry's api_key_cmd printed at load. "" when the entry
+// names no key source at all.
+//
+// A literal winning over a command is not a precedence rule the user can rely
+// on — validate refuses an entry that sets both — it is the order that needs no
+// subprocess to answer.
 func (c *Config) APIKeyFor(name string) string {
-	return strings.TrimSpace(c.Servers[name].APIKey)
+	sc := c.Servers[name]
+	if key := strings.TrimSpace(sc.APIKey); key != "" {
+		return key
+	}
+	return sc.resolvedKey
 }
 
 // Profile represents a named model configuration within the YAML config.
@@ -336,6 +368,9 @@ func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	if err := cfg.resolveKeyCommands(); err != nil {
+		return nil, err
+	}
 	applyAPIKeys(cfg)
 	for _, w := range cfg.Warnings {
 		reportNotice(notify, w)
@@ -367,6 +402,9 @@ func (c *Config) validate() error {
 		if _, err := GetLLMServer(name); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
+	}
+	if problems := c.apiKeySourceErrors(); len(problems) > 0 {
+		return fmt.Errorf("config: %s", problems[0])
 	}
 	if len(c.Profiles) == 0 {
 		return fmt.Errorf("config: no profiles defined")
@@ -400,6 +438,40 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// apiKeySourceErrors reports the key-source mistakes a config must not load
+// with, one line per offending entry, in server-name order (the servers section
+// is a map, so sorted order is the stable one).
+//
+// Both are refusals rather than warnings because neither has a safe reading. An
+// entry naming a literal key AND a command says two different things about
+// where its key lives, and picking one silently would send requests with a key
+// the user believes they replaced. A blank api_key_cmd names no program at all,
+// and treating it as "no key" would quietly turn an authenticated server into
+// an unauthenticated one — the keyless state is spelled by writing neither key.
+func (c *Config) apiKeySourceErrors() []string {
+	names := make([]string, 0, len(c.Servers))
+	for name := range c.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var problems []string
+	for _, name := range names {
+		sc := c.Servers[name]
+		switch {
+		case sc.APIKey != "" && sc.APIKeyCmd != "":
+			problems = append(problems, fmt.Sprintf(
+				"servers.%s: api_key and api_key_cmd are both set — a server's key comes from one source; keep the one that should answer for it and delete the other",
+				name))
+		case sc.APIKeyCmd != "" && strings.TrimSpace(sc.APIKeyCmd) == "":
+			problems = append(problems, fmt.Sprintf(
+				"servers.%s: api_key_cmd is blank — give it the command whose output IS the key, or remove the line to leave the server keyless",
+				name))
+		}
+	}
+	return problems
+}
+
 // apiKeyWarnings reports api_key values carrying leading or trailing
 // whitespace; APIKeyFor uses the trimmed value.
 func (c *Config) apiKeyWarnings() []string {
@@ -416,6 +488,191 @@ func (c *Config) apiKeyWarnings() []string {
 			"servers.%s: api_key has leading/trailing whitespace — using the trimmed value", name))
 	}
 	return warnings
+}
+
+// The api_key_cmd resolver: where a server entry's key actually comes from when
+// the file holds a command instead of the key.
+//
+// It runs at LOAD, once per process, for every ENABLED entry naming a command.
+// The alternative — resolving at first use — buys a saved subprocess for a
+// server this session never talks to, and pays for it with a keychain dialog
+// popping up in the middle of a model switch and a broken command reported by
+// whatever the user was doing rather than by the load that read the file. The
+// launcher loads its config exactly once per run (cli.go), so this is one
+// subprocess per configured entry per run; the interactive menu's Reload runs
+// them again, which is the point — the store may have changed underneath it.
+//
+// A command that fails, times out or prints nothing FAILS THE LOAD. It is never
+// read as "this server takes no key": a keyless server is spelled by naming no
+// key source at all, so a source answering with nothing is a broken source, and
+// degrading to unauthenticated requests would send them to a server the file
+// said to authenticate against.
+
+// keyCommandTimeout bounds one api_key_cmd run. It is generous because the
+// command in front of a locked store is often a GUI unlock prompt, and a human
+// reaching for a password takes tens of seconds. What it stops is the command
+// that never answers at all, which would otherwise hang startup with no message.
+const keyCommandTimeout = 60 * time.Second
+
+// keyCommandWaitGrace bounds the wait AFTER the timeout fired. Killing the
+// process ends the process, but a wrapper-shaped command — a shell re-execing
+// the real tool — can leave a grandchild holding the stdout pipe it inherited,
+// and cmd.Run would then block on the copy forever.
+const keyCommandWaitGrace = 2 * time.Second
+
+// maxKeyCommandOutput and maxKeyCommandStderr bound what one command may make
+// the launcher hold in memory. An API key is a short line; a command printing
+// more than 64 KiB of it is a misconfigured command (`cat /dev/urandom`, the
+// wrong program on the path), and reading it to the end is how a typo in a
+// config file becomes an out-of-memory kill. Stderr is kept only to quote back
+// in the refusal, so it is bounded far tighter.
+const (
+	maxKeyCommandOutput = 64 << 10
+	maxKeyCommandStderr = 4 << 10
+)
+
+// maxKeyErrorStderr is how much of what the command said survives into the
+// refusal. The message is read on one line of a terminal, and a tool's own first
+// sentence ("The specified item could not be found in the keychain.") is almost
+// always the part that names the fix.
+const maxKeyErrorStderr = 240
+
+// resolveKeyCommands runs the api_key_cmd of every enabled server and stores
+// what it printed as that entry's key. Disabled entries are skipped: the
+// launcher never talks to their server, so asking their store for a secret
+// would be a dialog the user cannot connect to anything they did.
+//
+// The first failure stops the load and is returned as-is — it already names the
+// entry and quotes the command.
+func (c *Config) resolveKeyCommands() error {
+	names := make([]string, 0, len(c.Servers))
+	for name := range c.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		sc := c.Servers[name]
+		if !sc.Enabled || strings.TrimSpace(sc.APIKeyCmd) == "" {
+			continue
+		}
+		key, err := runKeyCommand(name, sc.APIKeyCmd, keyCommandTimeout)
+		if err != nil {
+			return err
+		}
+		sc.resolvedKey = key
+		c.Servers[name] = sc
+	}
+	return nil
+}
+
+// keyCommandArgv is how one api_key_cmd line is executed: handed WHOLE to the
+// platform's shell, which splits it.
+//
+// A shell is the right call here and a wrong one elsewhere. This line is the
+// user's own, written into a file only they can write (mode 0600), and it is
+// routinely a pipeline — `pass show llamacpp | head -1`, `op read op://…` — so
+// splitting it in Go would force every such user into a wrapper script of their
+// own. It is also the exact line the migration offer persists and reads back,
+// so both halves of that round trip must go through the same door.
+func keyCommandArgv(command string) []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/C", command}
+	}
+	return []string{"sh", "-c", command}
+}
+
+// runKeyCommand runs one entry's api_key_cmd and returns what it printed as the
+// key, with surrounding whitespace trimmed — a command that prints its key with
+// a trailing newline is every command.
+//
+// The child gets no stdin and neither of the launcher's standard streams: it may
+// be running under the interactive menu, which owns the terminal, so a tool that
+// tried to prompt there would draw over the frame and read the keystrokes meant
+// for the menu — a store that must ask the human to unlock has to do it through
+// its own GUI agent. It inherits the environment whole, deliberately: `pass`,
+// `op` and `security` need HOME, DISPLAY and their agents' sockets.
+func runKeyCommand(entry, command string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	argv := keyCommandArgv(command)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = nil
+	stdout := &cappedWriter{limit: maxKeyCommandOutput}
+	stderr := &cappedWriter{limit: maxKeyCommandStderr}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.WaitDelay = keyCommandWaitGrace
+
+	runErr := cmd.Run()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", fmt.Errorf("config: servers.%s: api_key_cmd %q did not answer within %s — a store that has to "+
+			"ask you to unlock must prompt through its own GUI agent, since this command runs with no terminal of "+
+			"its own", entry, command, timeout)
+	}
+	if runErr != nil {
+		return "", fmt.Errorf("config: servers.%s: api_key_cmd %q failed: %w%s",
+			entry, command, runErr, saidOnStderr(stderr.String()))
+	}
+	if stdout.over {
+		return "", fmt.Errorf("config: servers.%s: api_key_cmd %q printed more than %d bytes — that is not an API "+
+			"key; check that the command is the one that PRINTS the key and nothing else",
+			entry, command, maxKeyCommandOutput)
+	}
+
+	key := strings.TrimSpace(stdout.String())
+	if key == "" {
+		return "", fmt.Errorf("config: servers.%s: api_key_cmd %q printed nothing — a key source that answers with "+
+			"nothing is a broken source, not a keyless server; remove the line altogether to send no key%s",
+			entry, command, saidOnStderr(stderr.String()))
+	}
+	return key, nil
+}
+
+// saidOnStderr renders what the command complained about as a tail for the
+// refusal, or nothing at all when it stayed quiet. The text is folded onto one
+// line and cut short because the refusal is read on one line of a terminal, and
+// a page of a tool's output would push the launcher's own words off the screen.
+func saidOnStderr(text string) string {
+	folded := strings.Join(strings.Fields(text), " ")
+	if folded == "" {
+		return ""
+	}
+	if runes := []rune(folded); len(runes) > maxKeyErrorStderr {
+		folded = strings.TrimSpace(string(runes[:maxKeyErrorStderr])) + "…"
+	}
+	return " — it said: " + folded
+}
+
+// cappedWriter is the bounded sink a key command's streams are read into: it
+// keeps the first limit bytes, remembers that there were more, and never fails
+// the write. Failing one would kill the command with a broken pipe and report
+// THAT instead of the oversized output, which is the one fact the user needs.
+type cappedWriter struct {
+	limit int
+	buf   []byte
+	over  bool
+}
+
+// Write keeps what still fits and notes anything beyond it, always reporting a
+// full write.
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	switch room := w.limit - len(w.buf); {
+	case room <= 0:
+		w.over = w.over || len(p) > 0
+	case len(p) > room:
+		w.buf = append(w.buf, p[:room]...)
+		w.over = true
+	default:
+		w.buf = append(w.buf, p...)
+	}
+	return len(p), nil
+}
+
+// String is what was kept.
+func (w *cappedWriter) String() string {
+	return string(w.buf)
 }
 
 // defaultsServerFallbackWarnings returns one deprecation warning per profile
@@ -477,6 +734,7 @@ func (c *Config) validateAll() []string {
 			c.Defaults.Server = &enabledServers[0]
 		}
 		problems = append(problems, c.defaultsServerFallbackWarnings(enabledServers)...)
+		problems = append(problems, c.apiKeySourceErrors()...)
 		problems = append(problems, c.apiKeyWarnings()...)
 	}
 

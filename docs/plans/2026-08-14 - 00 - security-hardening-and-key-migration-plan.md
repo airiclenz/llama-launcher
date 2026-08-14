@@ -129,7 +129,17 @@ Public surface stays apogee's: `Probe() (Store, bool)`, `Store.Name()`, `Store.W
 
 **Commit:** `feat(keystore): vendor apogee's secret-store package`
 
-## 5. Add api_key_cmd and plaintext_key_ok config sources
+## 5. Add api_key_cmd and plaintext_key_ok config sources — ✅ DONE (2026-08-14)
+
+NOTES (2026-08-14): Deviation — the two refusals also feed `validateAll`, not only `validate()` as the item's text names. `validateAll` is what `llama-launcher config validate` prints, and it duplicates every other load-fatal check in the file; leaving these two out would have made `config validate` report a clean bill on a config that `LoadConfig` refuses.
+
+NOTES (2026-08-14): Deviation — `runKeyCommand` also refuses a command that times out (60s) or prints more than 64 KiB, beyond the item's "non-zero exit or empty output". This runs on the startup path before the launcher has drawn anything, so an unbounded wait is indistinguishable from a hung binary, and an uncapped read turns a typo in a config file (`cat /dev/urandom`, the wrong program on PATH) into an out-of-memory kill. Both are apogee's own bounds on the same command, carried over with its `cappedWriter` sink.
+
+NOTES (2026-08-14): Deviation — `README.md` was edited beyond the item's Files list, for the same reason item 3 edited it: the README reproduces `internal/launcher/defaults/config.yaml` and states the file is written *verbatim* from it, so documenting the new keys only in the template would have made that claim false. The two blocks are byte-identical again (verified by diff).
+
+NOTES (2026-08-14): The TDD file-map rows for `config.go` and `config_test.go` were updated alongside §4.2; the item names §4.2 only, but the map is the repo's per-file responsibility index and both files gained responsibilities here.
+
+NOTES (2026-08-14): Pre-existing failure in this sandbox, unrelated to the item and already recorded under item 3: `TestStopServerAt_StartingOccupant` fails because the container's `nc` never binds the test port.
 
 **What:** In `internal/launcher/config.go`:
 

@@ -82,7 +82,22 @@ The first time you run `llama-launcher` without an existing config, this file is
 #     enabled: true        # optional in the mapping form, defaults to true
 #     api_key: "secret"    # optional
 #
-# What api_key does depends on the server:
+# The key can live outside this file instead. api_key_cmd names a command
+# whose standard output IS the key — a lookup in your secret store, e.g.
+#
+#   llamacpp:
+#     api_key_cmd: "security find-generic-password -s llama-launcher -a llamacpp -w"
+#
+# It is handed whole to a shell, so a pipeline works, and it runs once at
+# startup for every ENABLED server. Set api_key or api_key_cmd, never both.
+# A command that fails, hangs or prints nothing stops the launcher naming the
+# entry: a key source answering with nothing is a broken source, not a
+# keyless server.
+#
+# plaintext_key_ok: true records that an entry's literal api_key is meant to
+# stay in this file, so nothing offers to move it into a secret store.
+#
+# What the key does depends on the server:
 #
 #   llamacpp   — exported as LLAMA_API_KEY into the launched server's
 #                environment (never on the command line, so it stays out
