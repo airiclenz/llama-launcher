@@ -1270,6 +1270,67 @@ func TestMenuRefreshInterval(t *testing.T) {
 	}
 }
 
+func TestStartupWaitAccessors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		stall     *int
+		max       *int
+		wantStall time.Duration
+		wantMax   time.Duration
+	}{
+		{name: "unset uses defaults", wantStall: 30 * time.Second, wantMax: 10 * time.Minute},
+		{name: "explicit values", stall: ptrInt(60), max: ptrInt(1200), wantStall: 60 * time.Second, wantMax: 20 * time.Minute},
+		{name: "stall below floor clamps to 5s", stall: ptrInt(1), wantStall: 5 * time.Second, wantMax: 10 * time.Minute},
+		{name: "stall above max clamps to max", stall: ptrInt(900), max: ptrInt(600), wantStall: 600 * time.Second, wantMax: 600 * time.Second},
+		{name: "max above ceiling clamps to 1h", max: ptrInt(99999), wantStall: 30 * time.Second, wantMax: time.Hour},
+		{name: "max below floor drags default stall down", max: ptrInt(2), wantStall: 5 * time.Second, wantMax: 5 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{StartupStallSecs: tc.stall, StartupMaxWaitSecs: tc.max}
+			if got := cfg.StartupStallTimeout(); got != tc.wantStall {
+				t.Errorf("StartupStallTimeout() = %v, want %v", got, tc.wantStall)
+			}
+			if got := cfg.StartupMaxWait(); got != tc.wantMax {
+				t.Errorf("StartupMaxWait() = %v, want %v", got, tc.wantMax)
+			}
+		})
+	}
+
+	t.Run("yaml keys load through LoadConfig", func(t *testing.T) {
+		t.Parallel()
+
+		cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+		yaml := `
+servers:
+  llamacpp: true
+models_dir: /tmp/models
+startup_stall_timeout: 45
+startup_max_wait: 900
+profiles:
+  test-profile:
+    model: test.gguf
+`
+		if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if got := cfg.StartupStallTimeout(); got != 45*time.Second {
+			t.Errorf("StartupStallTimeout() = %v, want 45s", got)
+		}
+		if got := cfg.StartupMaxWait(); got != 15*time.Minute {
+			t.Errorf("StartupMaxWait() = %v, want 15m", got)
+		}
+	})
+}
+
 func ptrInt(v int) *int { return &v }
 
 func ptrStr(v string) *string { return &v }

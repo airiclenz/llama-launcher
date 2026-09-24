@@ -78,7 +78,7 @@ profiles:
 
 Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. "Not set" is always distinct from zero. Not every parameter applies to every backend — the commented example config has the full parameter/backend matrix.
 
-Other top-level options control launcher behaviour (`auto_stop_server`, `auto_unload`, `log_retention`) and the TUI (`display_centered`, `auto_close`, `sort_alphabetically`, `refresh_duration`, and the memory readout below).
+Other top-level options control launcher behaviour (`auto_stop_server`, `auto_unload`, `log_retention`, and the startup wait `startup_stall_timeout` / `startup_max_wait`) and the TUI (`display_centered`, `auto_close`, `sort_alphabetically`, `refresh_duration`, and the memory readout below).
 
 ### Backends
 

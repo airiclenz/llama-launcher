@@ -38,7 +38,10 @@
 - 1 (second pass): header **Limits** line rewritten to the guard's clamp order; the guard's replaces-the-header sentence dropped
 - 2 (second pass): guard extended — TDD:693 "up to 15 seconds on `start`" corrected, since a managed `start --profile` runs through `load`
 
-## 1. Global config keys for the startup stall window and hard cap
+## 1. Global config keys for the startup stall window and hard cap — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): the YAML fields are named `StartupStallSecs` / `StartupMaxWaitSecs` because Go forbids a field and a method sharing the name `StartupMaxWait`; clamping happens in whole seconds before the `time.Duration` conversion so an oversized value cannot overflow.
+NOTES (2026-09-24): the YAML round-trip is a subtest of `TestStartupWaitAccessors` rather than a new `TestLoadConfig` case; the keys are parsed and documented here but read by nothing until item 2 wires them into the load wait.
 
 **What:**
 **Goal:** `Config` parses `startup_stall_timeout` and `startup_max_wait` (integer seconds). `Config.StartupStallTimeout()` returns 30 s by default and `Config.StartupMaxWait()` returns 10 min by default. max_wait = clamp(raw max or 600 s, 5 s, 3600 s); then stall = clamp(raw stall or 30 s, 5 s, max_wait). The keys are documented.

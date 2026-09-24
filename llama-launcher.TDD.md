@@ -237,6 +237,17 @@ log_dir: ~/.config/llama-launcher/logs
 # Minimum 1 second; values below 1 are clamped. Default: 10.
 # refresh_duration: 10
 
+# How long (seconds) `load` waits for a server the launcher started itself
+# to become ready.
+# The wait continues while the server makes progress (its log grows or it
+# reports that it is still loading) and gives up after
+# `startup_stall_timeout` seconds without progress, or after
+# `startup_max_wait` seconds in total. `startup_max_wait` is clamped to
+# 5..3600 (default: 600); `startup_stall_timeout` is clamped to
+# 5..`startup_max_wait` (default: 30).
+# startup_stall_timeout: 30
+# startup_max_wait: 600
+
 # Show a memory/swap readout in the status header (default: true).
 # Refreshes every second while the menu is open, independent of
 # `refresh_duration`; the underlying `sysctl` / `vm_stat` / `ioreg`

@@ -46,6 +46,8 @@ type Config struct {
 	MemoryStatusFormat *string                 `yaml:"memory_status_format"`
 	MemoryStatusBar    *MemoryStatusBar        `yaml:"memory_status_bar"`
 	RefreshDuration    *int                    `yaml:"refresh_duration"`
+	StartupStallSecs   *int                    `yaml:"startup_stall_timeout"`
+	StartupMaxWaitSecs *int                    `yaml:"startup_max_wait"`
 	Defaults           ProfileParams           `yaml:"defaults"`
 	Profiles           map[string]Profile      `yaml:"profiles"`
 
@@ -226,6 +228,55 @@ func (c *Config) MenuRefreshInterval() time.Duration {
 		return 1 * time.Second
 	}
 	return time.Duration(*c.RefreshDuration) * time.Second
+}
+
+// Startup-wait bounds, in seconds. A managed server's startup wait gives up
+// once the server has shown no progress for the stall window, or once the
+// hard cap elapses, whichever comes first.
+const (
+	defaultStartupMaxWaitSecs = 600
+	defaultStartupStallSecs   = 30
+	minStartupWaitSecs        = 5
+	maxStartupWaitSecs        = 3600
+)
+
+// StartupMaxWait returns the hard cap on a managed server's startup wait,
+// from startup_max_wait (seconds). Default: 10 minutes, clamped to
+// 5 seconds .. 1 hour.
+func (c *Config) StartupMaxWait() time.Duration {
+	return time.Duration(c.startupMaxWaitSecs()) * time.Second
+}
+
+// StartupStallTimeout returns how long a managed server's startup wait
+// tolerates no progress, from startup_stall_timeout (seconds). Default:
+// 30 seconds, clamped to 5 seconds .. StartupMaxWait().
+func (c *Config) StartupStallTimeout() time.Duration {
+	secs := defaultStartupStallSecs
+	if c.StartupStallSecs != nil {
+		secs = *c.StartupStallSecs
+	}
+	return time.Duration(clampInt(secs, minStartupWaitSecs, c.startupMaxWaitSecs())) * time.Second
+}
+
+// startupMaxWaitSecs is StartupMaxWait in whole seconds. Clamping before the
+// conversion keeps an oversized value from overflowing time.Duration.
+func (c *Config) startupMaxWaitSecs() int {
+	secs := defaultStartupMaxWaitSecs
+	if c.StartupMaxWaitSecs != nil {
+		secs = *c.StartupMaxWaitSecs
+	}
+	return clampInt(secs, minStartupWaitSecs, maxStartupWaitSecs)
+}
+
+// clampInt bounds v to [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func (c *Config) IsServerEnabled(name string) bool {
