@@ -5,7 +5,7 @@ description: Inspect and control the local LLM server(s) via `llama-launcher` â€
 
 # manage-llm-server
 
-`llama-launcher` is a CLI for running and switching local LLM servers (llama.cpp, Ollama, LM Studio). Models are defined as **profiles**; loading a profile starts the right server and loads its model. Use this skill to inspect state, switch profiles, and tail logs.
+`llama-launcher` is a CLI for running and switching local LLM servers (llama.cpp, Ollama, LM Studio, Splash). Models are defined as **profiles**; loading a profile starts the right server and loads its model. Use this skill to inspect state, switch profiles, and tail logs.
 
 ## Safety rules (do these first)
 

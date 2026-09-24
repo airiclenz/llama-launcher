@@ -2,6 +2,8 @@
 
 Consult `llama-launcher.TDD.md` for all project details: architecture, build commands, coding standards, and contribution workflow.
 
+Supported LLM Servers: `llamacpp`, `ollama`, `lmstudio` and `splash` — see `CONTEXT.md` for the domain terms and `llama-launcher.TDD.md` for how each one is driven.
+
 ## Issue register — beads (`bd`), not a file
 
 Open defects, loose ends and parked feature ideas live in the beads tracker. `TODO.md` was migrated into beads on 2026-09-24 and deleted; the mentions of it that survive in `CHANGELOG.md`, `docs/adr/`, `docs/handoffs/` and archived plans are historical and stay.

@@ -195,7 +195,8 @@ NOTES (2026-09-24): ran live against `incoai/Qwen3.8-27B-Splash` (splash on PATH
 - `INTEGRATION_MODEL_SPLASH=incoai/Qwen3.8-27B-Splash go test -tags=integration -count=1 -timeout 10m -run Splash ./internal/launcher/` (skip allowed as above)
 **Commit:** `test(launcher): add Splash integration test`
 
-## 7. Domain docs: CONTEXT, ADR, skill, facade doc
+## 7. Domain docs: CONTEXT, ADR, skill, facade doc — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): CONTEXT.md Load/Unload verb also updated for `splash` (no API load; the model goes in `--model` at start), since it enumerated `llamacpp` as the only start-argument server; doc.go Platforms lists `splash serve` among the unstarted managed servers and adds Splash to the ErrUnsupported sentence (per the plan's rejected guard); two doc.go paragraphs re-wrapped to keep line width.
 
 **What:** Recast at the regression check (2026-09-24). Depends on item 2.
 **Goal:**

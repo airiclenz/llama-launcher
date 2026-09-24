@@ -5,11 +5,11 @@ A profile-driven launcher for local LLM serving software. Users name **Profiles*
 ## Language
 
 **LLM Server**:
-A piece of LLM-serving software the launcher knows how to drive (e.g. `llamacpp`, `ollama`, `lmstudio`). The same term covers both the class ("llamacpp is an LLM Server") and a running instance ("the LLM Server on port 8080"); context disambiguates. A running LLM Server is identified by its `host:port` address — multiple LLM Servers of any type may run concurrently as long as each binds a distinct address (see [ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). The launcher can start and stop any LLM Server it supports; how that happens is an implementation detail of each LLM Server type and not exposed to the user.
+A piece of LLM-serving software the launcher knows how to drive (e.g. `llamacpp`, `ollama`, `lmstudio`, `splash`). The same term covers both the class ("llamacpp is an LLM Server") and a running instance ("the LLM Server on port 8080"); context disambiguates. A running LLM Server is identified by its `host:port` address — multiple LLM Servers of any type may run concurrently as long as each binds a distinct address (see [ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). The launcher can start and stop any LLM Server it supports; how that happens is an implementation detail of each LLM Server type and not exposed to the user.
 _Avoid_: Backend, server software, engine, runtime, "managed server", "external server".
 
 **Model**:
-The weights an LLM Server loads to serve requests. A file path on disk for llamacpp; an opaque identifier (`llama3.1:8b`, `lmstudio-community/...`) for Ollama and LM Studio. Models are *loaded into* an LLM Server, never run on their own.
+The weights an LLM Server loads to serve requests. A file path on disk for llamacpp; an opaque identifier (`llama3.1:8b`, `lmstudio-community/...`) for Ollama and LM Studio; a Hugging Face `owner/repo` id of an installed Splash package for Splash (the launcher refuses one that is not installed — see [ADR-0014](docs/adr/0014-splash-models-must-be-installed.md)). Models are *loaded into* an LLM Server, never run on their own.
 _Avoid_: Weights file, GGUF (too narrow), checkpoint.
 
 **Profile**:
@@ -26,13 +26,13 @@ _Avoid_: "router" / "proxy" as names (ADR-0002 reserves the plain words for what
 The orchestration the launcher performs when a user selects a Profile: resolve it, start the LLM Server if needed, load the Model if needed, update state. The user-facing CLI verb is `load` (`llml load <profile>`), but inside the codebase this whole operation is *activation* to avoid colliding with the lower-level Model load. One Profile is activated at a time per LLM Server.
 
 **Load** / **Unload** (a Model into an LLM Server):
-The API-level operation of putting Model weights into a running LLM Server's memory (or removing them). For LLM Servers with a load/unload HTTP API (Ollama, LM Studio), this is an HTTP call. For `llamacpp`, there is no API load — the Model is baked into the server's start arguments, so "loading a Model" means starting (or restarting) the LLM Server with that Model in `--model`.
+The API-level operation of putting Model weights into a running LLM Server's memory (or removing them). For LLM Servers with a load/unload HTTP API (Ollama, LM Studio), this is an HTTP call. For `llamacpp` and `splash`, there is no API load — the Model is baked into the server's start arguments, so "loading a Model" means starting (or restarting) the LLM Server with that Model in `--model`.
 
 **Start** / **Stop** (an LLM Server):
-Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp`; for `ollama`, spawning `ollama serve` to start and signalling the process listening at the instance's address to stop — its CLI has no server-stop command, `ollama stop MODEL` only unloads a model; `lms server start` / `lms server stop` for `lmstudio`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
+Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp` and `splash`; for `ollama`, spawning `ollama serve` to start and signalling the process listening at the instance's address to stop — its CLI has no server-stop command, `ollama stop MODEL` only unloads a model; `lms server start` / `lms server stop` for `lmstudio`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
 
 **Starting** (state of an LLM Server):
-The window after Start in which the LLM Server already holds its address but is not yet ready to serve. For `llamacpp` this lasts as long as the Model load takes; Ollama and LM Studio have no such window — their server is ready before any Model is loaded. A Starting LLM Server is a first-class instance: it is visible (displayed as "starting…") and stoppable, but Activation will not displace it except via `--restart` — see [ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md).
+The window after Start in which the LLM Server already holds its address but is not yet ready to serve. For `llamacpp` this lasts as long as the Model load takes; for `splash` it lasts while `/ready` answers 503 (its `/health` already answers 200 during the load, so it cannot mark the window); Ollama and LM Studio have no such window — their server is ready before any Model is loaded. A Starting LLM Server is a first-class instance: it is visible (displayed as "starting…") and stoppable, but Activation will not displace it except via `--restart` — see [ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md).
 _Avoid_: "still-loading server", "booting", "warming up".
 
 ## Flagged ambiguities
