@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // RunningInstance is a transient, in-memory snapshot of an LLM-server
@@ -282,9 +283,34 @@ func probeInstance(cfg *Config, t discoveryTarget) probeResult {
 			inst.ActiveModel = sanitizeServerString(models[0].Name)
 		}
 	}
+	// Profile matching runs on the whole sanitized id; only the stored,
+	// displayed copy is bounded, so a long id still matches its profile.
 	inst.ActiveProfile = matchProfileName(cfg, inst)
+	inst.ActiveModel = boundModelID(inst.ActiveModel)
 	result.instance = inst
 	return result
+}
+
+// maxModelIDBytes caps a server-reported model id where it is stored in
+// RunningInstance.ActiveModel (boundModelID).
+const maxModelIDBytes = 512
+
+// boundModelID truncates a sanitized server-reported model id to
+// maxModelIDBytes, cutting on a rune boundary and appending "…". Whatever
+// answers on a configured port is untrusted, and boundedBody alone still
+// lets a single id run to hundreds of KiB, which every display site (status,
+// menu header, pop-ups, MCP output) would print whole. An id within the cap
+// is returned unchanged. Only the stored copy is bounded: an id handed back
+// to the server (UnloadModel, the model-name match) must stay whole.
+func boundModelID(id string) string {
+	if len(id) <= maxModelIDBytes {
+		return id
+	}
+	cut := maxModelIDBytes
+	for cut > 0 && !utf8.RuneStart(id[cut]) {
+		cut--
+	}
+	return id[:cut] + "…"
 }
 
 // instancesSignature condenses a discovery result into a comparable string.

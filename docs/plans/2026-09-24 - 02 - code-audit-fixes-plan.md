@@ -386,7 +386,11 @@ internal/launcher/sysmem_test.go — TestParseVMStat, TestParseIOAccelerator
 - `go test ./internal/launcher/ -race -run 'TestReadMemStats|TestSysmem' -count=1`
 **Commit:** `fix(launcher): bound memory-readout subprocesses and drop the lock across them`
 
-## 19. Server-reported model ids are bounded
+## 19. Server-reported model ids are bounded — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): `boundModelID` and `maxModelIDBytes` live in discovery.go beside `probeInstance`; `liveLoadedModel` stays unbounded (its doc comment now says why). Unload test registers a `listingUnloadServer` stub in the global registry (non-parallel, like the existing `hookStopServer` tests); load test is `TestLoadProfile_Orchestration_LongLiveModelIDMatches` via fakeOps.
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by bounding RunningInstance.ActiveModel in boundModelID (§3.1 and §3.2 status row said the stored / `--json` id stays raw; now sanitized, bounded at 512 bytes + `…`, Profile matching on the whole id; §5.2 discovery.go / discovery_test.go rows name `boundModelID`)
+NOTES (2026-09-24): consequential edit — internal/launcher/menu.go: made necessary by bounding RunningInstance.ActiveModel in boundModelID (modelDisplayName doc comment said the stored id keeps the raw value)
 
 **What:** Recast at the regression check (2026-09-24). Fixes audit finding "Unbounded server-reported strings reach the terminal and the MCP surface".
 **Regression guard.** The float half of the finding is rejected: live params carry no server-reported floats (QueryLiveParams returns only ContextSize/Parallel; maskUnreported nils every fresh float); formatFloatPtr is untouched. Bound only the copy that is stored and displayed: in `probeInstance` after `matchProfileName` has run on the full sanitized id, and `loadProfile`'s returned `RunningInstance.ActiveModel`. `liveLoadedModel`'s return stays unbounded — it is handed back to the server (`UnloadModel` in `UnloadInstanceModel` and `loadProfileExternal`'s auto-unload, `modelNamesMatch` in `loadProfile`'s no-op check). The HTTP-driven test's id stays under `boundedBody`'s 512 KiB cap.

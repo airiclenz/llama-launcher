@@ -706,9 +706,10 @@ func profileDisplayName(cfg *Config, profileName string) string {
 // every other id is left verbatim, because for the other backends the id is a
 // name rather than a path — LM Studio's "qwen/qwen3-8b" and Ollama's
 // "llama3:8b" would lose meaning if their separators were cut. The stored
-// RunningInstance.ActiveModel keeps the raw value: matching (modelNamesMatch,
-// the ADR-0007 idempotency check) and `status --json` compare and report what
-// the server actually said.
+// RunningInstance.ActiveModel keeps the server-reported id, sanitized and
+// bounded at 512 bytes with "…" appended (boundModelID), and `status --json`
+// reports that; matching (modelNamesMatch, the ADR-0007 idempotency check)
+// runs on the whole id, before it is bounded.
 func modelDisplayName(id string) string {
 	if id == "" {
 		return ""

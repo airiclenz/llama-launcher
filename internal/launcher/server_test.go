@@ -1095,6 +1095,36 @@ func TestLoadProfile_Orchestration_IdempotentNoOp(t *testing.T) {
 	})
 }
 
+// TestLoadProfile_Orchestration_LongLiveModelIDMatches: a live model id over
+// maxModelIDBytes is compared whole, so it still matches the profile and the
+// load stays a no-op; only the returned ActiveModel is bounded.
+func TestLoadProfile_Orchestration_LongLiveModelIDMatches(t *testing.T) {
+	t.Parallel()
+	longPath := "/" + strings.Repeat("d/", maxModelIDBytes) + "long-7b.gguf"
+	profile := orchProfile("llamacpp", "long", longPath, "127.0.0.1", 8080)
+	f := &fakeOps{
+		healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
+		models:       map[string]string{"127.0.0.1:8080": longPath},
+		instances:    []*RunningInstance{orchInstance("llamacpp", "127.0.0.1", 8080, longPath)},
+	}
+
+	inst, started, err := loadProfile(f, &Config{}, profile, false, nil, nil)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if started || len(f.stopped) != 0 || len(f.started) != 0 || len(f.loadedModels) != 0 {
+		t.Errorf("a matching long id must be a no-op: started=%t stopped=%v spawned=%v loaded=%v",
+			started, f.stopped, f.started, f.loadedModels)
+	}
+	if inst == nil || inst.ActiveProfile != "long" {
+		t.Fatalf("instance = %+v, want the matched profile", inst)
+	}
+	if inst.ActiveModel != boundModelID(longPath) {
+		t.Errorf("ActiveModel is %d bytes, want the bounded %d-byte id", len(inst.ActiveModel), len(boundModelID(longPath)))
+	}
+}
+
 // TestLoadProfile_Orchestration_DriftNoticeReachesSink is the sibling of the
 // idempotent-no-op test: on the same ADR-0007 path the drift notice travels
 // to the caller's NoticeFunc as a single call carrying the whole formatted
@@ -2351,6 +2381,51 @@ func TestUnloadInstanceModel_AuthFailed(t *testing.T) {
 	if inst != nil {
 		t.Errorf("instance = %+v, want nil on a refusal", inst)
 	}
+}
+
+// listingUnloadServer is a registry stub that reports one loaded model and
+// records the model id each UnloadModel call receives.
+type listingUnloadServer struct {
+	hookStopServer
+	model    string
+	unloaded []string
+}
+
+func (s *listingUnloadServer) ListRunningModels(string) ([]RunningModelInfo, error) {
+	return []RunningModelInfo{{Name: s.model}}, nil
+}
+
+func (s *listingUnloadServer) UnloadModel(_ string, modelID string) error {
+	s.unloaded = append(s.unloaded, modelID)
+	return nil
+}
+
+// TestUnloadInstanceModel_LongModelIDReachesServerWhole: the id handed back
+// to the server is never the bounded display copy — an id over
+// maxModelIDBytes reaches UnloadModel whole. Not parallel: it mutates the
+// global llmServers registry.
+func TestUnloadInstanceModel_LongModelIDReachesServerWhole(t *testing.T) {
+	longID := strings.Repeat("m", 2*maxModelIDBytes) + ".gguf"
+	stub := &listingUnloadServer{hookStopServer: hookStopServer{name: "listunload"}, model: longID}
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+
+	if _, err := UnloadInstanceModel(deadAddr(t), nil); err != nil {
+		t.Fatalf("UnloadInstanceModel = %v, want success", err)
+	}
+
+	if len(stub.unloaded) != 1 || stub.unloaded[0] != longID {
+		t.Errorf("UnloadModel received %d ids (first %d bytes), want the whole %d-byte id once",
+			len(stub.unloaded), firstLen(stub.unloaded), len(longID))
+	}
+}
+
+// firstLen returns the byte length of ids[0], or 0 when ids is empty.
+func firstLen(ids []string) int {
+	if len(ids) == 0 {
+		return 0
+	}
+	return len(ids[0])
 }
 
 // authRefusingStopServer is a registry stub for a server that refuses the

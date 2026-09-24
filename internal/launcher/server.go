@@ -793,7 +793,7 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 				Host:          host,
 				Port:          port,
 				ActiveProfile: profile.Name,
-				ActiveModel:   liveModel,
+				ActiveModel:   boundModelID(liveModel),
 			}, false, nil
 		}
 	}
@@ -846,7 +846,10 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 // at addr, as reported by the backend. Empty string means "nothing loaded"
 // or "backend does not expose a model list". The name is server-reported
 // and reaches the terminal (progress lines, RunningInstance.ActiveModel),
-// so control characters are stripped here (sanitizeServerString).
+// so control characters are stripped here (sanitizeServerString). It is
+// returned unbounded: callers hand it back to the server (UnloadModel,
+// modelNamesMatch), so only the copy stored in RunningInstance is cut
+// (boundModelID).
 func liveLoadedModel(b LLMServer, addr string) string {
 	ml, ok := b.(ModelLister)
 	if !ok {

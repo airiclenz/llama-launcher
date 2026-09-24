@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestLlamaCppListRunningModels(t *testing.T) {
@@ -275,6 +276,95 @@ func TestDiscoverRunningInstances_SanitizesModelName(t *testing.T) {
 	}
 	if got := instances[0].ActiveModel; got != "]0;pwnevil.gguf" {
 		t.Errorf("ActiveModel = %q, want %q (escape bytes stripped)", got, "]0;pwnevil.gguf")
+	}
+}
+
+// TestDiscoverRunningInstances_BoundsLongModelID: a 64 KiB model id served
+// over HTTP is stored truncated to maxModelIDBytes plus "…", while profile
+// matching still sees the whole id — only its basename names the profile's
+// model file, so a match proves the untruncated id was compared.
+func TestDiscoverRunningInstances_BoundsLongModelID(t *testing.T) {
+	t.Parallel()
+	modelsDir := t.TempDir()
+	if err := writeEmpty(filepath.Join(modelsDir, "model.gguf")); err != nil {
+		t.Fatal(err)
+	}
+	longID := "/remote/" + strings.Repeat("d/", 32*1024) + "model.gguf"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		case "/v1/models":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"data": []map[string]interface{}{{"id": longID}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	host, portInt := hostPort(t, srv.URL)
+	cfg := &Config{
+		Servers:   map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:    t.TempDir(),
+		ModelsDir: modelsDir,
+		Profiles:  map[string]Profile{"big": {Model: "model.gguf"}},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("llamacpp"),
+		Host:   &host,
+		Port:   &portInt,
+	}
+
+	instances := DiscoverRunningInstances(cfg)
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 instance, got %d: %+v", len(instances), instances)
+	}
+	got := instances[0].ActiveModel
+	if len(got) > maxModelIDBytes+len("…") || !strings.HasSuffix(got, "…") {
+		t.Errorf("ActiveModel is %d bytes (suffix …: %t), want at most %d bytes ending in …",
+			len(got), strings.HasSuffix(got, "…"), maxModelIDBytes+len("…"))
+	}
+	if !strings.HasPrefix(longID, strings.TrimSuffix(got, "…")) {
+		t.Error("ActiveModel is not a prefix of the served id")
+	}
+	if instances[0].ActiveProfile != "big" {
+		t.Errorf("ActiveProfile = %q, want big (matched on the whole id)", instances[0].ActiveProfile)
+	}
+}
+
+// TestBoundModelID pins the truncation rule: an id within maxModelIDBytes is
+// unchanged, a longer one is cut to at most that many bytes on a rune
+// boundary with "…" appended.
+func TestBoundModelID(t *testing.T) {
+	t.Parallel()
+	// "é" is two bytes; placed at byte 511 it straddles the 512-byte cut.
+	straddling := strings.Repeat("a", maxModelIDBytes-1) + "é" + "tail"
+	tests := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{name: "empty", id: "", want: ""},
+		{name: "short id unchanged", id: "qwen/qwen3-8b", want: "qwen/qwen3-8b"},
+		{name: "exactly at the cap unchanged", id: strings.Repeat("a", maxModelIDBytes), want: strings.Repeat("a", maxModelIDBytes)},
+		{name: "one byte over is cut", id: strings.Repeat("a", maxModelIDBytes+1), want: strings.Repeat("a", maxModelIDBytes) + "…"},
+		{name: "multibyte rune straddling the cut is not split", id: straddling, want: strings.Repeat("a", maxModelIDBytes-1) + "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := boundModelID(tt.id)
+			if got != tt.want {
+				t.Errorf("boundModelID = %q (%d bytes), want %q (%d bytes)", got, len(got), tt.want, len(tt.want))
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("boundModelID returned invalid UTF-8: %q", got)
+			}
+		})
 	}
 }
 
