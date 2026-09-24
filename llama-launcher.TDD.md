@@ -1081,7 +1081,7 @@ The adapter is a thin shim: it runs on the host, exposes an MCP server over Stre
 
 It ships with the CLI: `make build-mcp` builds it locally, and the Homebrew formula installs it alongside `llama-launcher` (§13). It is inert until started — installing it adds no resident process.
 
-The HTTP listener sets connection timeouts so a stuck or hostile client cannot hold it open indefinitely: `ReadTimeout` 30 s, `ReadHeaderTimeout` 10 s, `IdleTimeout` 2 min, and `WriteTimeout` 10 min — the write window is generous because it must outlast the slowest tool call (`load_profile` waits up to 5 minutes for a model load, plus health-check and stop grace periods). Request bodies are capped at 1 MiB via `http.MaxBytesReader` before they reach the MCP handler, which buffers the whole body in memory — control-plane calls are small JSON-RPC payloads, so an allowlisted but hostile client cannot exhaust the adapter's memory with one huge POST.
+The HTTP listener sets connection timeouts so a stuck or hostile client cannot hold it open indefinitely: `ReadTimeout` 30 s, `ReadHeaderTimeout` 10 s, `IdleTimeout` 2 min, and `WriteTimeout` 65 min — the write window is generous because it must outlast the slowest tool call: `load_profile` waits for a model load as long as the server makes startup progress, up to the configured `startup_max_wait` (default 10 min, at most 60 min), plus the stop escalation of a restart (up to ~20 s), so 65 min covers every allowed cap. Request bodies are capped at 1 MiB via `http.MaxBytesReader` before they reach the MCP handler, which buffers the whole body in memory — control-plane calls are small JSON-RPC payloads, so an allowlisted but hostile client cannot exhaust the adapter's memory with one huge POST.
 
 ### 15.2 Tool surface
 

@@ -64,14 +64,15 @@ func main() {
 	// the listener open indefinitely. Control-plane requests are small, so
 	// full-request reads, header reads, and idle keep-alives get short
 	// windows; WriteTimeout must outlast the slowest tool call (load_profile
-	// waits up to 5 minutes for a model load, plus health-check and stop
-	// grace periods).
+	// waits for a model load as long as the server makes startup progress,
+	// up to the configured startup_max_wait — at most 60 minutes — plus the
+	// stop escalation of a restart, so 65 minutes covers every allowed cap).
 	srv := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           mux,
 		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      10 * time.Minute,
+		WriteTimeout:      65 * time.Minute,
 		IdleTimeout:       2 * time.Minute,
 	}
 	if err := srv.ListenAndServe(); err != nil {

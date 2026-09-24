@@ -96,7 +96,7 @@ llama-launcher.TDD.md — §6.2 step 9, §16.2 verbs block, server.go module row
 
 **Commit:** `feat(launcher): wait for a managed server while it makes startup progress`
 
-## 4. MCP write timeout outlasts the largest startup cap
+## 4. MCP write timeout outlasts the largest startup cap — ✅ DONE (2026-09-24)
 
 **What:**
 **Goal:** the MCP server's `http.Server.WriteTimeout` is 65 minutes. Its comment and the TDD's MCP section state that `load_profile` can wait up to the configured `startup_max_wait` (at most 60 min) and no longer say "up to 5 minutes".
