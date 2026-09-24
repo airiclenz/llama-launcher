@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -308,7 +309,7 @@ func parseConfig(path string) (*Config, error) {
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
+		return nil, fmt.Errorf("parsing config %s: %w", path, redactYAMLError(err))
 	}
 
 	var root yaml.Node
@@ -321,6 +322,61 @@ func parseConfig(path string) (*Config, error) {
 	cfg.LogDir = ExpandTilde(cfg.LogDir)
 
 	return &cfg, nil
+}
+
+// redactedFileText stands in for every span of the parsed file that a yaml.v3
+// error message would otherwise quote back.
+const redactedFileText = "…"
+
+// yamlFileEchoes are the yaml.v3 message templates that quote the parsed file,
+// each rewritten to keep the template's words — the line, the kind of mismatch,
+// the Go type — and drop the file's text. The value patterns are lazy up to the
+// template word that follows the value, so a value holding a backtick or a
+// newline is still cut whole.
+var yamlFileEchoes = []struct {
+	pattern     *regexp.Regexp
+	replacement string
+}{
+	{regexp.MustCompile("(?s)(cannot unmarshal \\S+ )`.*?`( into )"), "${1}`" + redactedFileText + "`${2}"},
+	{regexp.MustCompile("(?s)(cannot decode \\S+ )`.*?`( as a )"), "${1}`" + redactedFileText + "`${2}"},
+	{regexp.MustCompile("`[^`]*`"), "`" + redactedFileText + "`"},
+	{regexp.MustCompile(`anchor '\S*'`), "anchor '" + redactedFileText + "'"},
+	{regexp.MustCompile(`mapping key ".*" already defined`), `mapping key "` + redactedFileText + `" already defined`},
+	{regexp.MustCompile(`invalid map key: .*`), "invalid map key: " + redactedFileText},
+	{regexp.MustCompile(`(?s)field .*? (not found|already set) in type`), "field " + redactedFileText + " ${1} in type"},
+}
+
+// yamlTagMention matches a node tag where yaml.v3 names the kind of mismatch.
+// A core tag (!!str, !!int, ...) is the mismatch itself; any other tag is text
+// the file wrote.
+var yamlTagMention = regexp.MustCompile(`(cannot unmarshal |cannot decode |as a )(!\S*)`)
+
+// yamlCoreTags are the tags yaml.v3 resolves on its own; naming one quotes the
+// YAML spec, not the file.
+var yamlCoreTags = map[string]bool{
+	"!!null": true, "!!bool": true, "!!str": true, "!!int": true, "!!float": true,
+	"!!timestamp": true, "!!seq": true, "!!map": true, "!!binary": true, "!!merge": true,
+}
+
+// redactYAMLError returns err's message with every fragment of the parsed file
+// replaced by "…", keeping the line numbers and the kind of mismatch. It
+// rewrites the whole message string rather than switching on the error type,
+// because ServerConfig.UnmarshalYAML wraps a *yaml.TypeError with %w and the
+// echo then sits inside a plain wrapping error. The result wraps nothing: the
+// original chain still carries the file's text.
+func redactYAMLError(err error) error {
+	message := err.Error()
+	for _, echo := range yamlFileEchoes {
+		message = echo.pattern.ReplaceAllString(message, echo.replacement)
+	}
+	message = yamlTagMention.ReplaceAllStringFunc(message, func(mention string) string {
+		tagStart := strings.Index(mention, "!")
+		if yamlCoreTags[mention[tagStart:]] {
+			return mention
+		}
+		return mention[:tagStart] + "!" + redactedFileText
+	})
+	return errors.New(message)
 }
 
 // extractProfileOrder walks the YAML document and returns the keys of the

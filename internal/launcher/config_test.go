@@ -863,6 +863,98 @@ profiles:
 	})
 }
 
+func TestRedactYAMLError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want []string
+		bite string
+	}{
+		{
+			name: "type mismatch names the line and the mismatch",
+			body: "defaults:\n  port: hunter2\n",
+			want: []string{"line 2", "cannot unmarshal !!str `…` into int"},
+			bite: "hunter2",
+		},
+		{
+			name: "wrapped server entry error keeps its prefix",
+			body: "servers:\n  llamacpp: hunter2\n",
+			want: []string{"server entry must be a bool or a mapping", "line 2"},
+			bite: "hunter2",
+		},
+		{
+			name: "private key file",
+			body: "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ\n" +
+				"-----END OPENSSH PRIVATE KEY-----\n",
+			want: []string{"line 1", "into launcher.Config"},
+			bite: "-----BE",
+		},
+		{
+			name: "unknown anchor drops the anchor name",
+			body: "defaults:\n  port: *hunter2\n",
+			want: []string{"unknown anchor '…' referenced"},
+			bite: "hunter2",
+		},
+		{
+			name: "duplicate key drops the key",
+			body: "hunter2: 1\nhunter2: 2\n",
+			want: []string{"line 2: mapping key \"…\" already defined at line 1"},
+			bite: "hunter2",
+		},
+		{
+			name: "custom tag is file text",
+			body: "defaults:\n  port: !hunter2 x\n",
+			want: []string{"line 2", "cannot unmarshal !… `…` into int"},
+			bite: "hunter2",
+		},
+		{
+			name: "explicit core tag keeps the tag, drops the value",
+			body: "defaults:\n  port: !!int hunter2\n",
+			want: []string{"cannot decode !!str `…` as a !!int"},
+			bite: "hunter2",
+		},
+		{
+			name: "value holding a backtick and a newline is cut whole",
+			body: "defaults:\n  port: \"a`hunt\\nb\"\n",
+			want: []string{"line 2", "into int"},
+			bite: "hunt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(cfgPath, []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("writing config: %v", err)
+			}
+
+			_, parseErr := parseConfig(cfgPath)
+			_, _, spliceErr := serverEntryConfig([]byte(tt.body), "llamacpp")
+
+			if parseErr == nil || spliceErr == nil {
+				t.Fatalf("expected both parses to fail, got %v / %v", parseErr, spliceErr)
+			}
+			if !strings.Contains(parseErr.Error(), cfgPath) {
+				t.Errorf("parseConfig error %q does not name the path %s", parseErr, cfgPath)
+			}
+			for _, err := range []error{parseErr, spliceErr} {
+				message := err.Error()
+				for _, want := range tt.want {
+					if !strings.Contains(message, want) {
+						t.Errorf("error %q does not contain %q", message, want)
+					}
+				}
+				if strings.Contains(message, tt.bite) {
+					t.Errorf("error %q echoes file content %q", message, tt.bite)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateAll(t *testing.T) {
 	t.Parallel()
 

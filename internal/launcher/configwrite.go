@@ -162,7 +162,7 @@ func setEntryPlaintextKeyOK(data []byte, name string) ([]byte, error) {
 func serverEntryConfig(data []byte, name string) (Config, ServerConfig, error) {
 	var before Config
 	if err := yaml.Unmarshal(data, &before); err != nil {
-		return Config{}, ServerConfig{}, fmt.Errorf("it does not parse: %w", err)
+		return Config{}, ServerConfig{}, fmt.Errorf("it does not parse: %w", redactYAMLError(err))
 	}
 	entry, ok := before.Servers[name]
 	if !ok {
@@ -300,7 +300,7 @@ func configRootMapping(data []byte) (*yaml.Node, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, errors.New("it holds no settings at all; edit the file by hand")
 		}
-		return nil, err
+		return nil, redactYAMLError(err)
 	}
 	var second yaml.Node
 	switch err := decoder.Decode(&second); {
@@ -308,7 +308,7 @@ func configRootMapping(data []byte) (*yaml.Node, error) {
 		return nil, errors.New(
 			"it holds more than one YAML document, and only the first is ever read; edit the file by hand")
 	case !errors.Is(err, io.EOF):
-		return nil, err
+		return nil, redactYAMLError(err)
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, errors.New("its top level is not a mapping of settings; edit the file by hand")
@@ -481,7 +481,7 @@ func joinConfigLines(lines []string) []byte {
 func verifiedEntrySplice(updated []byte, before Config, name string, want ServerConfig) ([]byte, error) {
 	var after Config
 	if err := yaml.Unmarshal(updated, &after); err != nil {
-		return nil, fmt.Errorf("the edited file would not parse: %w", err)
+		return nil, fmt.Errorf("the edited file would not parse: %w", redactYAMLError(err))
 	}
 	switch {
 	case !serversChangedOnlyAt(before.Servers, after.Servers, name, want):

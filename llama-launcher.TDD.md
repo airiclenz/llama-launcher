@@ -880,7 +880,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 | Scenario | Behaviour |
 |---|---|
 | Config file missing (first run) | Generate example config, print path, reload it, and continue (no exit). |
-| Config file parse error | Print error with line number (from yaml.v3), exit 2. |
+| Config file parse error | Print error naming the file, the line (from yaml.v3) and the kind of mismatch, exit 2. The message never echoes the file's text: `redactYAMLError` (`config.go`) replaces every value, key, anchor name and non-core tag yaml.v3 quotes back with `…`, so `--config` pointed at an arbitrary readable file cannot surface its content. The config writer's parse refusals (`configwrite.go`) go through the same redaction. |
 | Profile missing `server:` with no defensible fallback | Print warning (deprecation notice) or error (if no fallback is defensible). See [§4.6](#46-llm-server-selection). |
 | Unknown Profile name | Print error, exit 2. |
 | Model file not found | Print resolved path, exit 2. |

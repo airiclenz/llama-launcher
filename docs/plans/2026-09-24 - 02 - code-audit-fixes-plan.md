@@ -405,7 +405,12 @@ internal/launcher/backend_http.go — sanitizeServerString, boundedBody; interna
 - `go test ./internal/launcher/ -run 'TestBoundModelID|TestDiscover|TestUnloadInstanceModel|TestLoadProfile' -count=1`
 **Commit:** `fix(launcher): bound server-reported model ids`
 
-## 20. Config parse errors never echo file content
+## 20. Config parse errors never echo file content — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): redaction also covers yaml.v3's other echoing templates beyond the plan's list — `cannot decode <tag> `…` as a <tag>` (full, untruncated value), `mapping key "…" already defined`, `invalid map key`, `field … not found/already set`, and non-core tags (`!hunter2` → `!…`); core tags (`!!str`, `!!int`, …) stay since they name the mismatch.
+NOTES (2026-09-24): configwrite.go's `configRootMapping` decoder errors are redacted too (the guard enumerated `yaml.Unmarshal` sites; the `yaml.NewDecoder` path parses the same config bytes). `redactYAMLError` returns a plain error that wraps nothing, so the original chain carrying file text is dropped.
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by the parse error now naming the path and redacting file text (§10 "Config file parse error" row).
+NOTES (2026-09-24): yaml.v3 gives no line for some errors (`unknown anchor`, `cannot decode … as a …`, a scanner error on line 1); those report the path and the mismatch kind only.
 
 **What:** Fixes audit finding "`--config` parses any readable file; its content can surface in errors". Depends on item 1 (same file).
 **Regression guard.** Every `yaml.Unmarshal` of config bytes goes through `redactYAMLError` (`grep -n 'yaml.Unmarshal' internal/launcher/*.go`), including configwrite.go's `serverEntryConfig` ("it does not parse") and `verifiedEntrySplice` ("the edited file would not parse"). Redaction runs over the whole message string — every backticked span and the quoted name in "unknown anchor 'x' referenced" — keeping every non-value word, since `ServerConfig.UnmarshalYAML` wraps the `*yaml.TypeError` with `%w` and a type switch misses it. Test bite values are ≤ 10 chars or assert the truncated spelling (`secretv`, `-----BE`) — yaml.v3 already cuts longer values; the mismatch sits under `defaults:` (Config has no top-level `port`).
