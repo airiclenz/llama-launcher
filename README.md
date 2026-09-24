@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/airiclenz/llama-launcher/launcher.svg)](https://pkg.go.dev/github.com/airiclenz/llama-launcher/launcher)
 
-A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), and Splash (an MLX-based server for Apple Silicon) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
+A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), and [Splash](https://github.com/incoai/splash) (an MLX-based server for Apple Silicon) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
 
 `llama-launcher` is a process manager, not a request router: it starts and stops LLM servers and tells them which model to load. Clients talk to each server directly via its native address. The launcher exits after dispatching work, consuming zero resident memory while the server runs.
 
