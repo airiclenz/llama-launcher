@@ -171,7 +171,9 @@ NOTES (2026-09-24): the sampling-defaults comment in the defaults block now read
 **Acceptance:** `go test ./cmd/llama-launcher-mcp/ -count=1`
 **Commit:** `feat(mcp): accept splash as a server target`
 
-## 6. Splash integration test
+## 6. Splash integration test — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): the profile is resolved through `Config.ResolveProfile` (a one-profile config), not a hand-built `ResolvedProfile` as in the llamacpp suite, so the Hugging Face cache install check runs for real; liveness checks use `IsProcessAlive` and `signalGroup(pid, 0)` (process seam), so the file vets under GOOS=windows.
+NOTES (2026-09-24): ran live against `incoai/Qwen3.8-27B-Splash` (splash on PATH, no llama-server running): TestSplashLifecycle PASS in 37s. Starting was never observed: a manual `splash serve` probe got connection refused on /ready until the model had loaded, then 200 straight away — this Splash build binds its port only after loading, so no `/ready` 503 is ever served (contrary to the plan's Splash facts); the test logs this instead of failing, as the Goal allows ("when possible").
 
 **What:** Depends on items 1–3.
 **Goal:** `internal/launcher/integration_splash_test.go` (build tag `integration`) runs one full cycle against a real Splash, and skips cleanly when `splash` is not on `PATH` or `INTEGRATION_MODEL_SPLASH` (an installed `owner/repo`) is unset. The cycle:
