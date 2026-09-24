@@ -1,8 +1,13 @@
 package launcher
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os/exec"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestParseSwapUsage(t *testing.T) {
@@ -236,5 +241,230 @@ func TestPercentValue(t *testing.T) {
 				t.Errorf("percentValue(%d, %d) = %d, want %d", tc.n, tc.d, got, tc.want)
 			}
 		})
+	}
+}
+
+// Canned readout-command outputs for the ReadMemStats tests.
+const (
+	cannedMemsize   = "17179869184\n"
+	cannedVMStat    = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:     1000.\nPages inactive: 1000.\n"
+	cannedSwapUsage = "vm.swapusage: total = 1024.00M  used = 512.00M  free = 512.00M  (encrypted)\n"
+	cannedIoreg     = `"PerformanceStatistics" = {"Alloc system memory"=2048,"Device Utilization %"=42,"In use system memory"=1024}`
+)
+
+// memCmdKey names a readout command by its program and first argument, the
+// pair that tells the two sysctl calls apart.
+func memCmdKey(name string, args []string) string {
+	if len(args) == 0 {
+		return name
+	}
+	return name + " " + args[0] + " " + args[len(args)-1]
+}
+
+var cannedMemOutputs = map[string]string{
+	"sysctl -n hw.memsize":   cannedMemsize,
+	"vm_stat":                cannedVMStat,
+	"sysctl -n vm.swapusage": cannedSwapUsage,
+	"ioreg -r IOAccelerator": cannedIoreg,
+}
+
+// memCmdFake records how many readout commands ran and hangs the ones named
+// in hung until their context expires, as a stuck subprocess would.
+type memCmdFake struct {
+	mu      sync.Mutex
+	calls   int
+	hung    map[string]bool
+	entered chan string
+}
+
+func (f *memCmdFake) output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	key := memCmdKey(name, args)
+	f.mu.Lock()
+	f.calls++
+	isHung := f.hung[key]
+	f.mu.Unlock()
+	if isHung {
+		select {
+		case f.entered <- key:
+		default:
+		}
+		<-ctx.Done()
+		return nil, errors.New("signal: killed")
+	}
+	out, ok := cannedMemOutputs[key]
+	if !ok {
+		return nil, fmt.Errorf("unexpected command %q", key)
+	}
+	return []byte(out), nil
+}
+
+func (f *memCmdFake) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func (f *memCmdFake) setHung(keys ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hung = map[string]bool{}
+	for _, key := range keys {
+		f.hung[key] = true
+	}
+}
+
+// installMemCmdFake swaps the readout command runner for a fake, shortens
+// the subprocess timeout and empties the cache, restoring all three when
+// the test ends. Callers must not run in parallel: the cache is package
+// state.
+func installMemCmdFake(t *testing.T, timeout time.Duration) *memCmdFake {
+	t.Helper()
+	fake := &memCmdFake{hung: map[string]bool{}, entered: make(chan string, 1)}
+	savedOutput, savedTimeout := memCmdOutput, memCmdTimeout
+	resetMemCache := func() {
+		memCacheMu.Lock()
+		defer memCacheMu.Unlock()
+		memCacheAt, memCacheData, memCacheErr, isMemRefreshing = time.Time{}, MemStats{}, nil, false
+	}
+	resetMemCache()
+	memCmdOutput, memCmdTimeout = fake.output, timeout
+	t.Cleanup(func() {
+		memCmdOutput, memCmdTimeout = savedOutput, savedTimeout
+		resetMemCache()
+	})
+	return fake
+}
+
+// expireMemCache backdates the cache stamp past the TTL so the next read
+// refreshes, without sleeping through the real TTL.
+func expireMemCache() {
+	memCacheMu.Lock()
+	defer memCacheMu.Unlock()
+	memCacheAt = time.Now().Add(-2 * memStatsCacheTTL)
+}
+
+func TestReadMemStatsHungCommandIsBoundedAndThrottled(t *testing.T) {
+	const timeout = 300 * time.Millisecond
+	fake := installMemCmdFake(t, timeout)
+	fake.setHung("vm_stat")
+
+	type result struct {
+		stats   MemStats
+		err     error
+		elapsed time.Duration
+	}
+	firstDone := make(chan result, 1)
+	go func() {
+		start := time.Now()
+		stats, err := ReadMemStats()
+		firstDone <- result{stats, err, time.Since(start)}
+	}()
+	<-fake.entered
+
+	// A read racing the hung refresh must neither block nor spawn its own.
+	callsBefore := fake.callCount()
+	if _, err := ReadMemStats(); !errors.Is(err, errMemStatsPending) {
+		t.Errorf("concurrent read err = %v, want errMemStatsPending", err)
+	}
+	if got := fake.callCount(); got != callsBefore {
+		t.Errorf("concurrent read ran %d commands, want 0", got-callsBefore)
+	}
+	select {
+	case <-firstDone:
+		t.Fatal("concurrent read waited for the hung refresh to finish")
+	default:
+	}
+
+	first := <-firstDone
+	if !errors.Is(first.err, context.DeadlineExceeded) {
+		t.Errorf("hung refresh err = %v, want context.DeadlineExceeded", first.err)
+	}
+	if first.elapsed > timeout+time.Second {
+		t.Errorf("hung refresh took %v, want about %v", first.elapsed, timeout)
+	}
+
+	callsAfterTimeout := fake.callCount()
+	if _, err := ReadMemStats(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("read inside the TTL err = %v, want the published timeout", err)
+	}
+	if got := fake.callCount(); got != callsAfterTimeout {
+		t.Errorf("read inside the TTL ran %d commands, want 0", got-callsAfterTimeout)
+	}
+}
+
+func TestReadMemStatsTimeoutKeepsLastGoodData(t *testing.T) {
+	fake := installMemCmdFake(t, 100*time.Millisecond)
+	good, err := ReadMemStats()
+	if err != nil || good.TotalRAM == 0 {
+		t.Fatalf("priming read = %+v, %v; want data", good, err)
+	}
+
+	expireMemCache()
+	fake.setHung("vm_stat")
+	got, err := ReadMemStats()
+	if err != nil {
+		t.Fatalf("timed-out refresh err = %v, want the last good data", err)
+	}
+	if got != good {
+		t.Errorf("timed-out refresh = %+v, want last good %+v", got, good)
+	}
+
+	callsAfterTimeout := fake.callCount()
+	if got, err := ReadMemStats(); err != nil || got != good {
+		t.Errorf("read inside the TTL = %+v, %v; want last good data", got, err)
+	}
+	if got := fake.callCount(); got != callsAfterTimeout {
+		t.Errorf("read inside the TTL ran %d commands, want 0", got-callsAfterTimeout)
+	}
+}
+
+func TestReadMemStatsIoregTimeoutZeroesGPU(t *testing.T) {
+	fake := installMemCmdFake(t, 100*time.Millisecond)
+	fake.setHung("ioreg -r IOAccelerator")
+
+	got, err := ReadMemStats()
+	if err != nil {
+		t.Fatalf("err = %v, want the readout without GPU fields", err)
+	}
+	if got.TotalRAM == 0 || got.SwapTotal == 0 {
+		t.Errorf("memory fields = %+v, want them filled", got)
+	}
+	if got.GPUUtilPct != 0 || got.GPUUsedRAM != 0 || got.GPUAllocRAM != 0 {
+		t.Errorf("GPU fields = %d/%d/%d, want zero", got.GPUUtilPct, got.GPUUsedRAM, got.GPUAllocRAM)
+	}
+}
+
+func TestReadMemStatsCannedReadout(t *testing.T) {
+	installMemCmdFake(t, time.Second)
+
+	got, err := ReadMemStats()
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	want := MemStats{
+		TotalRAM: 17179869184, FreeRAM: 2000 * 16384, UsedRAM: 17179869184 - 2000*16384,
+		SwapTotal: 1024 << 20, SwapUsed: 512 << 20,
+		GPUUtilPct: 42, GPUUsedRAM: 1024, GPUAllocRAM: 2048,
+	}
+	if got != want {
+		t.Errorf("ReadMemStats() = %+v, want %+v", got, want)
+	}
+}
+
+func TestSysmemCommandTimeoutKillsSubprocess(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep binary on PATH")
+	}
+	saved := memCmdTimeout
+	memCmdTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { memCmdTimeout = saved })
+
+	start := time.Now()
+	_, err := runMemCmd("sleep", "10")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("runMemCmd took %v, want about %v", elapsed, memCmdTimeout)
 	}
 }

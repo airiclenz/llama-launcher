@@ -368,7 +368,10 @@ launcher/launcher_test.go — TestUnload_ServerStoppedFollowsBackendKind, newOll
 - `go test ./internal/launcher/ ./launcher/ -run 'TestUnload' -count=1`
 **Commit:** `fix(launcher): refuse Unload when another backend holds the address`
 
-## 18. The memory readout never freezes the menu
+## 18. The memory readout never freezes the menu — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): a caller arriving while a refresh is in flight gets the last published value (or the new `errMemStatsPending`, which leaves the readout line out, before any value exists) rather than starting a second concurrent refresh — keeps "never across a subprocess" without doubling the shell-outs
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by the bounded, lock-free refresh (§ file table `sysmem.go` row now states the 2 s timeout, the lock scope and the timeout/ioreg behaviour)
 
 **What:** Fixes audit finding "The menu's memory readout holds its cache mutex across unbounded subprocesses".
 **Regression guard.** New tests carry the filter's prefixes (`TestReadMemStats…` / `TestSysmem…`). A timeout is published with `memCacheAt` stamped (the last good data, or the error) so the TTL still throttles retries — never an unstamped skip that re-runs a hung `vm_stat` on every keystroke. An `ioreg` timeout keeps the GPU fields at zero, as a `gerr` does today. The timeout is a package var the test shortens.

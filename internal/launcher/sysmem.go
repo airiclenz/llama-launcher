@@ -2,6 +2,8 @@ package launcher
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -30,34 +32,88 @@ type MemStats struct {
 // bursts between ticks still hit the cache.
 const memStatsCacheTTL = 900 * time.Millisecond
 
+// memCmdTimeout bounds each readout subprocess so a hung sysctl, vm_stat
+// or ioreg costs the menu one skipped tick instead of a frozen screen. A
+// var so tests can shorten it.
+var memCmdTimeout = 2 * time.Second
+
+// memCmdWaitDelay bounds the wait for a killed subprocess's output pipes,
+// which a lingering grandchild could otherwise hold open past the timeout.
+const memCmdWaitDelay = 500 * time.Millisecond
+
+// errMemStatsPending is returned while the first refresh is still running
+// and no earlier result exists to show in its place.
+var errMemStatsPending = errors.New("memory readout pending")
+
+// memCmdOutput runs one readout subprocess and returns its stdout. A var so
+// tests can substitute hung or canned commands.
+var memCmdOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = memCmdWaitDelay
+	return cmd.Output()
+}
+
 var (
-	memCacheMu   sync.Mutex
-	memCacheAt   time.Time
-	memCacheData MemStats
-	memCacheErr  error
+	memCacheMu      sync.Mutex
+	memCacheAt      time.Time
+	memCacheData    MemStats
+	memCacheErr     error
+	isMemRefreshing bool
 )
 
 // ReadMemStats returns current memory and swap usage on macOS. Results are
 // cached for memStatsCacheTTL to keep keystroke-driven re-renders cheap.
+// memCacheMu guards only the cache reads and the publish, never a
+// subprocess: a caller arriving while another refresh runs gets the last
+// published value (or errMemStatsPending) instead of waiting. A subprocess
+// timeout keeps the last good data — or publishes the timeout when there is
+// none — and stamps memCacheAt, so the TTL still throttles the retry.
 func ReadMemStats() (MemStats, error) {
 	memCacheMu.Lock()
-	defer memCacheMu.Unlock()
-
-	if time.Since(memCacheAt) < memStatsCacheTTL && (memCacheErr != nil || memCacheData.TotalRAM > 0) {
-		return memCacheData, memCacheErr
+	isFresh := time.Since(memCacheAt) < memStatsCacheTTL && (memCacheErr != nil || memCacheData.TotalRAM > 0)
+	if isFresh || isMemRefreshing {
+		data, err := memCacheData, memCacheErr
+		if !isFresh && memCacheAt.IsZero() {
+			err = errMemStatsPending
+		}
+		memCacheMu.Unlock()
+		return data, err
 	}
+	isMemRefreshing = true
+	memCacheMu.Unlock()
 
 	stats, err := readMemStatsLive()
+
+	memCacheMu.Lock()
+	defer memCacheMu.Unlock()
+	isMemRefreshing = false
 	memCacheAt = time.Now()
+	hasGoodData := memCacheErr == nil && memCacheData.TotalRAM > 0
+	if errors.Is(err, context.DeadlineExceeded) && hasGoodData {
+		return memCacheData, nil
+	}
 	memCacheData = stats
 	memCacheErr = err
 	return stats, err
 }
 
+// runMemCmd runs one readout subprocess under memCmdTimeout. A timeout is
+// reported as an error wrapping context.DeadlineExceeded, whatever exit
+// status the killed process left behind.
+func runMemCmd(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), memCmdTimeout)
+	defer cancel()
+	out, err := memCmdOutput(ctx, name, args...)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("%s: %w", name, ctxErr)
+	}
+	return out, err
+}
+
 func readMemStatsLive() (MemStats, error) {
 	var s MemStats
 
-	totalOut, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	totalOut, err := runMemCmd("sysctl", "-n", "hw.memsize")
 	if err != nil {
 		return s, fmt.Errorf("sysctl hw.memsize: %w", err)
 	}
@@ -67,7 +123,7 @@ func readMemStatsLive() (MemStats, error) {
 	}
 	s.TotalRAM = total
 
-	vmOut, err := exec.Command("vm_stat").Output()
+	vmOut, err := runMemCmd("vm_stat")
 	if err != nil {
 		return s, fmt.Errorf("vm_stat: %w", err)
 	}
@@ -82,7 +138,7 @@ func readMemStatsLive() (MemStats, error) {
 	s.UsedRAM = s.TotalRAM - s.FreeRAM
 	s.Compressed = compressed
 
-	swapOut, err := exec.Command("sysctl", "-n", "vm.swapusage").Output()
+	swapOut, err := runMemCmd("sysctl", "-n", "vm.swapusage")
 	if err != nil {
 		return s, fmt.Errorf("sysctl vm.swapusage: %w", err)
 	}
@@ -93,7 +149,9 @@ func readMemStatsLive() (MemStats, error) {
 	s.SwapTotal = swapTotal
 	s.SwapUsed = swapUsed
 
-	if gpuOut, gerr := exec.Command("ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator").Output(); gerr == nil {
+	// An ioreg failure or timeout leaves the GPU fields at zero; the rest of
+	// the readout still renders.
+	if gpuOut, gerr := runMemCmd("ioreg", "-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"); gerr == nil {
 		util, used, alloc := parseIOAccelerator(string(gpuOut))
 		s.GPUUtilPct = util
 		s.GPUUsedRAM = used
