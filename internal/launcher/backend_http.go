@@ -11,9 +11,9 @@ import (
 )
 
 // maxResponseBytes caps how much of an HTTP response body the launcher reads.
-// The backend endpoints it consumes (/health, /v1/models, /api/ps, /props)
-// return at most a few KB; anything larger is a misbehaving or hostile
-// process squatting a configured port. The probe timeout bounds duration,
+// The backend endpoints it consumes (/health, /ready, /v1/models, /api/ps,
+// /props) return at most a few KB; anything larger is a misbehaving or
+// hostile process squatting a configured port. The probe timeout bounds duration,
 // not size, so without a cap a local squatter could stream gigabytes over
 // loopback and OOM the launcher — amplified by the menu re-probing every tick.
 const maxResponseBytes = 512 * 1024
@@ -124,8 +124,8 @@ func expectOK(resp *http.Response, statusErr func(statusCode int, body []byte) e
 
 // openAIModelList reads the OpenAI-style /v1/models endpoint at addr and
 // returns one entry per model with a non-empty id, skipping the rest.
-// llama-server and LM Studio expose the same response shape
-// ({"data":[{"id":...}]}), so both adapters delegate here.
+// llama-server, LM Studio and Splash expose the same response shape
+// ({"data":[{"id":...}]}), so all three adapters delegate here.
 func openAIModelList(addr, apiKey string) ([]RunningModelInfo, error) {
 	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", apiKey)
 	if err != nil {

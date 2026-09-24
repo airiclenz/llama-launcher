@@ -14,7 +14,7 @@ const (
 )
 
 // LLMServer abstracts an LLM-serving software implementation (llama.cpp,
-// Ollama, LM Studio, ...). See CONTEXT.md for the domain term.
+// Ollama, LM Studio, Splash, ...). See CONTEXT.md for the domain term.
 type LLMServer interface {
 	Name() string
 	DisplayName() string
@@ -212,8 +212,9 @@ type LiveParamsQuerier interface {
 }
 
 // StartupProber is implemented by LLM Servers that can tell a server that
-// is reachable but still starting up (e.g. llama-server answering /health
-// with 503 while it loads its model) apart from one that is not running
+// is reachable but still starting up (llama-server answering /health with
+// 503 while it loads its model, Splash answering /ready with 503 until it
+// serves) apart from one that is not running
 // at all. The managed start path uses it to refuse spawning a duplicate
 // server onto an address where an earlier start is still coming up
 // (TDD §6.2).

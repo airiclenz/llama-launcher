@@ -233,7 +233,10 @@ NOTES (2026-09-24): beyond the Goal's listed sections, the approach's enumeratio
 **Acceptance:** `grep -c -i splash llama-launcher.TDD.md README.md` (both > 0), plus a manual read of the discrimination table.
 **Commit:** `docs: document the Splash LLM Server in TDD and README`
 
-## 9. Documentation sweep for Splash
+## 9. Documentation sweep for Splash — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): README.md needed no edit — items 4 and 8 already cover Splash at every grep hit (README:242 names Splash's /ready 503); the plan's Files line listed it as a candidate only.
+NOTES (2026-09-24): llama-launcher.TDD.md edited as a straggler: §3.2 `unload` and `start` rows now name Splash beside llamacpp, and the §5.4 `backend_http.go` row names Splash as an `openAIModelList` user.
+NOTES (2026-09-24): left as-is after review — menu.go modelDisplayName (examples, not an enumeration), launcher/doc.go windows paragraph (Ollama/LM Studio load/unload is correct; Splash is already in the managed list), keymigrate.go example, TDD §4.4/§6.3/§6.4/§6.7 (Splash covered in adjacent text or the sentence is about HTTP-load backends only).
 
 **What:** Depends on items 1–8.
 **Goal:** No human- or AI-facing doc, godoc comment, CLI/MCP help string, or code comment that enumerates the LLM Servers, says "three" servers/backends, or describes per-server model formats/setup/health checks omits Splash — outside archival material (`docs/plans/`, `docs/plans/archived/`, `docs/handoffs/`, `docs/reviews/`, `docs/architecture-reviews/`, `docs/skill-runs/`, the root historical `backend-tests-plan.md`, existing ADRs 0001–0013, released CHANGELOG sections).

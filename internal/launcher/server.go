@@ -68,7 +68,8 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 
 	// A server spawned by an earlier start may still be coming up at the
 	// target address (llama-server answers /health with 503 while it loads
-	// its model, and a large model can outlive the health-wait window).
+	// its model, Splash answers /ready with 503 until it serves, and a large
+	// model can outlive the health-wait window).
 	// Spawning a second server there would only die with "address already
 	// in use", so the start is refused instead — the loading server is
 	// deliberately left alone.
@@ -258,9 +259,10 @@ func startingUp(b LLMServer, addr string) bool {
 // native stop hook. The hook is best-effort — its error surfaces only when
 // the address is still serving afterwards. Stopped means not healthy *and*
 // not still starting up: a survived Starting server also fails the health
-// check (503 for the whole model load), so health alone would report it as
-// stopped (ADR-0010). Returns the signalled PID (0 when none was found) and
-// an error when the server survived both mechanisms.
+// check (503 for the whole model load — /health on llama-server, /ready on
+// Splash), so health alone would report it as stopped (ADR-0010). Returns
+// the signalled PID (0 when none was found) and an error when the server
+// survived both mechanisms.
 func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
 	b, err := GetLLMServer(backend)
 	if err != nil {
@@ -561,11 +563,11 @@ func (realOps) unloadModel(b LLMServer, addr, modelID string) error {
 // the caller is pointed at --restart. Drift detection is now live — the
 // launcher queries the running server (llama-server /props) instead of
 // reading a persisted snapshot. For backends that do not expose their
-// parameters (Ollama, LM Studio), model-name match alone is enough for the
-// idempotency no-op. Pass restart=true to force re-activation. A Starting
-// occupant at the target address (ADR-0010) is never displaced by a plain
-// load — the call refuses with guidance; with restart=true it is stopped
-// and replaced like a healthy one.
+// parameters (Ollama, LM Studio, Splash), model-name match alone is enough
+// for the idempotency no-op. Pass restart=true to force re-activation. A
+// Starting occupant at the target address (ADR-0010) is never displaced by
+// a plain load — the call refuses with guidance; with restart=true it is
+// stopped and replaced like a healthy one.
 func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc) (*RunningInstance, bool, error) {
 	return LoadProfileNotify(cfg, profile, restart, progress, func(n string) { fmt.Fprint(os.Stderr, n) })
 }
@@ -671,8 +673,8 @@ func liveLoadedModel(b LLMServer, addr string) string {
 // reports are compared: a nil field on the live side means "not reported by
 // the server", never "drifted to unset", so unreported fields cannot
 // manufacture drift — a drift notice must mean real drift (ADR-0007).
-// Backends that do not implement LiveParamsQuerier (Ollama, LM Studio)
-// contribute no drift — model-name match is the only idempotency signal
+// Backends that do not implement LiveParamsQuerier (Ollama, LM Studio,
+// Splash) contribute no drift — model-name match is the only idempotency signal
 // there.
 func liveParamDrift(b LLMServer, addr string, fresh ProfileParams) []string {
 	lp, ok := b.(LiveParamsQuerier)
