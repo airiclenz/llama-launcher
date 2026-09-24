@@ -25,8 +25,9 @@ type RunningInstance struct {
 	ActiveModel   string
 	// Starting marks an instance whose process is up and address bound but
 	// whose health check does not pass yet — llama-server answers /health
-	// with 503 for the whole model load, Splash answers /ready with 503
-	// until it serves. See ADR-0010.
+	// with 503 for the whole model load. Splash binds its address only once
+	// the model has loaded, so a loading Splash is never Starting. See
+	// ADR-0010.
 	Starting bool
 }
 
@@ -127,9 +128,9 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 	}
 	if b.HealthCheck(addr) != nil {
 		// A failing health check does not always mean nothing is there: a
-		// managed llama-server answers 503 during its whole model load, and a
-		// managed Splash answers /ready with 503 until it serves. The
-		// StartupProber fallback surfaces that window as a Starting instance
+		// managed llama-server answers 503 during its whole model load (a
+		// loading Splash has not bound its address yet, so it never reaches
+		// this branch). The StartupProber fallback surfaces that window as a Starting instance
 		// (ADR-0010). ListRunningModels is skipped — the server cannot
 		// answer yet — so ActiveModel/ActiveProfile stay empty (with no
 		// model, several profiles sharing the address would be ambiguous

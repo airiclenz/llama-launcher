@@ -58,9 +58,10 @@ func (b *Splash) HealthCheck(addr string) error {
 }
 
 // StartingUp reports whether a Splash server is reachable at addr but still
-// loading its model: /ready answers 503 with the Splash Server header until
-// the model is served. A connection error, any other status, or a 503 from a
-// foreign server all return false.
+// loading its model: /ready answering 503 with the Splash Server header. The
+// Splash build tested binds its port only once the model has loaded, so a
+// loading Splash refuses the connection and this returns false. A connection
+// error, any other status, or a 503 from a foreign server all return false.
 func (b *Splash) StartingUp(addr string) bool {
 	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/ready", b.apiKey())
 	if err != nil {

@@ -68,8 +68,9 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 
 	// A server spawned by an earlier start may still be coming up at the
 	// target address (llama-server answers /health with 503 while it loads
-	// its model, Splash answers /ready with 503 until it serves, and a large
-	// model can outlive the health-wait window).
+	// its model, and a large model can outlive the health-wait window). A
+	// loading Splash has not bound its address yet, so this probe cannot
+	// see it.
 	// Spawning a second server there would only die with "address already
 	// in use", so the start is refused instead — the loading server is
 	// deliberately left alone.
@@ -259,8 +260,8 @@ func startingUp(b LLMServer, addr string) bool {
 // native stop hook. The hook is best-effort — its error surfaces only when
 // the address is still serving afterwards. Stopped means not healthy *and*
 // not still starting up: a survived Starting server also fails the health
-// check (503 for the whole model load — /health on llama-server, /ready on
-// Splash), so health alone would report it as stopped (ADR-0010). Returns
+// check (llama-server answers /health with 503 for the whole model load),
+// so health alone would report it as stopped (ADR-0010). Returns
 // the signalled PID (0 when none was found) and an error when the server
 // survived both mechanisms.
 func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
