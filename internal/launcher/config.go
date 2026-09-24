@@ -416,6 +416,9 @@ func LoadConfig(path string) (*Config, error) {
 // LoadConfigNotify reads, parses, and validates the YAML configuration at the
 // given path, delivering each non-fatal deprecation warning to notify as raw
 // text — one call per warning, no "warning: " prefix. A nil sink discards them.
+// A successful load also pushes the per-server API keys onto the backend
+// registry and replaces the configured-address snapshot a 401/403 stop is
+// scoped to (applyConfiguredTargets): the last load in a process wins.
 func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 	cfg, err := parseConfig(path)
 	if err != nil {
@@ -428,6 +431,7 @@ func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 		return nil, err
 	}
 	applyAPIKeys(cfg)
+	applyConfiguredTargets(cfg)
 	for _, w := range cfg.Warnings {
 		reportNotice(notify, w)
 	}

@@ -27,7 +27,12 @@
 - 1: guard folded (unpinned unload legs, docs rule, explicit empty pin)
 - 2: guard folded (docs rule, LoadProfile stop-step clause, stop-hook exception, Acceptance greps); supersedes ADR-0012's windows bullet and TDD §16.6 "Does not hold" via the third amendment
 
-## 1. Stop acts on a 401/403 answer only at a configured address
+## 1. Stop acts on a 401/403 answer only at a configured address — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — README.md: made necessary by the facade's new configured-address scope for 401/403 stops (the library "one config per process" caveat now names it)
+NOTES (2026-09-24): TDD edits beyond the named sites — the discovery.go and helpers_test.go file rows, §12.4 Test Helpers, and the server_test.go row (TestIdentifyBackend_AuthPassNeedsConfiguredAddress, TestUnloadInstanceModel_AuthFailed's unconfigured leg) — all describe helpers/tests this item added or changed
+NOTES (2026-09-24): TestUnloadInstanceModel_AuthFailed's two legs and TestIdentifyBackend_AuthPassNeedsConfiguredAddress's cases are sequential subtests of non-parallel top-level tests; the facade TestStop_UnconfiguredAuthRefusingListenerIsNotSignalled is also non-parallel (plan left it unspecified) so no parallel LoadConfig can run beside it
+NOTES (2026-09-24): launcher/launcher_unix_test.go adds its own splitAddr helper (the external test package has no host:port → (host, port) helper for a non-httptest address)
 
 **What:**
 **Goal:** `identifyBackend`'s third pass accepts `ErrAuthFailed` only from a backend the last `LoadConfig` points at `addr`, so `StopInstance`, core and facade `Stop(addr)`, `UnloadInstanceModel` and `Unload` return `ErrNotRunning` and signal nothing at an address no config names, while a 401/403 listener at a configured address is still stopped with `Backend ""`.

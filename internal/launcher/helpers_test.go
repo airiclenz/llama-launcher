@@ -25,3 +25,22 @@ func deadAddr(t *testing.T) string {
 	srv.Close()
 	return addr
 }
+
+// pinConfiguredTargets sets the configured-address snapshot a 401/403 stop
+// is scoped to from cfg, as a LoadConfig of it would, and restores the
+// previous snapshot when the test ends. The snapshot is process-global, so
+// every caller is a non-parallel top-level test; an unconfigured leg passes
+// &Config{} rather than assuming an earlier test left the set empty.
+func pinConfiguredTargets(t *testing.T, cfg *Config) {
+	t.Helper()
+
+	configuredTargets.mu.RLock()
+	previous := configuredTargets.backendsByAddr
+	configuredTargets.mu.RUnlock()
+	applyConfiguredTargets(cfg)
+	t.Cleanup(func() {
+		configuredTargets.mu.Lock()
+		defer configuredTargets.mu.Unlock()
+		configuredTargets.backendsByAddr = previous
+	})
+}

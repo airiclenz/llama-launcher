@@ -510,10 +510,12 @@ func startAuthRefusingChild(t *testing.T) (string, *exec.Cmd) {
 // server that answers every backend with 401: discovery surfaces it as the
 // single AuthFailed target, the stop signals its listener, and the report
 // names no backend — no backend identified it. Not parallel: captureStdout
-// swaps os.Stdout.
+// swaps os.Stdout, and the test pins the process-global configured-address
+// snapshot to cfg, as Run's LoadConfig would.
 func TestCmdStop_StopsAuthFailedServer(t *testing.T) {
 	addr, child := startAuthRefusingChild(t)
 	cfg := startingCfg(t, "llamacpp", addr)
+	pinConfiguredTargets(t, cfg)
 
 	var code int
 	out := captureStdout(t, func() { code = cmdStop(cfg, nil) })

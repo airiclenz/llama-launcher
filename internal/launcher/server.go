@@ -231,11 +231,13 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer, w
 // started from servers that were already running. Both stop mechanisms run
 // exactly once, in the documented order (TDD §6.5): the listening PID is
 // discovered via lsof and signalled (SIGTERM → SIGKILL → port-release wait),
-// then the backend's native stop hook runs best-effort. A server that
-// answers only with 401/403 (identifyBackend's third pass) is stopped by
-// the signal alone — no native hook runs against a server that refuses the
-// api_key — and the returned instance carries Backend "", since no backend
-// identified it. Returns ErrNotRunning when no known backend answers at addr.
+// then the backend's native stop hook runs best-effort. A server at a
+// configured address that answers only with 401/403 (identifyBackend's
+// third pass) is stopped by the signal alone — no native hook runs against
+// a server that refuses the api_key — and the returned instance carries
+// Backend "", since no backend identified it. Returns ErrNotRunning when no
+// known backend answers at addr, including a 401/403 listener at an address
+// the last LoadConfig does not name: nothing is signalled there.
 func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
 	host, port, ok := splitHostPort(addr)
 	if !ok {
@@ -272,10 +274,13 @@ func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) 
 // Starting instance fails its health check for the whole model load but
 // must still be identifiable so it can be stopped (ADR-0010, ADR-0015) —
 // and last a health check that answered 401/403: a server refusing the
-// configured api_key, which only an explicit stop may act on. That third
-// pass returns the first such backend's name together with an error
-// wrapping ErrAuthFailed (the authFailedErr message); a caller that acts on
-// an identified server treats it as a refusal, while stop proceeds with the
+// configured api_key, which only an explicit stop may act on. The third
+// pass counts a 401/403 only from a backend the last LoadConfig points at
+// addr (configuredBackendsAt, ADR-0010's "at a configured address"), so a
+// refusing listener at an address no config names is ErrNotRunning. It
+// returns the first such backend's name together with an error wrapping
+// ErrAuthFailed (the authFailedErr message); a caller that acts on an
+// identified server treats it as a refusal, while stop proceeds with the
 // name. Returns ErrNotRunning when no pass identifies anything.
 func identifyBackend(addr string) (string, error) {
 	names := make([]string, 0, len(llmServers))
@@ -284,13 +289,14 @@ func identifyBackend(addr string) (string, error) {
 	}
 	sort.Strings(names)
 
+	configured := configuredBackendsAt(addr)
 	authName, authErr := "", error(nil)
 	for _, name := range names {
 		healthErr := llmServers[name].HealthCheck(addr)
 		if healthErr == nil {
 			return name, nil
 		}
-		if authErr == nil && errors.Is(healthErr, ErrAuthFailed) {
+		if authErr == nil && errors.Is(healthErr, ErrAuthFailed) && slices.Contains(configured, name) {
 			authName, authErr = name, healthErr
 		}
 	}
@@ -667,8 +673,9 @@ type activationOps interface {
 	// Starting), else nil.
 	authRefusal(cfg *Config, addr string) error
 	// identify names the backend serving at addr (identifyBackend): an
-	// error wrapping ErrAuthFailed when only a 401/403 answered there,
-	// ErrNotRunning when nothing did.
+	// error wrapping ErrAuthFailed when only a 401/403 answered there from
+	// a backend the last LoadConfig points at addr, ErrNotRunning when
+	// nothing else did.
 	identify(addr string) (string, error)
 	// start launches a managed server or connects an external one.
 	start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error)
@@ -1246,9 +1253,10 @@ func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
 }
 
 // UnloadInstanceModel unloads the active model for the instance at the given
-// address without stopping the server. A server that answers only with
-// 401/403 is refused with the auth error: its model list cannot be read, so
-// "nothing loaded" would be a false success.
+// address without stopping the server. A server at a configured address
+// that answers only with 401/403 is refused with the auth error: its model
+// list cannot be read, so "nothing loaded" would be a false success. At an
+// address the last LoadConfig does not name, such a server is ErrNotRunning.
 func UnloadInstanceModel(addr string, progress ProgressFunc) (*RunningInstance, error) {
 	host, port, ok := splitHostPort(addr)
 	if !ok {
@@ -1345,7 +1353,9 @@ func unloadServerModel(ops activationOps, backend, addr string) (*StopResult, er
 	// and a server that refuses the api_key is stopped only on an explicit
 	// stop; neither may act on another backend's server at addr. Only a
 	// positive mismatch refuses — nothing identified there (ErrNotRunning)
-	// is left to the mechanics below.
+	// is left to the mechanics below. A 401/403 listener at an address the
+	// last LoadConfig does not name identifies as ErrNotRunning too, and
+	// both arms then end at ErrNotRunning without signalling it.
 	occupant, identifyErr := ops.identify(addr)
 	if errors.Is(identifyErr, ErrAuthFailed) {
 		return &StopResult{}, identifyErr

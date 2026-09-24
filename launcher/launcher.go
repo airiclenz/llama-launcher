@@ -33,8 +33,10 @@ type ResolvedProfile = core.ResolvedProfile
 // health check does not pass yet (ADR-0010). The AuthFailed flag marks an
 // address whose server answers every configured backend with 401/403 — it
 // refuses the configured api_key: such a row has Backend "", no model or
-// profile, and appears at most once per address. Stop signals its
-// listener; LoadProfile and Unload against it return the auth error.
+// profile, and appears at most once per address. While the config that
+// found it is the last one loaded, its address is a configured one, so
+// Stop signals its listener and LoadProfile and Unload against it return
+// the auth error.
 type RunningInstance = core.RunningInstance
 
 // StopResult reports what a Stop or Unload call did: the instance it acted
@@ -86,8 +88,10 @@ var ErrUnsupported = core.ErrUnsupported
 // delivering each non-fatal deprecation warning to notice as raw text —
 // one call per warning, nil discards. It returns ErrConfigNotFound when
 // the file does not exist. The per-server API keys it finds are pushed
-// onto the process-global backend registry, so the last LoadConfig in a
-// process wins; see the package documentation.
+// onto the process-global backend registry, and the addresses it points
+// each backend at become the only ones where Stop and Unload act on a
+// server that refuses the api_key, so the last LoadConfig in a process
+// wins; see the package documentation.
 func LoadConfig(path string, notice NoticeFunc) (*Config, error) {
 	return core.LoadConfigNotify(path, notice)
 }
@@ -135,9 +139,12 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 // Stop stops whatever LLM-server instance is listening at addr, whether or
 // not this launcher started it (ADR-0001), and returns the steps taken. It
 // returns ErrNotRunning when nothing is reachable there. A server that
-// refuses the configured api_key is stopped by signalling its listener
-// alone, and the result's instance then carries Backend "". The call blocks
-// for the SIGTERM → SIGKILL → port-release escalation, up to ~20 s.
+// refuses the configured api_key (answers 401/403) is stopped only at an
+// address the last LoadConfig points a backend at, by signalling its
+// listener alone, and the result's instance then carries Backend "".
+// Anywhere else — and before any LoadConfig — such a server is
+// ErrNotRunning and nothing is signalled. The call blocks for the
+// SIGTERM → SIGKILL → port-release escalation, up to ~20 s.
 func Stop(addr string) (*StopResult, error) {
 	return core.Stop(addr)
 }
@@ -150,7 +157,10 @@ func Stop(addr string) (*StopResult, error) {
 // ErrNotRunning when nothing is reachable at addr or when another backend's
 // server holds it, the auth error when the server there refuses the
 // configured api_key (nothing is stopped or unloaded in either refusal), and
-// blocks for the same worst case as Stop.
+// blocks for the same worst case as Stop. As with Stop, a server answering
+// 401/403 counts as refusing the api_key only at an address the last
+// LoadConfig names; anywhere else it is ErrNotRunning, with nothing
+// signalled or unloaded.
 func Unload(backend, addr string) (*StopResult, error) {
 	return core.Unload(backend, addr)
 }

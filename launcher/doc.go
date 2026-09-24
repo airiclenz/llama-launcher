@@ -73,8 +73,11 @@
 //
 // Backends live in a process-global registry and LoadConfig pushes the
 // per-server API keys onto them, so the last LoadConfig wins for the whole
-// process. Loading two configs with different API keys in one program is
-// not supported.
+// process. LoadConfig also sets the addresses a 401/403 stop may act on:
+// Stop and Unload act on a server that refuses the api_key only at an
+// address the last loaded config points a backend at, and before any
+// LoadConfig at none. Loading two configs with different API keys in one
+// program is not supported.
 //
 // The read verbs — LoadConfig, DefaultConfigDir, DefaultConfigPath,
 // DiscoverRunningInstances and the Config accessors — are safe to call

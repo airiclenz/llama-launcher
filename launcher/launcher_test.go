@@ -1,8 +1,11 @@
 // The facade tests live in an external test package on purpose: they may
 // only reach the launcher through its exported surface, exactly as a client
 // module does, so they prove the ADR-0011 contract compiles and behaves from
-// the outside. Nothing here starts a real server — every test is httptest
-// and temp-directory only.
+// the outside. Nothing in this file starts a real server — every test here
+// is httptest and temp-directory only. The one real process is
+// launcher_unix_test.go's: a re-executed copy of this test binary serving
+// 401, detached into its own session, which Stop may signal without
+// reaching the test process.
 package launcher_test
 
 import (
@@ -171,6 +174,33 @@ func TestUnload_UnreachableAddressIsErrNotRunning(t *testing.T) {
 	}
 	if result == nil {
 		t.Error("result = nil, want a non-nil StopResult carrying the steps taken before the failure")
+	}
+}
+
+// TestUnload_UnconfiguredAuthRefusingListenerIsErrNotRunning pins ADR-0010's
+// "at a configured address" through the facade: a listener answering every
+// request with 401 at an address no loaded config names is no server of the
+// named backend's, for the managed arm (a stop) and the external arm (an
+// API unload) alike. Not parallel: a parallel LoadConfig elsewhere in the
+// package must not be running while the address is expected unconfigured.
+func TestUnload_UnconfiguredAuthRefusingListenerIsErrNotRunning(t *testing.T) {
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(refusing.Close)
+	addr := strings.TrimPrefix(refusing.URL, "http://")
+
+	for _, backend := range []string{"llamacpp", "ollama"} {
+		t.Run(backend, func(t *testing.T) {
+			result, err := launcher.Unload(backend, addr)
+
+			if !errors.Is(err, launcher.ErrNotRunning) {
+				t.Errorf("err = %v, want it to wrap launcher.ErrNotRunning", err)
+			}
+			if result == nil {
+				t.Error("result = nil, want a non-nil StopResult")
+			}
+		})
 	}
 }
 

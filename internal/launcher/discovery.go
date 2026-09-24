@@ -118,6 +118,40 @@ func authRefusalAt(cfg *Config, addr string) error {
 	return fmt.Errorf("server at %s: %w", addr, results[0].authErr)
 }
 
+// configuredTargets is the process-global snapshot of the addresses the last
+// LoadConfig points each backend at: address → the backend names
+// discoveryTargets derives for it. identifyBackend reads it to scope its
+// 401/403 pass to a configured address (ADR-0010), because Stop and Unload
+// carry an address but no Config. It is process state like the API keys
+// (one Config per process): empty until the first LoadConfig, replaced
+// wholesale by every later one.
+var configuredTargets struct {
+	mu             sync.RWMutex
+	backendsByAddr map[string][]string
+}
+
+// applyConfiguredTargets replaces the configured-address snapshot with the
+// (backend, address) pairs cfg implies. Called from LoadConfigNotify, so
+// every LoadConfig and Reload refreshes it.
+func applyConfiguredTargets(cfg *Config) {
+	backendsByAddr := make(map[string][]string)
+	for _, t := range discoveryTargets(cfg) {
+		backendsByAddr[t.addr()] = append(backendsByAddr[t.addr()], t.backend)
+	}
+
+	configuredTargets.mu.Lock()
+	defer configuredTargets.mu.Unlock()
+	configuredTargets.backendsByAddr = backendsByAddr
+}
+
+// configuredBackendsAt returns the names of the backends the last LoadConfig
+// points at addr, sorted, or nil when no config names addr.
+func configuredBackendsAt(addr string) []string {
+	configuredTargets.mu.RLock()
+	defer configuredTargets.mu.RUnlock()
+	return configuredTargets.backendsByAddr[addr]
+}
+
 // discoveryTarget is one (backend, addr) pair discovery probes.
 type discoveryTarget struct {
 	backend string

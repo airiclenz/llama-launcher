@@ -1762,8 +1762,10 @@ func TestStop_Orchestration(t *testing.T) {
 // TestIdentifyBackend covers the stop path's backend identification: a
 // llamacpp-shaped /health response claims the address for llamacpp, a
 // still-loading llama-server is claimed via the StartupProber second pass
-// (ADR-0010), a server answering only 401/403 is the third pass's with the
-// auth error, and an address nothing answers on yields ErrNotRunning.
+// (ADR-0010), and an address nothing answers on yields ErrNotRunning. The
+// 401/403 third pass is TestIdentifyBackend_AuthPassNeedsConfiguredAddress's:
+// it reads the process-global configured-address snapshot, which a parallel
+// subtest cannot pin.
 func TestIdentifyBackend(t *testing.T) {
 	t.Parallel()
 
@@ -1877,22 +1879,6 @@ func TestIdentifyBackend(t *testing.T) {
 		}
 	})
 
-	t.Run("a server answering only 401 is the third pass's, with the auth error", func(t *testing.T) {
-		t.Parallel()
-		host, port := authRefusingServer(t, http.StatusUnauthorized)
-
-		backend, err := identifyBackend(fmt.Sprintf("%s:%d", host, port))
-
-		if !errors.Is(err, ErrAuthFailed) || !strings.Contains(err.Error(), "check api_key") {
-			t.Fatalf("err = %v, want the authFailedErr message wrapping ErrAuthFailed", err)
-		}
-		// The sort-first backend that answered 401 carries the stop
-		// verification; it does not identify the server.
-		if backend != "llamacpp" {
-			t.Errorf("backend = %q, want the sort-first refusing backend llamacpp", backend)
-		}
-	})
-
 	t.Run("a Starting server outranks a 401 from another backend's path", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1917,6 +1903,55 @@ func TestIdentifyBackend(t *testing.T) {
 			t.Errorf("err = %v, want ErrNotRunning", err)
 		}
 	})
+}
+
+// TestIdentifyBackend_AuthPassNeedsConfiguredAddress pins the third pass's
+// scope (ADR-0010's "at a configured address"): a server answering every
+// request with 401 is ErrNotRunning at an address no config names, and at a
+// configured one it is the sort-first configured backend's, with the auth
+// error. Not parallel: it pins the process-global configured-address
+// snapshot.
+func TestIdentifyBackend_AuthPassNeedsConfiguredAddress(t *testing.T) {
+	host, port := authRefusingServer(t, http.StatusUnauthorized)
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	t.Run("unconfigured address is ErrNotRunning", func(t *testing.T) {
+		pinConfiguredTargets(t, &Config{})
+
+		backend, err := identifyBackend(addr)
+
+		if !errors.Is(err, ErrNotRunning) || errors.Is(err, ErrAuthFailed) {
+			t.Errorf("err = %v, want ErrNotRunning and no auth error", err)
+		}
+		if backend != "" {
+			t.Errorf("backend = %q, want none", backend)
+		}
+	})
+
+	tests := []struct {
+		name        string
+		configured  string
+		wantBackend string
+	}{
+		// The configured backend that answered 401 carries the stop
+		// verification; it does not identify the server.
+		{"configured for llamacpp is llamacpp's", "llamacpp", "llamacpp"},
+		{"configured for ollama only is ollama's, not the sort-first llamacpp", "ollama", "ollama"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pinConfiguredTargets(t, startingCfg(t, tc.configured, addr))
+
+			backend, err := identifyBackend(addr)
+
+			if !errors.Is(err, ErrAuthFailed) || !strings.Contains(err.Error(), "check api_key") {
+				t.Fatalf("err = %v, want the authFailedErr message wrapping ErrAuthFailed", err)
+			}
+			if backend != tc.wantBackend {
+				t.Errorf("backend = %q, want %q", backend, tc.wantBackend)
+			}
+		})
+	}
 }
 
 // TestStopInstance covers the decision layer ahead of any signalling: bad
@@ -2366,21 +2401,40 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 	})
 }
 
-// TestUnloadInstanceModel_AuthFailed: a server answering only 401 has no
-// readable model list, so unloading it is refused with the auth error
-// instead of reporting "nothing loaded" as success.
+// TestUnloadInstanceModel_AuthFailed: a server at a configured address
+// answering only 401 has no readable model list, so unloading it is refused
+// with the auth error instead of reporting "nothing loaded" as success; at
+// an address no config names it is ErrNotRunning. Not parallel: it pins the
+// process-global configured-address snapshot.
 func TestUnloadInstanceModel_AuthFailed(t *testing.T) {
-	t.Parallel()
 	host, port := authRefusingServer(t, http.StatusUnauthorized)
+	addr := fmt.Sprintf("%s:%d", host, port)
 
-	inst, err := UnloadInstanceModel(fmt.Sprintf("%s:%d", host, port), nil)
+	t.Run("configured address is refused with the auth error", func(t *testing.T) {
+		pinConfiguredTargets(t, startingCfg(t, "llamacpp", addr))
 
-	if !errors.Is(err, ErrAuthFailed) {
-		t.Fatalf("err = %v, want ErrAuthFailed", err)
-	}
-	if inst != nil {
-		t.Errorf("instance = %+v, want nil on a refusal", inst)
-	}
+		inst, err := UnloadInstanceModel(addr, nil)
+
+		if !errors.Is(err, ErrAuthFailed) {
+			t.Fatalf("err = %v, want ErrAuthFailed", err)
+		}
+		if inst != nil {
+			t.Errorf("instance = %+v, want nil on a refusal", inst)
+		}
+	})
+
+	t.Run("unconfigured address is ErrNotRunning", func(t *testing.T) {
+		pinConfiguredTargets(t, &Config{})
+
+		inst, err := UnloadInstanceModel(addr, nil)
+
+		if !errors.Is(err, ErrNotRunning) || errors.Is(err, ErrAuthFailed) {
+			t.Fatalf("err = %v, want ErrNotRunning and no auth error", err)
+		}
+		if inst != nil {
+			t.Errorf("instance = %+v, want nil", inst)
+		}
+	})
 }
 
 // listingUnloadServer is a registry stub that reports one loaded model and
