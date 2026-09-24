@@ -209,6 +209,29 @@ func TestUnload_ExternalBackendUnloadsModelAndLeavesServerRunning(t *testing.T) 
 	}
 }
 
+// TestUnload_AnotherBackendAtAddressIsRefused pins that Unload acts only on
+// the backend it names: naming lmstudio at an address an Ollama server holds
+// reports no lmstudio server there and sends that server nothing.
+func TestUnload_AnotherBackendAtAddressIsRefused(t *testing.T) {
+	t.Parallel()
+	standIn := newOllamaStandIn(t, liveOllamaModel)
+
+	result, err := launcher.Unload("lmstudio", standIn.addr)
+
+	if !errors.Is(err, launcher.ErrNotRunning) {
+		t.Fatalf("err = %v, want it to wrap launcher.ErrNotRunning", err)
+	}
+	if want := fmt.Sprintf("no lmstudio server at %s (ollama is serving there)", standIn.addr); err.Error() != want {
+		t.Errorf("err = %q, want %q", err, want)
+	}
+	if result == nil {
+		t.Fatal("result = nil, want a non-nil StopResult")
+	}
+	if requests := standIn.unloadRequests(); len(requests) != 0 {
+		t.Errorf("unload requests = %q, want none — the ollama server must not be touched", requests)
+	}
+}
+
 // TestUnload_ServerStoppedFollowsBackendKind pins the branch the external
 // success path cannot show on its own: Unload picks its mechanism from the
 // backend alone — a managed backend's unload stops the server process

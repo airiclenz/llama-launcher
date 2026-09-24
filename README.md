@@ -319,7 +319,7 @@ go func() { // the lifecycle verbs block — run them off your UI goroutine
 }()
 ```
 
-The rest of the surface is `DiscoverRunningInstances(cfg)`, `Unload(backend, addr)`, and five sentinels for `errors.Is`: `ErrConfigNotFound`, `ErrNotRunning`, `ErrStartupTimeout`, `ErrLoadCanceled` and `ErrUnsupported`. The library never writes to your stderr — warnings arrive through the callbacks, and a `nil` callback discards them.
+The rest of the surface is `DiscoverRunningInstances(cfg)`, `Unload(backend, addr)`, and five sentinels for `errors.Is`: `ErrConfigNotFound`, `ErrNotRunning`, `ErrStartupTimeout`, `ErrLoadCanceled` and `ErrUnsupported`. The library never writes to your stderr — warnings arrive through the callbacks, and a `nil` callback discards them. `Unload` acts only on the backend you name: when another backend's server holds the address it returns an error matching `ErrNotRunning` and touches nothing.
 
 `ErrStartupTimeout` is the one worth handling explicitly: it means the activation wait expired, not that the load failed. The launcher deliberately leaves the server running, so treat it as "not yet" and keep watching the address with `DiscoverRunningInstances`. `ErrLoadCanceled` is its counterpart: the server the load started was stopped before it became healthy — the result of calling `Stop` on that address from another goroutine — and the load returns promptly instead of waiting out the window. A server that crashes mid-load instead comes back as a plain error with its log tail.
 

@@ -939,6 +939,7 @@ type fakeOps struct {
 	healthyAddrs  map[string]bool   // addr → backend's own server answers there
 	startingAddrs map[string]bool   // addr → still-starting server answers there (ADR-0010)
 	authAddrs     map[string]bool   // addr → the server there answers only 401/403
+	occupants     map[string]string // addr → backend identify names there
 	models        map[string]string // addr → currently loaded model
 	drift         []string          // liveDrift result for any addr
 	instances     []*RunningInstance
@@ -977,6 +978,9 @@ func (f *fakeOps) authRefusal(cfg *Config, addr string) error {
 func (f *fakeOps) identify(addr string) (string, error) {
 	if f.authAddrs[addr] {
 		return "llamacpp", fakeAuthErr(addr)
+	}
+	if occupant, ok := f.occupants[addr]; ok {
+		return occupant, nil
 	}
 	return "", ErrNotRunning
 }
@@ -1577,7 +1581,7 @@ func TestUnload_Orchestration(t *testing.T) {
 
 	t.Run("managed backend: unload stops the server", func(t *testing.T) {
 		t.Parallel()
-		f := &fakeOps{}
+		f := &fakeOps{occupants: map[string]string{"127.0.0.1:8080": "llamacpp"}}
 		res, err := unloadServerModel(steppedOps{f}, "llamacpp", "127.0.0.1:8080")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1598,7 +1602,7 @@ func TestUnload_Orchestration(t *testing.T) {
 
 	t.Run("external backend: unload keeps the server running", func(t *testing.T) {
 		t.Parallel()
-		f := &fakeOps{}
+		f := &fakeOps{occupants: map[string]string{"127.0.0.1:11434": "ollama"}}
 		res, err := unloadServerModel(steppedOps{f}, "ollama", "127.0.0.1:11434")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1636,6 +1640,41 @@ func TestUnload_Orchestration(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("another backend at the address is refused before any mechanics", func(t *testing.T) {
+		t.Parallel()
+		addr := "127.0.0.1:8080"
+		f := &fakeOps{occupants: map[string]string{addr: "ollama"}}
+
+		res, err := unloadServerModel(steppedOps{f}, "llamacpp", addr)
+
+		if !errors.Is(err, ErrNotRunning) {
+			t.Fatalf("err = %v, want it to wrap ErrNotRunning", err)
+		}
+		if want := "no llamacpp server at 127.0.0.1:8080 (ollama is serving there)"; err.Error() != want {
+			t.Errorf("err = %q, want %q", err, want)
+		}
+		if res == nil {
+			t.Fatal("result must be non-nil on error")
+		}
+		if len(f.stopped) != 0 || len(f.unloadedInstances) != 0 {
+			t.Errorf("stopped=%v unloaded=%v, want nothing stopped or unloaded", f.stopped, f.unloadedInstances)
+		}
+	})
+
+	t.Run("nothing identified at the address falls through to the mechanics", func(t *testing.T) {
+		t.Parallel()
+		f := &fakeOps{}
+
+		res, err := unloadServerModel(steppedOps{f}, "llamacpp", "127.0.0.1:8080")
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.ServerStopped || !slices.Equal(f.stopped, []string{"127.0.0.1:8080"}) {
+			t.Errorf("ServerStopped=%v stopped=%v, want the managed stop to run", res.ServerStopped, f.stopped)
+		}
+	})
 
 	t.Run("unknown backend fails with a non-nil result", func(t *testing.T) {
 		t.Parallel()

@@ -1321,9 +1321,11 @@ func stopServer(ops activationOps, addr string) (*StopResult, error) {
 // the steps taken. This is the single home of the "unload on a managed
 // backend means stop the server" rule (ADR-0003, ADR-0004): a managed
 // backend bakes the model into its process arguments, so its unload is a
-// stop; an external backend gets an API unload and keeps running. The
-// result is non-nil even on error, carrying the steps completed before
-// the failure.
+// stop; an external backend gets an API unload and keeps running. It acts
+// only on the named backend's server: when another backend's server holds
+// addr it refuses, with an error matching ErrNotRunning, before either
+// arm. The result is non-nil even on error, carrying the steps completed
+// before the failure.
 func Unload(backend, addr string) (*StopResult, error) {
 	return unloadServerModel(realOps{}, backend, addr)
 }
@@ -1338,9 +1340,15 @@ func unloadServerModel(ops activationOps, backend, addr string) (*StopResult, er
 
 	// Refused before the managed/external split: a managed unload is a stop,
 	// and a server that refuses the api_key is stopped only on an explicit
-	// stop. Any other identification outcome is left to the mechanics below.
-	if _, identifyErr := ops.identify(addr); errors.Is(identifyErr, ErrAuthFailed) {
+	// stop; neither may act on another backend's server at addr. Only a
+	// positive mismatch refuses — nothing identified there (ErrNotRunning)
+	// is left to the mechanics below.
+	occupant, identifyErr := ops.identify(addr)
+	if errors.Is(identifyErr, ErrAuthFailed) {
 		return &StopResult{}, identifyErr
+	}
+	if identifyErr == nil && occupant != backend {
+		return &StopResult{}, &backendMismatchError{backend: backend, addr: addr, occupant: occupant}
 	}
 
 	rec := &stepRecorder{}
@@ -1352,6 +1360,21 @@ func unloadServerModel(ops activationOps, backend, addr string) (*StopResult, er
 	inst, unloadErr := ops.unloadInstance(addr, rec.record)
 	return &StopResult{Instance: inst, Steps: rec.steps}, unloadErr
 }
+
+// backendMismatchError refuses an Unload naming one backend at an address
+// another backend's server holds. It matches ErrNotRunning: the named
+// backend has no server there.
+type backendMismatchError struct {
+	backend  string // the backend the caller named
+	addr     string
+	occupant string // the backend identified at addr
+}
+
+func (e *backendMismatchError) Error() string {
+	return fmt.Sprintf("no %s server at %s (%s is serving there)", e.backend, e.addr, e.occupant)
+}
+
+func (e *backendMismatchError) Unwrap() error { return ErrNotRunning }
 
 // legacyStateFileMaxBytes caps the size of a file the legacy state cleanup
 // will read and judge. A launcher-written state file held one small JSON

@@ -349,7 +349,11 @@ launcher/launcher_internal_test.go — TestNewSentinels_AliasTheCoreValues; laun
 - `go test ./internal/launcher/ ./launcher/ -run 'TestWaitForHealth|TestLoadProfile|TestLoadCanceled|TestNewSentinels' -count=1`
 **Commit:** `fix(launcher): return ErrLoadCanceled when Stop ends a loading server`
 
-## 17. Unload acts only on the backend it names
+## 17. Unload acts only on the backend it names — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — launcher/launcher.go: made necessary by the new mismatch refusal (the facade `Unload` doc comment listed the cases that return ErrNotRunning)
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by the new mismatch refusal (§6.5 identification paragraph, facade verb table row, server_test.go coverage row)
+NOTES (2026-09-24): consequential edit — README.md: made necessary by the new mismatch refusal (library-surface paragraph now states Unload's refusal)
 
 **What:** Fixes audit finding "`Unload(backend, addr)` acts on whatever the address actually hosts". Depends on item 6.
 **Regression guard.** An AuthFailed occupant returns the ErrAuthFailed message before the mismatch check runs. The check sits in `unloadServerModel` behind the `activationOps` identity method item 6 adds (realOps → `identifyBackend`; fakeOps has it, steppedOps embeds fakeOps) — not in `StopInstance`/`UnloadInstanceModel`, which the auto-stop/auto-unload sweeps share; `TestUnload_Orchestration`'s `fakeOps{}` subtests get the matching occupant. Refuse only on a positive mismatch; on `ErrNotRunning` fall through to today's arms (`TestUnload_ServerStoppedFollowsBackendKind` pins `ServerStopped=true`). The managed-name leg stays internal with fakeOps.

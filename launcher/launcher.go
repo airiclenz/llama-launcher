@@ -147,9 +147,10 @@ func Stop(addr string) (*StopResult, error) {
 // arguments, unloading means stopping the server (ADR-0003, ADR-0004); an
 // external backend gets an API unload and keeps running. StopResult's
 // ServerStopped field distinguishes the two outcomes. It returns
-// ErrNotRunning when nothing is reachable at addr, the auth error when the
-// server there refuses the configured api_key (nothing is stopped or
-// unloaded then), and blocks for the same worst case as Stop.
+// ErrNotRunning when nothing is reachable at addr or when another backend's
+// server holds it, the auth error when the server there refuses the
+// configured api_key (nothing is stopped or unloaded in either refusal), and
+// blocks for the same worst case as Stop.
 func Unload(backend, addr string) (*StopResult, error) {
 	return core.Unload(backend, addr)
 }
