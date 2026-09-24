@@ -44,7 +44,7 @@ When you can't run the `llama-launcher` CLI directly — e.g. you're an agent in
 **Finding the MCP server:**
 
 1. First check whether an MCP server (typically named `llama-launcher`) is already configured in your client. If it is, just use its tools — no address needed.
-2. If it isn't configured, the adapter listens on the host at **default port `7331`**, endpoint `http://<host-ip>:7331/mcp`.
+2. If it isn't configured, the adapter listens on the host at **default port `7331`**, endpoint `http://<host-ip>:7331/mcp`. It binds `127.0.0.1` by default, so it is reachable from a VM/container only if the user started it with `--listen <addr>:7331`.
    - `<host-ip>` is the host's address as seen from where you are. From inside a VM/container that is the host/bridge gateway IP — the same address you use to reach the LLM for inference (on macOS this is commonly `192.168.64.1`).
    - The adapter only listens if the user has started it; if `http://<host-ip>:7331/mcp` doesn't respond, it isn't running and you should fall back to asking the user or using the CLI.
 
@@ -67,7 +67,7 @@ When you can't run the `llama-launcher` CLI directly — e.g. you're an agent in
 
 ## Identifying the active profile
 
-`status --json` returns `active_model` (the model filename) but `active_profile` may be empty when a server was started outside a profile boundary. To map the running filename back to a profile name, intersect with `list --json` on the `model` field. Use the profile name in any subsequent `load`, since profile names are stable while filenames may not be.
+`status --json` returns `active_model` (the model id the server reports — for llama.cpp the absolute model path) but `active_profile` may be empty when a server was started outside a profile boundary. To map the running model back to a profile name, intersect with `list --json` on the `model` field (the raw config value), comparing file names when either side is a path. Use the profile name in any subsequent `load`, since profile names are stable while filenames may not be.
 
 Example mapping logic (conceptual):
 

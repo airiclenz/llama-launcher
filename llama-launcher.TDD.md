@@ -3,7 +3,7 @@
 The architectural source of truth for `llama-launcher` lives in two places:
 
 - **[CONTEXT.md](CONTEXT.md)** — domain language (LLM Server, Model, Profile; Activate, Load/Unload, Start/Stop).
-- **[docs/adr/](docs/adr/)** — numbered Architectural Decision Records (ADRs 0001–0012) that pin down behaviour.
+- **[docs/adr/](docs/adr/)** — numbered Architectural Decision Records (ADRs 0001–0016) that pin down behaviour.
 
 This document explains how those decisions are realised in code. Where this document and an ADR appear to conflict, the ADR wins; please file a doc fix.
 
@@ -90,7 +90,7 @@ Completed steps are shown dimmed; the current step has a `▸` prefix. In non-in
 ```
   ● Server started (PID 41023)
   ● Loaded code-deepseek on 127.0.0.1:8080
-    Log: ~/.config/llama-launcher/logs/llamacpp-20260519-171200.log
+    Log: ~/.config/llama-launcher/logs/llamacpp-20260519-171200.123.log
 ```
 
 **When a server is running with a model loaded:**
@@ -439,7 +439,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  CLI / Menu  │────▶│    Config    │────▶│   Server     │
-│  (main.go)   │     │ (config.go)  │     │ (server.go)  │
+│  (cli.go)    │     │ (config.go)  │     │ (server.go)  │
 │  (menu.go)   │     └──────────────┘     └──────┬───────┘
 │  (ui.go)     │                                 │
 └──────────────┘     ┌──────────────┐            │ start / stop
@@ -462,7 +462,7 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 
 | File | Responsibility |
 |---|---|
-| `main.go` | Entry point, `--config` flag parsing, subcommand dispatch, usage text. `status` and `list` accept `--json` for structured output (local marshalling structs in `cli.go`). The `unload`/`stop` subcommands are target selection plus after-the-fact `StopResult` formatting over the unified entry points in `server.go`. The subcommand bodies live in `cli.go`, where `cmdList` renders the Profile table — name, the context-size column, `[server]` tag, description, `★` — padding every column by `visibleWidth` and taking its context cells from the same `profileContextCells` helper the menu uses, which is what keeps the three Profile-list surfaces identical ([§3.1](#31-interactive-mode), [§4.7](#47-favourite-profiles)). Between the zero-argument menu branch and the subcommand switch sits the plaintext-key notice: a command that runs and exits prints it on the same `warning:` stderr sink as the config warnings and probes no secret store, because the offer belongs to the menu ([§4.2](#42-schema)). |
+| `main.go` | Entry point only: `main` calls `launcher.Run(os.Args[1:])`. `Run` in `cli.go` does the `--config` flag parsing, subcommand dispatch and usage text (`printUsage`). `status` and `list` accept `--json` for structured output (local marshalling structs in `cli.go`). The `unload`/`stop` subcommands are target selection plus after-the-fact `StopResult` formatting over the unified entry points in `server.go`. The subcommand bodies live in `cli.go`, where `cmdList` renders the Profile table — name, the context-size column, `[server]` tag, description, `★` — padding every column by `visibleWidth` and taking its context cells from the same `profileContextCells` helper the menu uses, which is what keeps the three Profile-list surfaces identical ([§3.1](#31-interactive-mode), [§4.7](#47-favourite-profiles)). Between the zero-argument menu branch and the subcommand switch sits the plaintext-key notice: a command that runs and exits prints it on the same `warning:` stderr sink as the config warnings and probes no secret store, because the offer belongs to the menu ([§4.2](#42-schema)). |
 | `config.go` | Config/Profile/ProfileParams struct definitions, YAML loading (`parseConfig` for parse-only, `LoadConfig` for parse+validate), `Reload` for in-place re-read, `~` expansion, parameter merging, validation (`validate` for fast-fail, `validateAll` for collecting all problems including non-fatal warnings such as `defaults.server` fallback usage — both run the one check list `configChecks`, each in its own wording, and `validateAll` adds each profile's `ResolveProfile` error), example config generation. Server enable/disable filtering via `IsServerEnabled()`. `ServerConfig` (bool-or-mapping YAML form per server entry) with `APIKeyFor()` accessor; the `api_key`/`api_key_cmd` key sources live here too — `apiKeySourceErrors` refuses an entry naming both or a blank command, and `resolveKeyCommands`/`runKeyCommand` run each enabled entry's command through the platform shell at load — only after `configTrusted` (`config_trust_*.go`) passes the file — bounded and capped, storing the output in the unexported `resolvedKey` (§4.2). `LoadConfig` pushes configured API keys onto the registered backends via `applyAPIKeys`. The parse+validate body lives in `LoadConfigNotify`, which delivers each non-fatal warning to a `NoticeFunc` sink as raw text (§16.3); `LoadConfig` is a one-line delegation binding the CLI's `warning: %s` stderr printer, and `Reload` goes through `LoadConfig`, which is why library clients re-read config by calling the facade's `LoadConfig` again. |
 | `config_trust_unix.go` | `configTrusted(path)` behind `//go:build unix`: the gate `resolveKeyCommands` runs before any `api_key_cmd` — `os.Stat` of the config file must show the current uid as owner and no bit of `0o022` in its mode, else an error naming the file and `chmod 600 <path>` ([ADR-0016](docs/adr/0016-api-key-cmd-runs-only-from-an-owned-config.md), §4.2). |
 | `config_trust_windows.go` | The same signature under `//go:build windows`, returning nil: windows access is ACLs, which no uid or mode word describes, so `api_key_cmd` is not gated there. |
@@ -638,6 +638,8 @@ The general rule: when backends share a port, **discrimination must rest on resp
 |---|---|
 | `gopkg.in/yaml.v3` | YAML config parsing |
 | `golang.org/x/term` | Raw terminal mode for arrow-key menu navigation |
+| `golang.org/x/sys` | Darwin process-table reads (`proc_argv_darwin.go`, `proc_identity_darwin.go`) |
+| `github.com/modelcontextprotocol/go-sdk` | MCP server for the optional `llama-launcher-mcp` adapter (§15); the launcher binary does not link it |
 
 Standard library only beyond that. No TUI framework; ANSI escape codes are used directly for colors and screen control.
 
@@ -865,7 +867,7 @@ Example: `~/.config/llama-launcher/logs/llamacpp-20260519-171200.042.log`
 
 The stamp carries milliseconds and `createLogPath` creates the file exclusively (`O_CREATE|O_EXCL`), retrying with a fresh stamp if the name is already taken — so two starts of the same backend never share a log, and a second start can never truncate a live server's log. Logs written before the millisecond stamp (`<backend>-<YYYYMMDD>-<HHMMSS>.log`) are still read, aged and cleaned.
 
-The `logs` subcommand tails the log file of a launcher-managed running instance. The path is reconstructed deterministically by globbing `{log_dir}/{backend}-*.log` and picking the most recent — log filenames embed the start timestamp so lexicographic order is chronological. Externally-started servers log to wherever they were started; `llml logs` prints a clear message in that case rather than guessing. With `--follow`, the launcher uses `tail -f` and is the only mode where it remains running.
+The `logs` subcommand tails the log file of a launcher-managed running instance. The path is reconstructed deterministically by globbing `{log_dir}/{backend}-*.log` and picking the most recent — log filenames embed the start timestamp so lexicographic order is chronological. Externally-started servers log to wherever they were started; `llama-launcher logs` prints a clear message in that case rather than guessing. With `--follow`, the launcher uses `tail -f` and is the only mode where it remains running.
 
 ### 9.1 Log Cleanup
 
@@ -885,7 +887,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 | Profile missing `server:` with no defensible fallback | Print warning (deprecation notice) or error (if no fallback is defensible). See [§4.6](#46-llm-server-selection). |
 | Unknown Profile name | Print error, exit 2. |
 | Model file not found | Print resolved path, exit 2. |
-| Server binary not found | Print configured path, exit 3. |
+| Server binary not found | Print the binary name looked up on `PATH` (plus the server's setup hint when it has one), exit 3. |
 | Server already running, same Profile, no drift | No-op. Exit 0. |
 | Server already running, same Profile name, parameters drifted | Print drift notice to stderr; no-op unless `--restart`. Exit 0. |
 | No server running (on `stop`/`unload`) | Print message, exit 1. |
