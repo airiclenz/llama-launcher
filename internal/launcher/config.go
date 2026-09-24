@@ -436,6 +436,9 @@ func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 
 // Reload re-reads and validates the config file, updating the receiver in place.
 // If the file is unreadable or invalid, the receiver is left unchanged.
+// It goes through LoadConfig, so it writes non-fatal config warnings to
+// stderr: it is for the CLI only. Library clients re-read a changed config
+// by calling the facade's LoadConfig again, which takes a notice sink.
 func (c *Config) Reload() {
 	newCfg, err := LoadConfig(c.ConfigPath)
 	if err != nil {

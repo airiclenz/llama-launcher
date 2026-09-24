@@ -14,16 +14,16 @@
 //
 // # Notices are callbacks
 //
-// The library never writes to its host's stderr. Both notice-producing
-// paths take a NoticeFunc: LoadConfig delivers one call per non-fatal
-// config warning, with the raw warning text and no prefix; LoadProfile
-// delivers the ADR-0007 drift notice as a single call carrying the full
-// formatted text (header, one line per drifted field, the guidance to
-// re-run with restart). A nil sink discards notices. Progress steps use the
-// separate ProgressFunc sink, which is likewise safe to leave nil.
+// The library never writes to its host's stderr, except through Config.Reload,
+// the CLI's re-read entry point, which prints config warnings there. Both
+// notice-producing paths take a NoticeFunc: LoadConfig delivers one call per
+// non-fatal config warning, with the raw warning text and no prefix;
+// LoadProfile delivers the ADR-0007 drift notice as a single call carrying
+// the full formatted text (header, one line per drifted field, the guidance
+// to re-run with restart). A nil sink discards notices. Progress steps use
+// the separate ProgressFunc sink, which is likewise safe to leave nil.
 //
-// Re-read a changed config file by calling LoadConfig again. Do not use
-// Config.Reload: it is the CLI's entry point and prints warnings to stderr.
+// Re-read a changed config file by calling LoadConfig again.
 //
 // # Verbs block; cancellation is Stop
 //

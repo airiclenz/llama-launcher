@@ -425,7 +425,9 @@ internal/launcher/config_test.go — TestParseConfig, TestServerConfigUnmarshal
 - `go test ./internal/launcher/ -run 'TestParseConfig|TestLoadConfig|TestRedactYAMLError' -count=1`
 **Commit:** `fix(config): keep file content out of config parse errors`
 
-## 21. The facade's no-stderr contract names the Reload exception
+## 21. The facade's no-stderr contract names the Reload exception — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): docs/adr/0011-public-library-facade.md left unchanged — its decision 1 states the design rule ("must not write"), not the library's promise, and its consequences already record the `Config.Reload` exception; it is outside the guard's grep scope (README, TDD, launcher/).
 
 **What:** Fixes audit finding "The facade's \"never writes to stderr\" contract is reachably false through the `Config` alias" by the ratified doc carve-out.
 **Regression guard.** Every doc sentence stating the library never writes to stderr names the `Reload` exception (`grep -rn 'never writes to' README.md llama-launcher.TDD.md launcher/` — README's library section, TDD §16 contract decision 2, doc.go). Drop only the "Do not use Config.Reload…" half of doc.go's later sentence; keep "Re-read a changed config file by calling LoadConfig again", the facade's only re-read instruction. Acceptance checks the headline sentence and `Config.Reload`'s comment, not any `Reload` mention.
