@@ -8,7 +8,14 @@ import (
 	"time"
 )
 
-const logTimestampFormat = "20060102-150405"
+// logTimestampFormat is the start stamp createLogPath writes into a log
+// name: millisecond precision, so same-second starts get distinct names that
+// still sort lexicographically in start order.
+const logTimestampFormat = "20060102-150405.000"
+
+// legacyLogTimestampFormat is the second-precision stamp of logs written
+// before logTimestampFormat gained milliseconds; such logs are still parsed.
+const legacyLogTimestampFormat = "20060102-150405"
 
 type CleanupResult struct {
 	Removed int
@@ -75,7 +82,11 @@ func parseLogTimestamp(filename string) (time.Time, error) {
 	}
 	stamp := parts[len(parts)-2] + "-" + parts[len(parts)-1]
 	t, err := time.Parse(logTimestampFormat, stamp)
-	if err != nil {
+	if err == nil {
+		return t, nil
+	}
+	t, legacyErr := time.Parse(legacyLogTimestampFormat, stamp)
+	if legacyErr != nil {
 		return time.Time{}, fmt.Errorf("cannot parse timestamp from %q: %w", filename, err)
 	}
 	return t, nil

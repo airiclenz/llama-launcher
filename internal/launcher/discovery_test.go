@@ -429,11 +429,13 @@ func TestInstancesSignature(t *testing.T) {
 func TestFindManagedLogFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	// Create two log files; the later timestamp should be returned.
+	// Legacy second-precision and millisecond names side by side; the latest
+	// start — a millisecond name within the same second as another — wins.
 	older := dir + "/llamacpp-20240101-000000.log"
-	newer := dir + "/llamacpp-20260101-000000.log"
+	sameSecond := dir + "/llamacpp-20260101-000000.050.log"
+	newer := dir + "/llamacpp-20260101-000000.750.log"
 	other := dir + "/ollama-20260101-000000.log"
-	for _, p := range []string{older, newer, other} {
+	for _, p := range []string{older, sameSecond, newer, other} {
 		if err := writeEmpty(p); err != nil {
 			t.Fatal(err)
 		}

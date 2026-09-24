@@ -96,15 +96,11 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	}
 
 	args := mb.BuildServerArgs(cfg, profile)
-	logPath, err := createLogPath(cfg, profile.Backend)
+	logFile, err := createLogPath(cfg, profile.Backend)
 	if err != nil {
 		return nil, err
 	}
-
-	logFile, err := os.Create(logPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating log file: %w", err)
-	}
+	logPath := logFile.Name()
 
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = logFile
@@ -1313,13 +1309,33 @@ func copyRedactedLines(dst io.Writer, src io.Reader, keys []string) error {
 	}
 }
 
-func createLogPath(cfg *Config, name string) (string, error) {
+// logCreateAttempts bounds createLogPath's retries when a freshly stamped
+// name is already taken; each retry waits a millisecond for a new stamp.
+const logCreateAttempts = 50
+
+// createLogPath creates a new log file for a server start named name and
+// returns it open for writing; its Name() is the log's path. The name embeds
+// the start time at millisecond precision (logTimestampFormat) and the file is
+// created exclusively, so two starts never share — or truncate — one log: a
+// name that already exists is retried with a fresh stamp.
+func createLogPath(cfg *Config, name string) (*os.File, error) {
 	autoCleanupLogs(cfg)
 	if err := os.MkdirAll(cfg.LogDir, 0o700); err != nil {
-		return "", fmt.Errorf("creating log directory: %w", err)
+		return nil, fmt.Errorf("creating log directory: %w", err)
 	}
-	ts := time.Now().Format("20060102-150405")
-	return filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", name, ts)), nil
+	for range logCreateAttempts {
+		ts := time.Now().Format(logTimestampFormat)
+		path := filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", name, ts))
+		logFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+		if err == nil {
+			return logFile, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("creating log file: %w", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil, fmt.Errorf("creating log file: no unused %s log name in %s after %d attempts", name, cfg.LogDir, logCreateAttempts)
 }
 
 // readLastLines returns the last n lines of the log at path, masked by

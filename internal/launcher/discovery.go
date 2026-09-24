@@ -425,8 +425,9 @@ func findManagedLogFile(logDir, backend string) string {
 	if err != nil || len(matches) == 0 {
 		return ""
 	}
-	// Glob returns lexicographic order — log file names embed the start
-	// timestamp (YYYYMMDD-HHMMSS), so the last entry is the most recent.
+	// Log file names embed the start timestamp (YYYYMMDD-HHMMSS.mmm, or
+	// YYYYMMDD-HHMMSS for older logs), so after sorting the last entry is the
+	// most recent.
 	sort.Strings(matches)
 	return matches[len(matches)-1]
 }

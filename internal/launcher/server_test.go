@@ -2537,3 +2537,79 @@ func TestStopInstance_LoadingSplash(t *testing.T) {
 		t.Errorf("PID %d still alive after the stop", pid)
 	}
 }
+
+// TestCreateLogPath_SameSecondStartsGetDistinctFiles pins that back-to-back
+// starts of one backend — well inside a single second — each get their own
+// freshly created log file carrying a millisecond stamp.
+func TestCreateLogPath_SameSecondStartsGetDistinctFiles(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{LogDir: t.TempDir()}
+
+	first, err := createLogPath(cfg, "llamacpp")
+	if err != nil {
+		t.Fatalf("first createLogPath: %v", err)
+	}
+	defer first.Close()
+	second, err := createLogPath(cfg, "llamacpp")
+	if err != nil {
+		t.Fatalf("second createLogPath: %v", err)
+	}
+	defer second.Close()
+
+	if first.Name() == second.Name() {
+		t.Fatalf("both starts got %q, want distinct log files", first.Name())
+	}
+	for _, f := range []*os.File{first, second} {
+		if _, err := os.Stat(f.Name()); err != nil {
+			t.Errorf("log file %q does not exist: %v", f.Name(), err)
+		}
+		stamp := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f.Name()), "llamacpp-"), ".log")
+		if _, err := time.Parse(logTimestampFormat, stamp); err != nil {
+			t.Errorf("log name %q does not carry a millisecond stamp: %v", f.Name(), err)
+		}
+	}
+	if second.Name() < first.Name() {
+		t.Errorf("later log %q sorts before earlier %q", second.Name(), first.Name())
+	}
+}
+
+// TestCreateLogPath_CollisionRetriesWithoutTruncating pins that a stamp whose
+// name already exists is retried with a fresh stamp, and that the existing
+// log is never truncated.
+func TestCreateLogPath_CollisionRetriesWithoutTruncating(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{LogDir: t.TempDir()}
+
+	// Occupy the names of the next 20 ms of stamps so the first attempts
+	// collide and createLogPath must retry.
+	const occupied = 20
+	base := time.Now()
+	taken := make(map[string]bool, occupied)
+	for i := range occupied {
+		stamp := base.Add(time.Duration(i) * time.Millisecond).Format(logTimestampFormat)
+		path := filepath.Join(cfg.LogDir, "ollama-"+stamp+".log")
+		if err := os.WriteFile(path, []byte("live server output"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		taken[path] = true
+	}
+
+	logFile, err := createLogPath(cfg, "ollama")
+	if err != nil {
+		t.Fatalf("createLogPath: %v", err)
+	}
+	defer logFile.Close()
+
+	if taken[logFile.Name()] {
+		t.Errorf("createLogPath reused existing log %q", logFile.Name())
+	}
+	for path := range taken {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %q: %v", path, err)
+		}
+		if string(data) != "live server output" {
+			t.Errorf("existing log %q was truncated to %q", path, data)
+		}
+	}
+}

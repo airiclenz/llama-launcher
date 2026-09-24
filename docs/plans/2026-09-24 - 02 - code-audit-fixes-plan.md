@@ -218,7 +218,10 @@ internal/launcher/log_cleanup_test.go — TestCleanupLogs_DeleteAll, TestAutoCle
 - `go test ./internal/launcher/ -run 'TestLogsClean|TestRunLogs' -count=1`
 **Commit:** `fix(cli): refuse logs clean --days 0`
 
-## 10. Every start gets its own log file
+## 10. Every start gets its own log file — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): createLogPath keeps its name but now returns the open *os.File (its Name() is the path), so both producers drop their own os.Create; collision retry is bounded at 50 attempts, 1 ms apart.
+NOTES (2026-09-24): findManagedLogFile keeps its plain lexicographic sort. The one ordering gap is a legacy log and a millisecond log from the same second (the legacy name sorts last), which can only happen when an old and a new binary start the same backend within one second.
 
 **What:** Fixes audit finding "Same-second start reuses the log path and truncates a live server's log".
 **Regression guard.** Both producers take the new `createLogPath` return — `startManagedServer` (server.go) and `Ollama.TryStart` (backend_ollama.go, which `os.Create`s the path today). The latest-log lookup is `findManagedLogFile` (discovery.go; its YYYYMMDD-HHMMSS comment updated), pinned by `TestFindManagedLogFile` with a new-form name. Revise the TDD's log-name format block and its "Per-instance log file naming … revisit only if collisions become real" line; names stay lexicographic = chronological.

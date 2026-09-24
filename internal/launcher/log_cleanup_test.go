@@ -29,6 +29,16 @@ func TestParseLogTimestamp(t *testing.T) {
 			wantTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
+			name:     "millisecond stamp",
+			filename: "llamacpp-20260521-150405.123.log",
+			wantTime: time.Date(2026, 5, 21, 15, 4, 5, 123_000_000, time.UTC),
+		},
+		{
+			name:     "malformed millisecond stamp",
+			filename: "llamacpp-20260521-150405.12x.log",
+			wantErr:  true,
+		},
+		{
 			name:     "no extension",
 			filename: "llamacpp-20260521-150405",
 			wantErr:  true,
@@ -151,6 +161,36 @@ func TestCleanupLogs_OldFilesRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(newFile); err != nil {
 		t.Error("new file should still exist")
+	}
+}
+
+func TestCleanupLogs_AgesMillisecondNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	oldMillis := filepath.Join(dir, "llamacpp-20200101-000000.250.log")
+	oldLegacy := filepath.Join(dir, "ollama-20200101-000000.log")
+	freshMillis := filepath.Join(dir, "llamacpp-"+time.Now().Format(logTimestampFormat)+".log")
+	for _, p := range []string{oldMillis, oldLegacy, freshMillis} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := cleanupLogs(nil, dir, 24*time.Hour, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Removed != 2 {
+		t.Errorf("Removed = %d, want 2", result.Removed)
+	}
+	for _, p := range []string{oldMillis, oldLegacy} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("old log %q should have been deleted", p)
+		}
+	}
+	if _, err := os.Stat(freshMillis); err != nil {
+		t.Errorf("fresh log %q should still exist", freshMillis)
 	}
 }
 
