@@ -52,9 +52,10 @@ var ErrStartupTimeout = errors.New("server startup timed out")
 // with the log tail. Test for it with errors.Is.
 var ErrLoadCanceled = errors.New("model load canceled")
 
-// errServerExited is waitForHealth's report that the spawned process it was
-// watching exited before the address turned healthy; loadProfileManaged
-// turns it into ErrLoadCanceled or a crash error (serverExitErr).
+// errServerExited is the health waits' (waitForStartup, waitForHealth)
+// report that the spawned process they were watching exited before the
+// address turned healthy; loadProfileManaged turns it into ErrLoadCanceled
+// or a crash error (serverExitErr).
 var errServerExited = errors.New("server process exited during the health wait")
 
 // ErrUnsupported reports an operation the platform this binary was built for
@@ -691,10 +692,12 @@ type activationOps interface {
 	identify(addr string) (string, error)
 	// start launches a managed server or connects an external one.
 	start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error)
-	// waitHealthy polls b's health check at addr until success or timeout.
-	// A non-nil exited channel is the spawned server's exit: its closing
-	// ends the wait early with errServerExited. A nil one never fires.
-	waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error
+	// waitHealthy polls b's health check at addr until success, a stall
+	// (no startup progress — logFile growth or a StartupProber's Starting
+	// answer — for stall) or the hard cap maxWait (waitForStartup). A non-nil
+	// exited channel is the spawned server's exit: its closing ends the
+	// wait early with errServerExited. A nil one never fires.
+	waitHealthy(b LLMServer, addr, logFile string, stall, maxWait time.Duration, exited <-chan struct{}) error
 	// stop stops whatever instance is listening at addr (ADR-0001).
 	stop(addr string, progress ProgressFunc) (*RunningInstance, error)
 	// unloadInstance unloads the active model of the instance at addr
@@ -730,8 +733,8 @@ func (realOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, e
 	return StartServer(cfg, profile)
 }
 
-func (realOps) waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
-	return waitForHealth(b, addr, timeout, exited)
+func (realOps) waitHealthy(b LLMServer, addr, logFile string, stall, maxWait time.Duration, exited <-chan struct{}) error {
+	return waitForStartup(b, addr, logFile, stall, maxWait, exited)
 }
 
 func (realOps) stop(addr string, progress ProgressFunc) (*RunningInstance, error) {
@@ -1093,7 +1096,7 @@ func loadProfileManaged(ops activationOps, cfg *Config, profile *ResolvedProfile
 	}
 
 	reportStep(progress, "Waiting for server")
-	if err := ops.waitHealthy(b, inst.Addr(), 30*time.Second, inst.exited()); err != nil {
+	if err := ops.waitHealthy(b, inst.Addr(), inst.LogFile, cfg.StartupStallTimeout(), cfg.StartupMaxWait(), inst.exited()); err != nil {
 		if errors.Is(err, errServerExited) {
 			return nil, false, serverExitErr(cfg, inst, inst.exit.err)
 		}
@@ -1147,6 +1150,65 @@ func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 	return waitForHealth(b, addr, timeout, nil)
 }
 
+// waitForStartup is the managed load's health wait: it polls b's health
+// check at addr every healthPollInterval for as long as the spawned server
+// keeps making startup progress. Progress is logFile growing since the
+// previous poll (a missing or unreadable log never grows) or b's
+// StartupProber answering that the server is still loading; a Splash
+// LoadingPID hit alone is not progress. The wait fails when no progress was
+// seen for stall, or when maxWait has passed regardless of progress. When exited
+// closes — the spawned server has exited — it returns errServerExited at the
+// next poll gap; a nil exited never fires.
+func waitForStartup(b LLMServer, addr, logFile string, stall, maxWait time.Duration, exited <-chan struct{}) error {
+	begin := time.Now()
+	lastProgress := begin
+	lastSize := logSize(logFile)
+	for {
+		if b.HealthCheck(addr) == nil {
+			return nil
+		}
+		now := time.Now()
+		size := logSize(logFile)
+		if size > lastSize || probesStartingUp(b, addr) {
+			lastProgress = now
+		}
+		lastSize = size
+		if now.Sub(begin) >= maxWait {
+			return fmt.Errorf("server at %s did not become healthy within %s", addr, maxWait)
+		}
+		if now.Sub(lastProgress) >= stall {
+			return fmt.Errorf("server at %s did not become healthy: no startup progress for %s", addr, stall)
+		}
+		select {
+		case <-exited:
+			return errServerExited
+		case <-time.After(healthPollInterval):
+		}
+	}
+}
+
+// logSize returns the size of the log file at path, or 0 when it is unset,
+// missing or unreadable — a log waitForStartup cannot read never grows.
+func logSize(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// probesStartingUp reports whether b's own StartupProber says the server at
+// addr answers but is still loading. Unlike startingUp it ignores
+// LoadingProcessFinder: a loading process that has not bound the address
+// is not progress.
+func probesStartingUp(b LLMServer, addr string) bool {
+	sp, ok := b.(StartupProber)
+	return ok && sp.StartingUp(addr)
+}
+
 // waitForHealth is WaitForHealth with a liveness probe: when exited closes —
 // the spawned server has exited — the wait returns errServerExited at the
 // next poll gap instead of running out the window. A nil exited never fires,
@@ -1195,18 +1257,19 @@ func crashExitCode(waitErr error) (int, bool) {
 	return code, true
 }
 
-// startupTimeoutErr decorates a health-wait timeout that follows a
-// managed start. The just-spawned server is deliberately left running —
+// startupTimeoutErr decorates a startup-wait timeout (waitForStartup) that
+// follows a managed start. The just-spawned server is deliberately left running —
 // killing it would throw away a legitimately slow model load (a 30–70 GB
 // GGUF on a cold disk can exceed the wait window) — so the error names
-// its PID and log path instead of orphaning the process silently. A
+// its PID and log path instead of orphaning the process silently, and
+// carries them with the address for in-package callers (errors.As). A
 // plain retry while it is still loading is refused (see
 // stillStartingUpErr); a retry after it turns healthy is the idempotent
 // no-op (ADR-0007). Stopping a Starting server is the launcher's own job
 // now (ADR-0010), so the guidance points at `llama-launcher stop`, not
 // at a manual `kill`.
 func startupTimeoutErr(err error, inst *RunningInstance) error {
-	return startupTimeout{fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `llama-launcher stop %s`",
+	return startupTimeout{addr: inst.Addr(), pid: inst.PID, logFile: inst.LogFile, decorated: fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `llama-launcher stop %s`",
 		err, inst.PID, inst.LogFile, inst.Backend, inst.Backend)}
 }
 
@@ -1226,15 +1289,22 @@ func externalStartupTimeoutErr(err error, inst *RunningInstance) error {
 		detail += "\nLog: " + inst.LogFile
 	}
 	detail += "\nRetry once it is healthy"
-	return startupTimeout{fmt.Errorf("%w%s", err, detail)}
+	return startupTimeout{decorated: fmt.Errorf("%w%s", err, detail)}
 }
 
 // startupTimeout carries a decorated health-wait timeout unchanged and adds
 // ErrStartupTimeout as a second unwrap branch. Wrapping rather than
 // reformatting is what keeps the message — the PID and log path a user acts
 // on — byte-identical while errors.Is finds both the sentinel and the
-// underlying wait failure.
-type startupTimeout struct{ decorated error }
+// underlying wait failure. A managed timeout (startupTimeoutErr) also
+// carries the address, PID and log path of the server it left running, so
+// in-package callers can keep watching it; the external arm leaves them zero.
+type startupTimeout struct {
+	decorated error
+	addr      string
+	pid       int
+	logFile   string
+}
 
 func (e startupTimeout) Error() string { return e.decorated.Error() }
 

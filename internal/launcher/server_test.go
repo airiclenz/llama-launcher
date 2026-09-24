@@ -505,12 +505,129 @@ func TestWaitForHealth_TimeoutErrNamesPIDAndLog(t *testing.T) {
 	}
 }
 
+// statusServer answers every request with status, as a llama-server whose
+// /health neither reports healthy nor still loading (500), or one that is
+// still loading its model (503).
+func statusServer(t *testing.T, status int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return addrFromURL(t, srv.URL)
+}
+
+// staticLog writes a log file that never grows during the test.
+func staticLog(t *testing.T) string {
+	t.Helper()
+	logFile := filepath.Join(t.TempDir(), "server.log")
+	if err := os.WriteFile(logFile, []byte("loading model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return logFile
+}
+
+// TestWaitForStartup_LogGrowthKeepsWaiting pins log growth as progress: the
+// server's /health answers 500 — not the 503 StartupProber reads as still
+// loading — until about 2.5 s, so only the log appended every 300 ms keeps
+// the wait alive past its 1 s stall window until the server turns healthy.
+func TestWaitForStartup_LogGrowthKeepsWaiting(t *testing.T) {
+	t.Parallel()
+
+	begin := time.Now()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if time.Since(begin) < 2500*time.Millisecond {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	logFile := staticLog(t)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(300 * time.Millisecond):
+			}
+			f, err := os.OpenFile(logFile, os.O_APPEND|os.O_WRONLY, 0o600)
+			if err != nil {
+				return
+			}
+			f.WriteString("load_tensors: loading layer\n")
+			f.Close()
+		}
+	}()
+
+	err := waitForStartup(&LlamaCpp{}, addrFromURL(t, srv.URL), logFile, time.Second, 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("waitForStartup = %v, want nil — the growing log is progress", err)
+	}
+}
+
+// TestWaitForStartup_StallTimesOut pins the stall window: a static log and a
+// server that never answers as still loading fail the wait after about one
+// stall window plus a poll interval, long before the cap.
+func TestWaitForStartup_StallTimesOut(t *testing.T) {
+	t.Parallel()
+
+	addr := statusServer(t, http.StatusInternalServerError)
+
+	begin := time.Now()
+	err := waitForStartup(&LlamaCpp{}, addr, staticLog(t), time.Second, 10*time.Second, nil)
+	elapsed := time.Since(begin)
+
+	if err == nil || !strings.Contains(err.Error(), "no startup progress for 1s") {
+		t.Fatalf("err = %v, want a stall timeout", err)
+	}
+	if elapsed < time.Second || elapsed > time.Second+healthPollInterval+time.Second {
+		t.Errorf("stall timeout after %s, want about 1s plus a poll interval", elapsed)
+	}
+}
+
+// TestWaitForStartup_StartingUpIsProgress pins the StartupProber answer as
+// progress: a llama-server answering 503 (still loading) with a static log
+// never stalls, so the wait runs to its cap.
+func TestWaitForStartup_StartingUpIsProgress(t *testing.T) {
+	t.Parallel()
+
+	addr := statusServer(t, http.StatusServiceUnavailable)
+
+	err := waitForStartup(&LlamaCpp{}, addr, staticLog(t), time.Second, 2*time.Second, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "did not become healthy within 2s") {
+		t.Fatalf("err = %v, want the cap timeout", err)
+	}
+}
+
+// TestWaitForStartup_ExitEndsWait pins the liveness probe: a closed exited
+// channel ends the wait with errServerExited instead of running it out.
+func TestWaitForStartup_ExitEndsWait(t *testing.T) {
+	t.Parallel()
+
+	addr := statusServer(t, http.StatusServiceUnavailable)
+	exited := make(chan struct{})
+	close(exited)
+
+	err := waitForStartup(&LlamaCpp{}, addr, staticLog(t), 10*time.Second, 10*time.Second, exited)
+
+	if !errors.Is(err, errServerExited) {
+		t.Fatalf("err = %v, want errServerExited", err)
+	}
+}
+
 // TestLoadProfile_StartupTimeoutIsErrStartupTimeout drives the real health
 // wait through the production activation: the stand-in answers 503 forever
 // (llama-server's reply while it loads a model), so the wait expires and
 // loadProfileManaged decorates the failure exactly as it does in production.
 // waitHealthy is the one activationOps operation realWaitOps keeps real (with
-// a shortened wait window, because the production 30 s would stall the suite);
+// a shortened stall window and cap, because the production 30 s and 10 min
+// would stall the suite);
 // everything else comes from the embedded fakeOps, so nothing is forked,
 // signalled or discovered and the PID and log path in the message are the fake
 // instance's. The poll loop, the 503s and the decoration are the real thing. A
@@ -551,6 +668,13 @@ func TestLoadProfile_StartupTimeoutIsErrStartupTimeout(t *testing.T) {
 	}
 	if len(f.stopped) != 0 {
 		t.Errorf("stopped = %v, want none — a timed-out start is left running so a slow load can finish", f.stopped)
+	}
+	var timeout startupTimeout
+	if !errors.As(err, &timeout) {
+		t.Fatalf("err = %v, want a startupTimeout errors.As can read", err)
+	}
+	if wantAddr := fmt.Sprintf("%s:%d", host, port); timeout.addr != wantAddr || timeout.pid != 4242 || timeout.logFile != "/logs/fake.log" {
+		t.Errorf("startupTimeout = addr %q pid %d log %q, want %q 4242 /logs/fake.log", timeout.addr, timeout.pid, timeout.logFile, wantAddr)
 	}
 }
 
@@ -706,18 +830,19 @@ func (f *fakeTrackingExternalBackend) LastStartedPID() int        { return f.pid
 func (f *fakeTrackingExternalBackend) LastStartedLogFile() string { return f.logFile }
 
 // realWaitOps is a fakeOps whose health wait is the production one: it runs
-// waitForHealth — the loop behind WaitForHealth, with the spawned server's
-// exit as its liveness probe — against whatever is listening at addr,
-// shortening the window the activation asks for to keep the test quick.
-// Every other operation stays in memory, so nothing is forked or signalled.
+// waitForStartup — the managed load's progress-aware wait, with the spawned
+// server's exit as its liveness probe — against whatever is listening at
+// addr, replacing both the stall window and the hard cap the activation asks
+// for with window to keep the test quick. Every other operation stays in
+// memory, so nothing is forked or signalled.
 type realWaitOps struct {
 	*fakeOps
 	window time.Duration
 }
 
-func (o realWaitOps) waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
+func (o realWaitOps) waitHealthy(b LLMServer, addr, logFile string, stall, maxWait time.Duration, exited <-chan struct{}) error {
 	o.waited = append(o.waited, addr)
-	return waitForHealth(b, addr, o.window, exited)
+	return waitForStartup(b, addr, logFile, o.window, o.window, exited)
 }
 
 // exitingStartOps is a realWaitOps whose start forks a real `sh -c script`
@@ -1005,7 +1130,7 @@ func (f *fakeOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance
 	}, nil
 }
 
-func (f *fakeOps) waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
+func (f *fakeOps) waitHealthy(b LLMServer, addr, logFile string, stall, maxWait time.Duration, exited <-chan struct{}) error {
 	f.waited = append(f.waited, addr)
 	return f.waitErr
 }

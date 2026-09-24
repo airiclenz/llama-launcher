@@ -126,8 +126,10 @@ func DiscoverRunningInstances(cfg *Config) []*RunningInstance {
 // refuses the configured api_key (an AuthFailed instance) is refused with
 // the auth error, and the auto_stop_server sweep leaves such servers alone.
 //
-// The call blocks: up to ~30 s waiting for the new server to report
-// healthy, plus the stop escalation when a restart displaces an occupant.
+// The call blocks while a managed server makes startup progress: up to
+// startup_max_wait (default 10 min, at most 1 h) waiting for the new server
+// to report healthy, or startup_stall_timeout (default 30 s) without
+// progress, plus the stop escalation when a restart displaces an occupant.
 // Call it from a goroutine, and cancel an in-flight load with Stop on the
 // same address (ADR-0010); the load then returns an error wrapping
 // ErrLoadCanceled. Serialize every other concurrent lifecycle call against

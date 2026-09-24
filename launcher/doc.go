@@ -29,8 +29,10 @@
 //
 // There is no context.Context in this API. LoadProfile, Stop and Unload run
 // to completion on the calling goroutine and can take a while: activation
-// waits up to ~30 s for the new server to report healthy, and a restart
-// first stops the occupant through the SIGTERM → SIGKILL → port-release
+// of a managed server waits for it to report healthy for as long as it keeps
+// making startup progress — worst case the startup_max_wait cap (default
+// 10 min, at most 1 h), or startup_stall_timeout (default 30 s) without
+// progress — and a restart first stops the occupant through the SIGTERM → SIGKILL → port-release
 // escalation (up to ~20 s more). Call them from a goroutine if the caller
 // has a UI to keep responsive.
 //

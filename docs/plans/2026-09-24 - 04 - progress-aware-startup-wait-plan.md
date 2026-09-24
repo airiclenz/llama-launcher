@@ -63,7 +63,10 @@ llama-launcher.TDD.md — §4.2 Schema sample block (`# refresh_duration: 10`); 
 
 **Commit:** `feat(config): add startup_stall_timeout and startup_max_wait`
 
-## 2. The load path waits while the server makes progress
+## 2. The load path waits while the server makes progress — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): the wait's cap parameter is named `maxWait`, not `max` as in the assumed signature, so it does not shadow Go's builtin `max`.
+NOTES (2026-09-24): `waitForHealth`'s `exited` parameter now only ever gets nil (from `WaitForHealth`), because the managed load moved to `waitForStartup`. It was left in place because simplifying it is outside this item's scope.
 
 **What:**
 **Goal:** `LoadProfile` on a managed backend waits until the server is healthy. It returns an error wrapping `ErrStartupTimeout` only when no progress was seen for `cfg.StartupStallTimeout()` or when `cfg.StartupMaxWait()` has passed. Progress is log-file growth or `StartingUp(addr)` true. An exit during the wait still ends it early with the `serverExitErr` classification. The timeout error still names the PID and log path, and it carries them (plus the address) so callers inside the package can read them with `errors.As`.
