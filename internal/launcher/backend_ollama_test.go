@@ -6,7 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -271,6 +275,62 @@ func TestOllamaTryStop_IsNoOpAndNeverErrors(t *testing.T) {
 	b := &Ollama{}
 	if err := b.TryStop("127.0.0.1:11434"); err != nil {
 		t.Errorf("TryStop = %v, want nil", err)
+	}
+}
+
+// TestOllamaTryStart_LastStartedFieldsAreRaceFree drives TryStart against a
+// stub `ollama` on PATH while other goroutines read the PIDTracker accessors;
+// under -race it fails if the last-started fields are written or read without
+// the backend's mutex. Not parallel: it replaces PATH.
+func TestOllamaTryStart_LastStartedFieldsAreRaceFree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TryStart refuses to spawn without process control on windows")
+	}
+
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "ollama")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("writing stub ollama: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	cfg := &Config{LogDir: t.TempDir()}
+	b := &Ollama{}
+	const starts = 5
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = b.LastStartedPID()
+					_ = b.LastStartedLogFile()
+				}
+			}
+		}()
+	}
+
+	for i := range starts {
+		if err := b.TryStart(cfg, "127.0.0.1:11434"); err != nil {
+			close(stop)
+			readers.Wait()
+			t.Fatalf("TryStart #%d: %v", i+1, err)
+		}
+	}
+	close(stop)
+	readers.Wait()
+
+	if pid := b.LastStartedPID(); pid <= 0 {
+		t.Errorf("LastStartedPID = %d, want the stub's PID", pid)
+	}
+	if logFile := b.LastStartedLogFile(); filepath.Dir(logFile) != cfg.LogDir {
+		t.Errorf("LastStartedLogFile = %q, want a file in %q", logFile, cfg.LogDir)
 	}
 }
 

@@ -13,6 +13,9 @@ import (
 
 type Ollama struct {
 	apiKeyHolder
+	// lastPID and lastLogFile record the server TryStart last spawned. The
+	// embedded apiKeyHolder's mutex guards them too: TryStart writes them
+	// while other goroutines may read them through the PIDTracker accessors.
 	lastPID     int
 	lastLogFile string
 }
@@ -125,8 +128,10 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 	// SIGKILL escalation against an already-dead process.
 	go func() { _ = cmd.Wait() }()
 
+	b.mu.Lock()
 	b.lastPID = cmd.Process.Pid
 	b.lastLogFile = logPath
+	b.mu.Unlock()
 	return nil
 }
 
@@ -141,8 +146,19 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 // regardless of addr.
 func (b *Ollama) TryStop(_ string) error { return nil }
 
-func (b *Ollama) LastStartedPID() int        { return b.lastPID }
-func (b *Ollama) LastStartedLogFile() string { return b.lastLogFile }
+// LastStartedPID returns the PID of the server TryStart last spawned.
+func (b *Ollama) LastStartedPID() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.lastPID
+}
+
+// LastStartedLogFile returns the log path of the server TryStart last spawned.
+func (b *Ollama) LastStartedLogFile() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.lastLogFile
+}
 
 func (b *Ollama) ListRunningModels(addr string) ([]RunningModelInfo, error) {
 	resp, err := authedGet(5*time.Second, "http://"+addr+"/api/ps", b.apiKey())

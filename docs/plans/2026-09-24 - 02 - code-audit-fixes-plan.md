@@ -292,7 +292,9 @@ NOTES (2026-09-24): the numbered fallbacks are tested end to end (stdin piped wi
 - `go test ./internal/launcher/ -run 'TestEditConfig|TestMenu' -count=1`
 **Commit:** `fix(menu): offer Edit config only where an editor can open it`
 
-## 14. Ollama's last-started fields are race-free
+## 14. Ollama's last-started fields are race-free — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): TDD §5.3 API-key paragraph gains one sentence stating that Ollama's last-started fields share the apiKeyHolder mutex (doc for the mechanism this item adds). New test TestOllamaTryStart_LastStartedFieldsAreRaceFree was confirmed to report DATA RACE with the production locks removed.
 
 **What:** Fixes audit finding "Data race on Ollama's last-started PID and log fields".
 **Regression guard.** No exec seam exists (`TryStart` calls `exec.LookPath("ollama")` and `exec.Command(binary, "serve")` directly) and none is added: the test puts a stub `ollama` script on `t.Setenv("PATH", …)` (not parallel, unix-only), as server_test.go's empty-PATH test does.
