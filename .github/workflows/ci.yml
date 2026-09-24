@@ -1,0 +1,38 @@
+# Runs the pre-commit gate (`make check` = unit tests + the ADR-0012
+# cross-compile gate) on every push to main and every pull request.
+# The integration layer (`make test-integration`) starts real backend
+# servers and stays host-only — it never runs here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: make check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS is the shipped platform; Linux holds the ADR-0012 promise
+        # that Layer-1 tests pass natively there too.
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Unit tests and cross-compile gate
+        run: make check
