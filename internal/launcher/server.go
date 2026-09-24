@@ -305,7 +305,8 @@ var addrHasListener = func(addr string) bool {
 }
 
 // processEntry is one row of the process table: a PID, its process group,
-// and its command line split on whitespace.
+// and its command line — the true argv for a session leader whose argv the
+// kernel shows (withTrueArgv), else ps's command split on whitespace.
 type processEntry struct {
 	PID  int
 	PGID int
@@ -318,8 +319,11 @@ type processEntry struct {
 var processTable = listProcesses
 
 // parseProcessTable parses `ps -o pid=,pgid=,command=` output, skipping rows
-// whose PID or PGID does not parse. The command line is split on whitespace,
-// so an argument containing spaces arrives as several fields.
+// whose PID or PGID does not parse. Only the PID and PGID are read by
+// position; ps joins the arguments with spaces, so the command it prints
+// is split on whitespace only as a fallback, and an argument containing
+// spaces arrives as several fields until withTrueArgv replaces the row's
+// Args with the true argv.
 func parseProcessTable(out string) []processEntry {
 	var entries []processEntry
 	for _, line := range strings.Split(out, "\n") {

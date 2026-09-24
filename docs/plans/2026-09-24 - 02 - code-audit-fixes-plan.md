@@ -181,7 +181,11 @@ cmd/llama-launcher-mcp/main.go — status tool Description; internal/launcher/cl
 - `go test ./internal/launcher/ -run 'TestCmdStatus|TestServerStatusLines|TestStopTargetItems|TestCmdUnload|TestUnloadTargetLabel' -count=1`
 **Commit:** `feat(launcher): show servers that refuse auth in status and menu`
 
-## 8. A loading Splash is matched by its true argv
+## 8. A loading Splash is matched by its true argv — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): the ps-to-argv merge `withTrueArgv` runs inside `listProcesses` (process_unix.go); `processTable` stays `= listProcesses`, and `parseProcessTable` still returns the whitespace-split Args, which are now only the fallback. backend_splash_test.go was not changed: `TestWithTrueArgv` sits in proc_argv_test.go and reaches `splashLoadingPID` from there.
+NOTES (2026-09-24): added `TestProcArgvReadsOwnArgv` (checks `procArgv(os.Getpid())` against `os.Args` on darwin/linux, skipped elsewhere), which is the only check of the real `kern.procargs2` layout. `proc_argv_other.go` is tagged `!darwin && !linux` so the untagged test compiles on windows. The linux reader was only compile-checked here (`GOOS=linux go test -c`) and runs on the ubuntu CI runner.
+NOTES (2026-09-24): docs: TDD process_unix.go row, new proc_argv rows, the LoadingProcessFinder paragraph and the §16.6 platform-file list. ADR-0015's "Unix only" bullet, whitespace consequence (marked as amended) and discovery-cost consequence were also updated.
 
 **What:** Fixes audit finding "Process-table parser splits on whitespace and hides a loading Splash".
 **Regression guard.** The pure parsers (`parseProcArgs2`, `parseProcCmdline`) live in untagged proc_argv.go so both CI runners (macos-latest, ubuntu-latest) test them; only the syscall/`/proc` readers are build-tagged. The ps-to-argv merge is a pure helper (e.g. `withTrueArgv(entries, argvFn)`); its test starts from ps-split rows — a ready-made spaced argv already matches at base. Every comment or doc line calling the table / command line whitespace-split or naming `pid=,pgid=,command=` is updated (`grep -n 'whitespace' internal/launcher/process_unix.go internal/launcher/server.go; grep -n 'pid=,pgid=,command=' llama-launcher.TDD.md`).
