@@ -1079,6 +1079,158 @@ func TestValidateAll(t *testing.T) {
 	})
 }
 
+// Every check in configChecks fires on both surfaces, each in its own words:
+// validate's error is "config: " + its load text with two-space hints,
+// validateAll's line carries no prefix and indents its hints under the
+// `config validate` number. Each case breaks exactly one check.
+func TestValidate_ChecksFireOnBothSurfaces(t *testing.T) {
+	t.Parallel()
+
+	llamacpp := "llamacpp"
+	negative := -1
+	valid := func() *Config {
+		return &Config{
+			Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+			Profiles: map[string]Profile{"test": {Model: "test.gguf", ProfileParams: ProfileParams{Server: &llamacpp}}},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		spoil  func(c *Config)
+		load   string
+		report string
+	}{
+		{
+			name:   "default_backend",
+			spoil:  func(c *Config) { c.DefaultBackend = "llamacpp" },
+			load:   "'default_backend' is no longer supported — use 'server' in the defaults section instead\n  Move to:\n    defaults:\n      server: llamacpp",
+			report: "'default_backend' is no longer supported — use 'server' in the defaults section instead\n     Move to:\n       defaults:\n         server: llamacpp",
+		},
+		{
+			name:   "endpoints",
+			spoil:  func(c *Config) { c.Endpoints = map[string]string{"llamacpp": "localhost:8080"} },
+			load:   "'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n  Move to:\n    defaults:\n      host: <host>\n      port: <port>",
+			report: "'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n     Move to:\n       defaults:\n         host: <host>\n         port: <port>",
+		},
+		{
+			name:   "no servers defined",
+			spoil:  func(c *Config) { c.Servers = map[string]ServerConfig{} },
+			load:   "no servers defined",
+			report: "no servers defined",
+		},
+		{
+			name:   "unknown server",
+			spoil:  func(c *Config) { c.Servers["bogus"] = ServerConfig{} },
+			load:   `unknown LLM server "bogus"`,
+			report: `unknown server "bogus" in servers section`,
+		},
+		{
+			name:   "no servers enabled",
+			spoil:  func(c *Config) { c.Servers["llamacpp"] = ServerConfig{} },
+			load:   "no servers enabled",
+			report: "no servers enabled",
+		},
+		{
+			name: "both key sources",
+			spoil: func(c *Config) {
+				c.Servers["llamacpp"] = ServerConfig{Enabled: true, APIKey: "secret", APIKeyCmd: "printf sk"}
+			},
+			load:   "servers.llamacpp: api_key and api_key_cmd are both set",
+			report: "servers.llamacpp: api_key and api_key_cmd are both set",
+		},
+		{
+			name:   "blank key command",
+			spoil:  func(c *Config) { c.Servers["llamacpp"] = ServerConfig{Enabled: true, APIKeyCmd: "   "} },
+			load:   "servers.llamacpp: api_key_cmd is blank",
+			report: "servers.llamacpp: api_key_cmd is blank",
+		},
+		{
+			name:   "negative log_retention",
+			spoil:  func(c *Config) { c.LogRetention = &negative },
+			load:   "log_retention must be 0 or positive",
+			report: "log_retention must be 0 or positive",
+		},
+		{
+			name:   "no profiles defined",
+			spoil:  func(c *Config) { c.Profiles = map[string]Profile{} },
+			load:   "no profiles defined",
+			report: "no profiles defined",
+		},
+		{
+			name:   "profile backend",
+			spoil:  func(c *Config) { c.Profiles["test"] = Profile{Backend: "llamacpp", Model: "test.gguf"} },
+			load:   "profile \"test\" uses 'backend' which has been renamed to 'server'\n  Change to: server: llamacpp",
+			report: "profile \"test\" uses 'backend' which has been renamed to 'server'\n     Change to: server: llamacpp",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			loaded := valid()
+			tc.spoil(loaded)
+			err := loaded.validate()
+			if err == nil {
+				t.Fatalf("validate() = nil, want an error containing %q", tc.load)
+			}
+			if !strings.HasPrefix(err.Error(), "config: "+tc.load) {
+				t.Errorf("validate() = %q, want it to start with %q", err, "config: "+tc.load)
+			}
+
+			reported := valid()
+			tc.spoil(reported)
+			var line string
+			for _, p := range reported.validateAll() {
+				if strings.Contains(p, tc.report) {
+					line = p
+				}
+			}
+			if line == "" {
+				t.Fatalf("validateAll() = %q, want a line containing %q", reported.validateAll(), tc.report)
+			}
+			if strings.HasPrefix(line, "config: ") {
+				t.Errorf("validateAll line = %q, want no \"config: \" prefix", line)
+			}
+		})
+	}
+}
+
+// A warning never refuses a load: a config relying on the defaults.server
+// fallback passes validate with the warning in c.Warnings, and validateAll
+// reports the same text.
+func TestValidate_WarningsDoNotRefuse(t *testing.T) {
+	t.Parallel()
+
+	build := func() *Config {
+		server := "llamacpp"
+		return &Config{
+			Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}, "ollama": {Enabled: true}},
+			Defaults: ProfileParams{Server: &server},
+			Profiles: map[string]Profile{"no-server": {Model: "test.gguf"}},
+		}
+	}
+
+	loaded := build()
+	if err := loaded.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil — a warning must not refuse the load", err)
+	}
+	if len(loaded.Warnings) != 1 || !strings.Contains(loaded.Warnings[0], "defaults.server") {
+		t.Fatalf("Warnings = %q, want exactly the defaults.server fallback warning", loaded.Warnings)
+	}
+
+	found := false
+	for _, p := range build().validateAll() {
+		if p == loaded.Warnings[0] {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("validateAll() lacks the warning %q", loaded.Warnings[0])
+	}
+}
+
 func isConfigNotFoundError(err error) bool {
 	for err != nil {
 		if err.Error() == "config file not found" {

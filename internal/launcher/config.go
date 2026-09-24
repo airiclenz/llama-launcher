@@ -447,54 +447,150 @@ func (c *Config) Reload() {
 	*c = *newCfg
 }
 
+// validate is the load-time check: it fails on the first error configChecks
+// finds, as "config: <error>", and on success stores the warnings in
+// c.Warnings for LoadConfigNotify to deliver.
 func (c *Config) validate() error {
+	var warnings []string
+	for _, f := range c.configChecks() {
+		if f.warning {
+			warnings = append(warnings, f.load)
+			continue
+		}
+		return fmt.Errorf("config: %s", f.load)
+	}
+	c.Warnings = warnings
+	return nil
+}
+
+// validateAll is `config validate`'s check: every error and warning
+// configChecks finds, in its order, followed by each profile's ResolveProfile
+// error — the one check that looks past the file (missing models).
+func (c *Config) validateAll() []string {
+	var problems []string
+	for _, f := range c.configChecks() {
+		problems = append(problems, f.report)
+	}
+	for name := range c.Profiles {
+		if _, err := c.ResolveProfile(name); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	return problems
+}
+
+// configFinding is one thing configChecks found. An error carries its text for
+// each surface: load is validate's, which LoadConfig prefixes with "config: "
+// and whose migration hints indent by two; report is validateAll's, printed as
+// a numbered `config validate` line, so its hints indent under the number. A
+// warning reads the same on both surfaces.
+type configFinding struct {
+	warning bool
+	load    string
+	report  string
+}
+
+// Hint indents for the two surfaces (see configFinding).
+const (
+	loadHintIndent   = "  "
+	reportHintIndent = "     "
+)
+
+// configError builds an error finding from text rendered once per surface with
+// that surface's hint indent.
+func configError(text func(indent string) string) configFinding {
+	return configFinding{load: text(loadHintIndent), report: text(reportHintIndent)}
+}
+
+// configErrors builds one error finding per line, each reading the same on
+// both surfaces.
+func configErrors(lines ...string) []configFinding {
+	findings := make([]configFinding, 0, len(lines))
+	for _, line := range lines {
+		findings = append(findings, configFinding{load: line, report: line})
+	}
+	return findings
+}
+
+// configWarnings builds one warning finding per line.
+func configWarnings(lines []string) []configFinding {
+	findings := make([]configFinding, 0, len(lines))
+	for _, line := range lines {
+		findings = append(findings, configFinding{warning: true, load: line, report: line})
+	}
+	return findings
+}
+
+// configChecks is the one check list behind both validators: validate fails on
+// the first error it returns, validateAll reports all of it. A new check goes
+// here and nowhere else. It returns findings in `config validate`'s report
+// order.
+//
+// It also fills the two defaults the rest of the program relies on:
+// defaults.server when exactly one server is enabled (the fallback warnings
+// read it), and log_dir.
+func (c *Config) configChecks() []configFinding {
+	var findings []configFinding
+
 	if c.DefaultBackend != "" {
-		return fmt.Errorf("config: 'default_backend' is no longer supported — use 'server' in the defaults section instead\n  Move to:\n    defaults:\n      server: %s", c.DefaultBackend)
+		findings = append(findings, configError(func(in string) string {
+			return fmt.Sprintf("'default_backend' is no longer supported — use 'server' in the defaults section instead\n%[1]sMove to:\n%[1]s  defaults:\n%[1]s    server: %[2]s", in, c.DefaultBackend)
+		}))
 	}
 	if len(c.Endpoints) > 0 {
-		return fmt.Errorf("config: 'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n  Move to:\n    defaults:\n      host: <host>\n      port: <port>")
+		findings = append(findings, configError(func(in string) string {
+			return fmt.Sprintf("'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n%[1]sMove to:\n%[1]s  defaults:\n%[1]s    host: <host>\n%[1]s    port: <port>", in)
+		}))
 	}
+
 	if len(c.Servers) == 0 {
-		return fmt.Errorf("config: no servers defined")
-	}
-	for name := range c.Servers {
-		if _, err := GetLLMServer(name); err != nil {
-			return fmt.Errorf("config: %w", err)
+		findings = append(findings, configErrors("no servers defined")...)
+	} else {
+		for name := range c.Servers {
+			if _, err := GetLLMServer(name); err != nil {
+				findings = append(findings, configFinding{
+					load:   err.Error(),
+					report: fmt.Sprintf("unknown server %q in servers section", name),
+				})
+			}
 		}
-	}
-	if problems := c.apiKeySourceErrors(); len(problems) > 0 {
-		return fmt.Errorf("config: %s", problems[0])
-	}
-	if len(c.Profiles) == 0 {
-		return fmt.Errorf("config: no profiles defined")
-	}
-	for name, p := range c.Profiles {
-		if p.Backend != "" {
-			return fmt.Errorf("config: profile %q uses 'backend' which has been renamed to 'server'\n  Change to: server: %s", name, p.Backend)
+		var enabledServers []string
+		for name, sc := range c.Servers {
+			if sc.Enabled {
+				enabledServers = append(enabledServers, name)
+			}
 		}
+		if len(enabledServers) == 0 {
+			findings = append(findings, configErrors("no servers enabled")...)
+		}
+		if c.Defaults.Server == nil && len(enabledServers) == 1 {
+			c.Defaults.Server = &enabledServers[0]
+		}
+		findings = append(findings, configWarnings(c.defaultsServerFallbackWarnings(enabledServers))...)
+		findings = append(findings, configErrors(c.apiKeySourceErrors()...)...)
+		findings = append(findings, configWarnings(c.apiKeyWarnings())...)
 	}
+
 	if c.LogRetention != nil && *c.LogRetention < 0 {
-		return fmt.Errorf("config: log_retention must be 0 or positive")
+		findings = append(findings, configErrors("log_retention must be 0 or positive")...)
 	}
 	if c.LogDir == "" {
 		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
 	}
-	var enabledServers []string
-	for name, sc := range c.Servers {
-		if sc.Enabled {
-			enabledServers = append(enabledServers, name)
+	findings = append(findings, configWarnings(c.memoryBarWarnings())...)
+
+	if len(c.Profiles) == 0 {
+		findings = append(findings, configErrors("no profiles defined")...)
+	}
+	for name, p := range c.Profiles {
+		if p.Backend != "" {
+			findings = append(findings, configError(func(in string) string {
+				return fmt.Sprintf("profile %q uses 'backend' which has been renamed to 'server'\n%sChange to: server: %s", name, in, p.Backend)
+			}))
 		}
 	}
-	if len(enabledServers) == 0 {
-		return fmt.Errorf("config: no servers enabled")
-	}
-	if c.Defaults.Server == nil && len(enabledServers) == 1 {
-		c.Defaults.Server = &enabledServers[0]
-	}
-	c.Warnings = c.defaultsServerFallbackWarnings(enabledServers)
-	c.Warnings = append(c.Warnings, c.apiKeyWarnings()...)
-	c.Warnings = append(c.Warnings, c.memoryBarWarnings()...)
-	return nil
+
+	return findings
 }
 
 // apiKeySourceErrors reports the key-source mistakes a config must not load
@@ -772,69 +868,6 @@ func (c *Config) defaultsServerFallbackWarnings(enabledServers []string) []strin
 			name, fallback))
 	}
 	return warnings
-}
-
-func (c *Config) validateAll() []string {
-	var problems []string
-
-	if c.DefaultBackend != "" {
-		problems = append(problems, fmt.Sprintf(
-			"'default_backend' is no longer supported — use 'server' in the defaults section instead\n     Move to:\n       defaults:\n         server: %s", c.DefaultBackend))
-	}
-	if len(c.Endpoints) > 0 {
-		problems = append(problems, "'endpoints' is no longer supported — the servers section only enables servers; set a non-default address via 'host'/'port' in the defaults section or on a profile\n     Move to:\n       defaults:\n         host: <host>\n         port: <port>")
-	}
-
-	if len(c.Servers) == 0 {
-		problems = append(problems, "no servers defined")
-	} else {
-		for name := range c.Servers {
-			if _, err := GetLLMServer(name); err != nil {
-				problems = append(problems, fmt.Sprintf("unknown server %q in servers section", name))
-			}
-		}
-		var enabledServers []string
-		for name, sc := range c.Servers {
-			if sc.Enabled {
-				enabledServers = append(enabledServers, name)
-			}
-		}
-		if len(enabledServers) == 0 {
-			problems = append(problems, "no servers enabled")
-		}
-		if c.Defaults.Server == nil && len(enabledServers) == 1 {
-			c.Defaults.Server = &enabledServers[0]
-		}
-		problems = append(problems, c.defaultsServerFallbackWarnings(enabledServers)...)
-		problems = append(problems, c.apiKeySourceErrors()...)
-		problems = append(problems, c.apiKeyWarnings()...)
-	}
-
-	if c.LogRetention != nil && *c.LogRetention < 0 {
-		problems = append(problems, "log_retention must be 0 or positive")
-	}
-	if c.LogDir == "" {
-		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
-	}
-	problems = append(problems, c.memoryBarWarnings()...)
-
-	if len(c.Profiles) == 0 {
-		problems = append(problems, "no profiles defined")
-	} else {
-		for name, p := range c.Profiles {
-			if p.Backend != "" {
-				problems = append(problems, fmt.Sprintf(
-					"profile %q uses 'backend' which has been renamed to 'server'\n     Change to: server: %s", name, p.Backend))
-			}
-		}
-		for name := range c.Profiles {
-			if _, err := c.ResolveProfile(name); err != nil {
-				problems = append(problems, err.Error())
-			}
-		}
-	}
-
-	return problems
 }
 
 func (c *Config) backendAddr(backendName string) string {

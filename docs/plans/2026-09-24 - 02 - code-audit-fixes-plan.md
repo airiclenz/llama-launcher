@@ -445,7 +445,11 @@ llama-launcher.TDD.md — §16 contract decision 2; docs/adr/0011-public-library
 - `grep -rn 'never writes to' README.md llama-launcher.TDD.md launcher/doc.go` (each hit names `Reload`)
 **Commit:** `docs(launcher): name the Reload exception in the no-stderr contract`
 
-## 22. One check list feeds both config validators
+## 22. One check list feeds both config validators — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): the load path's first error now follows `config validate`'s report order. Only configs with several errors see a different message: for example, all servers disabled plus a profile still using `backend:` now reports "no servers enabled" first, where it used to report the `backend` rename. The two old bodies checked in orders that cannot both come from one list. The Goal's "validate returns the first error" of the shared list decided it, and the item's "each surface keeps its order" holds for `config validate`'s output and for the order of `c.Warnings`.
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by the new `configChecks` list (the config.go row now names it) and the two new tests (the `TestValidate_*` row).
+NOTES (2026-09-24): validate's unknown-server error is now built from GetLLMServer's error text instead of wrapping it with %w. The text is the same and no caller unwraps it (no sentinel exists).
 
 **What:** Fixes audit finding "Two diverged copies of the config validator". Depends on items 1, 20 and 21 (same file).
 **Regression guard.** Item 1's trust gate is a precondition of running commands, not a validator check; it stays in resolveKeyCommands, outside this Goal. Checks return errors and warnings separately: `validate` fails on the first error and stores warnings in `c.Warnings`; `validateAll` returns errors + warnings + `ResolveProfile` errors, as today (a severity-less list would refuse a defaults.server-fallback config). Each surface keeps its own prefix (`config: `), indent (`\n  Move to` vs `\n     Move to`), wording ("unknown LLM server" vs "unknown server") and order.
