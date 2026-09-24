@@ -1,11 +1,14 @@
 package launcher
 
 import (
+	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -26,6 +29,101 @@ func splashTestServer(t *testing.T, status int, withHeader bool) string {
 	}))
 	t.Cleanup(srv.Close)
 	return addrFromURL(t, srv.URL)
+}
+
+// splashWildcardModel is the model the Host-checking Splash fake serves.
+const splashWildcardModel = "mlx-community/wildcard-test"
+
+// splashHostCheckingServer mimics Splash's Host validation: it answers 403
+// unless the request's Host names a loopback (127.0.0.1, localhost or ::1),
+// so a probe sending `Host: 0.0.0.0:<port>` is rejected as Splash rejects it.
+// Otherwise it serves /ready with readyStatus and /v1/models with
+// splashWildcardModel, sending `Server: Splash` on every reply. It returns
+// the listening port.
+func splashHostCheckingServer(t *testing.T, readyStatus int) int {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "Splash/0.1")
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/ready":
+			w.WriteHeader(readyStatus)
+		case "/v1/models":
+			json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{"id": splashWildcardModel}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	_, portStr, err := net.SplitHostPort(addrFromURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("splitting test server address: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parsing test server port: %v", err)
+	}
+	return port
+}
+
+// TestSplashWildcardProbe covers a Splash configured on a wildcard host: its
+// probes must dial loopback, since Splash 403s a Host naming the wildcard.
+func TestSplashWildcardProbe(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fake rejects a wildcard Host", func(t *testing.T) {
+		t.Parallel()
+		// Guards the tests below against a vacuous fake: a request that
+		// names the wildcard in its Host must be refused.
+		port := splashHostCheckingServer(t, http.StatusOK)
+		req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/ready", nil)
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		req.Host = "0.0.0.0:" + strconv.Itoa(port)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status = %d, want 403", resp.StatusCode)
+		}
+	})
+
+	for _, host := range []string{"0.0.0.0", ""} {
+		t.Run("host "+strconv.Quote(host), func(t *testing.T) {
+			t.Parallel()
+
+			ready := splashHostCheckingServer(t, http.StatusOK)
+			readyAddr := host + ":" + strconv.Itoa(ready)
+			if err := (&Splash{}).HealthCheck(readyAddr); err != nil {
+				t.Errorf("HealthCheck(%q) = %v, want healthy", readyAddr, err)
+			}
+			models, err := (&Splash{}).ListRunningModels(readyAddr)
+			if err != nil {
+				t.Fatalf("ListRunningModels(%q) error: %v", readyAddr, err)
+			}
+			if len(models) != 1 || models[0].Name != splashWildcardModel {
+				t.Errorf("ListRunningModels(%q) = %+v, want [%s]", readyAddr, models, splashWildcardModel)
+			}
+
+			loading := splashHostCheckingServer(t, http.StatusServiceUnavailable)
+			loadingAddr := host + ":" + strconv.Itoa(loading)
+			if !(&Splash{}).StartingUp(loadingAddr) {
+				t.Errorf("StartingUp(%q) = false, want true", loadingAddr)
+			}
+		})
+	}
 }
 
 func TestSplashRegistered(t *testing.T) {

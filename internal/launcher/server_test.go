@@ -1322,6 +1322,21 @@ func TestIdentifyBackend(t *testing.T) {
 		}
 	})
 
+	t.Run("wildcard-bound Splash server is identified as splash", func(t *testing.T) {
+		t.Parallel()
+		// Splash 403s a Host naming the wildcard, so the probe must dial
+		// loopback while the caller keeps the configured 0.0.0.0 address.
+		port := splashHostCheckingServer(t, http.StatusOK)
+
+		backend, err := identifyBackend(fmt.Sprintf("0.0.0.0:%d", port))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if backend != "splash" {
+			t.Errorf("backend = %q, want %q", backend, "splash")
+		}
+	})
+
 	t.Run("loading Splash server is identified as splash, not llamacpp", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

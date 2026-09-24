@@ -5,10 +5,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// probeAddr returns the address to dial when probing a server configured on
+// addr. A wildcard host (empty, 0.0.0.0 or ::) is a bind address, not a
+// destination: a server that validates the Host header, like Splash, rejects
+// a request naming it. It maps to the loopback of its family (127.0.0.1 or
+// ::1). Every other address, and one net.SplitHostPort cannot parse, is
+// returned unchanged. The configured address stays the instance's identity
+// (ADR-0006); only the dial target changes.
+func probeAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsUnspecified() {
+		return addr
+	}
+	if ip.To4() != nil {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return net.JoinHostPort("::1", port)
+}
 
 // maxResponseBytes caps how much of an HTTP response body the launcher reads.
 // The backend endpoints it consumes (/health, /ready, /v1/models, /api/ps,

@@ -265,3 +265,32 @@ func recordingServer(t *testing.T, respond func(w http.ResponseWriter, r *http.R
 		return seen[path]
 	}
 }
+
+func TestProbeAddr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		addr string
+		want string
+	}{
+		{"IPv4 wildcard maps to loopback", "0.0.0.0:1111", "127.0.0.1:1111"},
+		// Helper-only: IPv6 host addresses are out of scope launcher-wide
+		// (bead llama-launcher-ipv6-host-address-format).
+		{"IPv6 wildcard maps to loopback", "[::]:1111", "[::1]:1111"},
+		{"empty host maps to loopback", ":1111", "127.0.0.1:1111"},
+		{"loopback unchanged", "127.0.0.1:1111", "127.0.0.1:1111"},
+		{"LAN IP unchanged", "192.168.1.5:1111", "192.168.1.5:1111"},
+		{"DNS name unchanged", "host.local:1111", "host.local:1111"},
+		{"unparseable unchanged", "garbage", "garbage"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := probeAddr(tt.addr); got != tt.want {
+				t.Errorf("probeAddr(%q) = %q, want %q", tt.addr, got, tt.want)
+			}
+		})
+	}
+}

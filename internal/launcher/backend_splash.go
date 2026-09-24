@@ -39,9 +39,11 @@ func (b *Splash) DefaultAddr() string { return "127.0.0.1:8000" }
 // requests. Splash's /health answers 200 even while the model is still
 // loading, so the probe reads /ready instead (200 once serving, 503 before),
 // and it requires the `Server: Splash` header so a foreign server answering
-// 200 on the same path is not mistaken for Splash.
+// 200 on the same path is not mistaken for Splash. Splash rejects a request
+// whose Host names a wildcard bind address, so a wildcard-bound server is
+// probed over loopback (probeAddr).
 func (b *Splash) HealthCheck(addr string) error {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/ready", b.apiKey())
+	resp, err := authedGet(healthCheckTimeout, "http://"+probeAddr(addr)+"/ready", b.apiKey())
 	if err != nil {
 		return err
 	}
@@ -63,9 +65,10 @@ func (b *Splash) HealthCheck(addr string) error {
 // Splash build tested binds its port only once the model has loaded, so a
 // loading Splash refuses the connection and this returns false — LoadingPID
 // finds it instead. A connection error, any other status, or a 503 from a
-// foreign server all return false.
+// foreign server all return false. A wildcard addr is probed over loopback,
+// as in HealthCheck.
 func (b *Splash) StartingUp(addr string) bool {
-	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/ready", b.apiKey())
+	resp, err := authedGet(healthCheckTimeout, "http://"+probeAddr(addr)+"/ready", b.apiKey())
 	if err != nil {
 		return false
 	}
@@ -171,9 +174,10 @@ func (b *Splash) TryStart(_ *Config, _ string) error           { return nil }
 func (b *Splash) TryStop(_ string) error                       { return nil }
 
 // ListRunningModels reports the model Splash is serving from its
-// OpenAI-style /v1/models endpoint.
+// OpenAI-style /v1/models endpoint, dialing a wildcard addr over loopback
+// as HealthCheck does.
 func (b *Splash) ListRunningModels(addr string) ([]RunningModelInfo, error) {
-	return openAIModelList(addr, b.apiKey())
+	return openAIModelList(probeAddr(addr), b.apiKey())
 }
 
 // BuildServerEnv hands the configured api_key to Splash through

@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -190,6 +191,45 @@ func TestDiscoverRunningInstances_FindsReachable(t *testing.T) {
 	}
 	if inst.ActiveModel != "/models/x.gguf" {
 		t.Errorf("ActiveModel = %q, want /models/x.gguf", inst.ActiveModel)
+	}
+}
+
+// TestDiscoverRunningInstances_WildcardSplash covers a Splash configured on
+// the IPv4 wildcard: Splash 403s a Host naming 0.0.0.0, so discovery must
+// probe it over loopback yet key the instance by the configured address
+// (ADR-0006).
+func TestDiscoverRunningInstances_WildcardSplash(t *testing.T) {
+	t.Parallel()
+	port := splashHostCheckingServer(t, http.StatusOK)
+
+	host := "0.0.0.0"
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"splash": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("splash"),
+		Host:   &host,
+		Port:   &port,
+	}
+
+	instances := DiscoverRunningInstances(cfg)
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 instance, got %d: %+v", len(instances), instances)
+	}
+	inst := instances[0]
+	if inst.Backend != "splash" {
+		t.Errorf("Backend = %q, want splash", inst.Backend)
+	}
+	if want := fmt.Sprintf("0.0.0.0:%d", port); inst.Addr() != want {
+		t.Errorf("Addr() = %q, want %q", inst.Addr(), want)
+	}
+	if inst.Starting {
+		t.Error("Starting = true, want a ready instance")
+	}
+	if inst.ActiveModel != splashWildcardModel {
+		t.Errorf("ActiveModel = %q, want %q", inst.ActiveModel, splashWildcardModel)
 	}
 }
 
