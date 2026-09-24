@@ -1,8 +1,11 @@
 package launcher
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -113,7 +116,11 @@ func (b *Splash) BinaryInstallHint() string {
 }
 
 // ResolveModel validates a Splash model ref — a Hugging Face `owner/repo`
-// id — and returns it unchanged. An empty ref resolves to "".
+// id — and returns it unchanged once the model is installed in the Hugging
+// Face cache. A model that is not installed is refused with the one-time
+// install command: the launcher never triggers Splash's long download
+// itself. An empty ref resolves to "" without touching the cache. The
+// check reads only the cache and never looks up `splash` on PATH.
 func (b *Splash) ResolveModel(_ *Config, modelRef string) (string, error) {
 	if modelRef == "" {
 		return "", nil
@@ -121,7 +128,72 @@ func (b *Splash) ResolveModel(_ *Config, modelRef string) (string, error) {
 	if err := validateSplashRepoID(modelRef); err != nil {
 		return "", err
 	}
+	hub, err := splashHubDir()
+	if err != nil {
+		return "", fmt.Errorf("locate the Hugging Face cache for splash model %s: %w", modelRef, err)
+	}
+	if !splashModelInstalled(hub, modelRef) {
+		return "", fmt.Errorf("splash model %s is not installed in %s: install it once by running "+
+			"`splash serve --model %s` in a terminal", modelRef, hub, modelRef)
+	}
 	return modelRef, nil
+}
+
+// splashHubDir returns the Hugging Face hub cache directory the way Splash
+// (via huggingface_hub) resolves it: $HF_HUB_CACHE, else $HF_HOME/hub, else
+// $XDG_CACHE_HOME/huggingface/hub, else ~/.cache/huggingface/hub. An empty
+// variable counts as unset.
+func splashHubDir() (string, error) {
+	if dir := os.Getenv("HF_HUB_CACHE"); dir != "" {
+		return dir, nil
+	}
+	if dir := os.Getenv("HF_HOME"); dir != "" {
+		return filepath.Join(dir, "hub"), nil
+	}
+	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
+		return filepath.Join(dir, "huggingface", "hub"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		return "", errors.New("home directory is unknown")
+	}
+	return filepath.Join(home, ".cache", "huggingface", "hub"), nil
+}
+
+// splashModelInstalled reports whether Splash finished installing repoID in
+// hub. Splash fetches a snapshot's manifest.json before its weights and pins
+// the snapshot with refs/splash/<installation>/<rev> only after the download
+// is verified (install/models.py _retain_snapshot_ref), so installed means a
+// pinned <rev> whose snapshots/<rev>/manifest.json exists. A manifest alone
+// can be an interrupted download.
+func splashModelInstalled(hub, repoID string) bool {
+	repoDir := filepath.Join(hub, "models--"+strings.ReplaceAll(repoID, "/", "--"))
+	installations, err := os.ReadDir(filepath.Join(repoDir, "refs", "splash"))
+	if err != nil {
+		return false
+	}
+	for _, installation := range installations {
+		if !installation.IsDir() {
+			continue
+		}
+		revs, err := os.ReadDir(filepath.Join(repoDir, "refs", "splash", installation.Name()))
+		if err != nil {
+			continue
+		}
+		for _, rev := range revs {
+			if rev.IsDir() {
+				continue
+			}
+			manifest := filepath.Join(repoDir, "snapshots", rev.Name(), "manifest.json")
+			if info, err := os.Stat(manifest); err == nil && info.Mode().IsRegular() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateSplashRepoID mirrors Splash's REPO_ID rule (install/models.py

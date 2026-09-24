@@ -3,6 +3,8 @@ package launcher
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -190,9 +192,137 @@ func TestSplashBuildServerEnv(t *testing.T) {
 	}
 }
 
-func TestSplashResolveModel(t *testing.T) {
-	t.Parallel()
+// splashTestRev is a 40-hex snapshot revision for installed-model fixtures.
+const splashTestRev = "0123456789abcdef0123456789abcdef01234567"
 
+// setSplashHubEnv sets all four variables the Hugging Face hub lookup reads;
+// "" leaves a variable effectively unset.
+func setSplashHubEnv(t *testing.T, hfHubCache, hfHome, xdgCacheHome, home string) {
+	t.Helper()
+	t.Setenv("HF_HUB_CACHE", hfHubCache)
+	t.Setenv("HF_HOME", hfHome)
+	t.Setenv("XDG_CACHE_HOME", xdgCacheHome)
+	t.Setenv("HOME", home)
+}
+
+// writeSplashSnapshot creates snapshots/<rev>/ for repoID in hub, with a
+// manifest.json when withManifest is set, and pins it with
+// refs/splash/<installation>/<rev> when withRef is set.
+func writeSplashSnapshot(t *testing.T, hub, repoID string, withManifest, withRef bool) {
+	t.Helper()
+	repoDir := filepath.Join(hub, "models--"+strings.ReplaceAll(repoID, "/", "--"))
+	snapshot := filepath.Join(repoDir, "snapshots", splashTestRev)
+	if err := os.MkdirAll(snapshot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if withManifest {
+		if err := os.WriteFile(filepath.Join(snapshot, "manifest.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if withRef {
+		refDir := filepath.Join(repoDir, "refs", "splash", "installation")
+		if err := os.MkdirAll(refDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(refDir, splashTestRev), []byte(splashTestRev), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// installSplashModel writes a fully installed repoID into hub.
+func installSplashModel(t *testing.T, hub, repoID string) {
+	t.Helper()
+	writeSplashSnapshot(t, hub, repoID, true, true)
+}
+
+func TestSplashResolveModelInstallCheck(t *testing.T) {
+	const ref = "mlx-community/Qwen3-8B-4bit"
+
+	resolves := func(t *testing.T) {
+		t.Helper()
+		got, err := (&Splash{}).ResolveModel(&Config{}, ref)
+		if err != nil || got != ref {
+			t.Fatalf("ResolveModel(%q) = %q, %v; want %q, nil", ref, got, err, ref)
+		}
+	}
+	refusesWithInstallHint := func(t *testing.T) {
+		t.Helper()
+		_, err := (&Splash{}).ResolveModel(&Config{}, ref)
+		if err == nil {
+			t.Fatalf("ResolveModel(%q) succeeded; want a not-installed error", ref)
+		}
+		if want := "splash serve --model " + ref; !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+
+	t.Run("HF_HUB_CACHE hit", func(t *testing.T) {
+		hub := t.TempDir()
+		installSplashModel(t, hub, ref)
+		setSplashHubEnv(t, hub, t.TempDir(), t.TempDir(), t.TempDir())
+		resolves(t)
+	})
+
+	t.Run("HF_HOME fallback", func(t *testing.T) {
+		hfHome := t.TempDir()
+		installSplashModel(t, filepath.Join(hfHome, "hub"), ref)
+		setSplashHubEnv(t, "", hfHome, t.TempDir(), t.TempDir())
+		resolves(t)
+	})
+
+	t.Run("XDG_CACHE_HOME fallback", func(t *testing.T) {
+		xdg := t.TempDir()
+		installSplashModel(t, filepath.Join(xdg, "huggingface", "hub"), ref)
+		setSplashHubEnv(t, "", "", xdg, t.TempDir())
+		resolves(t)
+	})
+
+	t.Run("home default", func(t *testing.T) {
+		home := t.TempDir()
+		installSplashModel(t, filepath.Join(home, ".cache", "huggingface", "hub"), ref)
+		setSplashHubEnv(t, "", "", "", home)
+		resolves(t)
+	})
+
+	t.Run("empty HF_HUB_CACHE falls back to HF_HOME", func(t *testing.T) {
+		hfHome := t.TempDir()
+		installSplashModel(t, filepath.Join(hfHome, "hub"), ref)
+		setSplashHubEnv(t, "", hfHome, "", "")
+		resolves(t)
+	})
+
+	t.Run("model absent from the hub", func(t *testing.T) {
+		setSplashHubEnv(t, t.TempDir(), "", "", "")
+		refusesWithInstallHint(t)
+	})
+
+	t.Run("snapshot without manifest.json", func(t *testing.T) {
+		hub := t.TempDir()
+		writeSplashSnapshot(t, hub, ref, false, true)
+		setSplashHubEnv(t, hub, "", "", "")
+		refusesWithInstallHint(t)
+	})
+
+	t.Run("manifest.json without a refs/splash pin", func(t *testing.T) {
+		hub := t.TempDir()
+		writeSplashSnapshot(t, hub, ref, true, false)
+		setSplashHubEnv(t, hub, "", "", "")
+		refusesWithInstallHint(t)
+	})
+
+	t.Run("empty ref resolves without a lookup", func(t *testing.T) {
+		// No variable is set and HOME is empty, so any hub lookup would fail.
+		setSplashHubEnv(t, "", "", "", "")
+		got, err := (&Splash{}).ResolveModel(&Config{}, "")
+		if err != nil || got != "" {
+			t.Fatalf("ResolveModel(\"\") = %q, %v; want \"\", nil", got, err)
+		}
+	})
+}
+
+func TestSplashResolveModel(t *testing.T) {
 	valid := []string{
 		"",
 		"mlx-community/Qwen3-8B-4bit",
@@ -202,9 +332,15 @@ func TestSplashResolveModel(t *testing.T) {
 		"_x/y_",
 		"o/" + strings.Repeat("r", 96),
 	}
+	hub := t.TempDir()
+	for _, ref := range valid {
+		if ref != "" {
+			installSplashModel(t, hub, ref)
+		}
+	}
+	setSplashHubEnv(t, hub, "", "", "")
 	for _, ref := range valid {
 		t.Run("valid "+ref, func(t *testing.T) {
-			t.Parallel()
 			got, err := (&Splash{}).ResolveModel(&Config{}, ref)
 			if err != nil || got != ref {
 				t.Errorf("ResolveModel(%q) = %q, %v; want %q, nil", ref, got, err, ref)
@@ -231,7 +367,6 @@ func TestSplashResolveModel(t *testing.T) {
 	}
 	for _, ref := range invalid {
 		t.Run("invalid "+ref, func(t *testing.T) {
-			t.Parallel()
 			if got, err := (&Splash{}).ResolveModel(&Config{}, ref); err == nil {
 				t.Errorf("ResolveModel(%q) = %q, nil; want an error", ref, got)
 			}

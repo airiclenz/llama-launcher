@@ -95,7 +95,8 @@ NOTES (2026-09-24): TestGetLLMServer_Known in backend_test.go still lists only t
 **Acceptance:** `go build ./... && go test ./internal/launcher/ -run 'Splash|BinaryInstallHint' -count=1`
 **Commit:** `feat(launcher): add Splash LLM Server`
 
-## 2. Refuse a Splash model that is not installed
+## 2. Refuse a Splash model that is not installed — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): the existing TestSplashResolveModel is no longer parallel, and its valid refs now resolve against a temp hub that holds each ref installed, because resolving now reads the hub env vars through t.Setenv.
 
 **What:** Recast at the regression check (2026-09-24). Depends on item 1.
 **Goal:** `Splash.ResolveModel` returns the repo ID only when some `<hub>/models--<owner>--<repo>/snapshots/*/manifest.json` exists. It never looks up `splash` on `PATH`.
