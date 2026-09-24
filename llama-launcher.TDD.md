@@ -902,6 +902,8 @@ Tests come in two layers (historical plan: `backend-tests-plan.md`; the validate
 
 Riding alongside them is the **cross-compile gate** (ADR-0012): `make cross` runs `go build ./...`, `go vet ./...` and `go vet -tags=integration ./internal/launcher/` for `GOOS=darwin`, `GOOS=linux` and `GOOS=windows`, so a platform regression fails in this repository instead of in an importing client's CI. `vet` type-checks test files, which is what keeps both layers free of unix-only calls. **`make check` (= `make test` + `make cross`) is the aggregate to run before every commit**: it starts no process, so it is safe for agents and CI alike. `make test-all` (Layer 1 + Layer 2) remains the owner's host-only target.
 
+CI (`.github/workflows/ci.yml`) runs `make check` on GitHub Actions for every push to `main`, every pull request and on manual dispatch, on `macos-latest` and `ubuntu-latest` — the shipped platform plus the Linux half of ADR-0012's Layer-1 claim. The Go version comes from `go.mod`. Layer 2 never runs there.
+
 ### 12.1 Unit Tests (httptest)
 
 Backend methods are tested using `net/http/httptest` mock servers. These tests run as part of `go test ./...` with no external dependencies.

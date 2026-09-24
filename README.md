@@ -348,6 +348,8 @@ make clean             # Remove the binaries
 
 `make cross` is the platform contract as a check ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)): it builds and vets the whole tree — test files included — for macOS, Linux and Windows, so a portability regression fails here instead of in an importing client's CI.
 
+GitHub Actions runs `make check` on macOS and Linux for every push to `main` and every pull request (`.github/workflows/ci.yml`).
+
 `make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio, Splash) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA`, and/or `INTEGRATION_MODEL_LMSTUDIO` to exercise the model load/unload steps. The Splash tests (`TestSplashLifecycle`, `TestSplashStopWhileLoading`, and `TestSplashWildcardHost`, which binds Splash to `0.0.0.0`) run only with `INTEGRATION_MODEL_SPLASH` set to an already-installed `owner/repo`.
 
 The version is read from the `VERSION` file and injected at build time.

@@ -13,6 +13,10 @@
 - ADR-0014 records why the launcher refuses a Splash model that is not installed and never downloads one. CONTEXT.md, the manage-llm-server skill, AGENTS.md and the `launcher` package doc now list Splash as a supported LLM Server.
 - **Docs:** README and the TDD cover Splash — the backend table, a Splash setup section (a wrapper script on `PATH` rather than a symlink, the launchd / MCP-adapter `PATH`, the one-time `splash serve --model …` install and the Hugging Face cache check), the `SPLASH_API_KEY` key handling, the `--max-context` / `extra_args` mapping, the `/ready` + `Server: Splash` health check, and the `INTEGRATION_MODEL_SPLASH` integration test.
 
+### Changed
+
+- **CI:** GitHub Actions now runs `make check` (unit tests plus the cross-compile gate) on macOS and Linux for every push to `main` and every pull request (`.github/workflows/ci.yml`). The integration suite stays host-only.
+
 ### Security
 
 - **Corrected: an `extra_args` `--api-key` for llamacpp does not replace the configured `api_key` — both keys are accepted.** The 1.7.0 notes said an override would win; the new integration test (`TestLlamaServerAPIKey`, `make test-integration`) found the flag's key appended to the environment key on llama.cpp b10851, so both authenticate. To change the key, change `api_key` rather than adding an override. The same test found neither key echoed into llama-server's own log file. README and TDD now say so.
