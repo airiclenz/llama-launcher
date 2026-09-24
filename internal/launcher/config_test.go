@@ -486,6 +486,28 @@ func TestGenerateExampleConfig(t *testing.T) {
 	}
 }
 
+func TestGenerateExampleConfig_LoadsWithSplashDisabled(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := GenerateExampleConfig(path); err != nil {
+		t.Fatalf("GenerateExampleConfig: %v", err)
+	}
+
+	cfg, err := LoadConfigNotify(path, nil)
+	if err != nil {
+		t.Fatalf("LoadConfigNotify on the generated example config: %v", err)
+	}
+
+	splash, ok := cfg.Servers["splash"]
+	if !ok {
+		t.Fatal("example config has no servers.splash entry")
+	}
+	if splash.Enabled {
+		t.Error("servers.splash is enabled in the example config, want disabled by default")
+	}
+}
+
 func TestValidate_DeprecatedDefaultBackend(t *testing.T) {
 	t.Parallel()
 

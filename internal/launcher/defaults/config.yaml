@@ -1,6 +1,6 @@
 # llama-launcher configuration
 #
-# Three server types are supported:
+# Four server types are supported:
 #
 #   llamacpp   — llama.cpp's llama-server binary. The launcher forks the
 #                process, tracks PID, and restarts to switch models.
@@ -10,6 +10,12 @@
 #
 #   lmstudio   — LM Studio. Connects to running instance or auto-starts
 #                via "lms server start". Models loaded/unloaded via HTTP API.
+#
+#   splash     — Splash, an MLX-based server for Apple Silicon. Like
+#                llamacpp, the launcher forks "splash serve", tracks PID,
+#                and restarts to switch models. The "splash" command must
+#                be on PATH; for a source checkout use a wrapper script
+#                that execs <checkout>/splash (a plain symlink breaks it).
 
 # ──────────────────────────────────────────────────────────────
 # Servers
@@ -17,7 +23,8 @@
 #
 # Enable the servers available on your system.
 # Binaries are auto-detected from PATH; default ports are
-# per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234).
+# per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234,
+# splash: 8000).
 #
 # Each entry is either a plain bool or a mapping with an optional API key:
 #
@@ -52,11 +59,15 @@
 #   ollama     — Ollama has no native auth; set a key only when the
 #                instance sits behind an authenticating reverse proxy.
 #                The launcher then sends the key with its own requests.
+#   splash     — exported as SPLASH_API_KEY into the launched server's
+#                environment (never on the command line); Splash then
+#                rejects client requests without "Authorization: Bearer <key>".
 
 servers:
   llamacpp: true
   ollama: false
   lmstudio: false
+  splash: false
 
 # ──────────────────────────────────────────────────────────────
 # Paths
@@ -183,26 +194,30 @@ sort_alphabetically: true
 #
 # Not all parameters apply to all servers:
 #
-#   Parameter       llamacpp   ollama   lmstudio
-#   ─────────────   ────────   ──────   ────────
-#   gpu_layers      yes        -        -        (LM Studio manages GPU offload itself)
-#   threads         yes        -        -
-#   threads_batch   yes        -        -
-#   batch_size      yes        -        yes (mapped to eval_batch_size)
-#   context_size    yes        -        yes
-#   host / port     yes        yes      yes
-#   flash_attn      yes        -        yes (mapped to flash_attention)
-#   cont_batching   yes        -        -
-#   parallel        yes        -        yes
-#   mlock           yes        -        -
-#   no_mmap         yes        -        -
-#   embedding       yes        -        -
-#   jinja           yes        -        -        (enables Jinja chat template)
-#   temperature     yes        -        -
-#   repeat_penalty  yes        -        -
-#   top_k           yes        -        -
-#   top_p           yes        -        -
-#   min_p           yes        -        -
+#   Parameter       llamacpp   ollama   lmstudio   splash
+#   ─────────────   ────────   ──────   ────────   ──────
+#   gpu_layers      yes        -        -          -       (LM Studio manages GPU offload itself)
+#   threads         yes        -        -          -
+#   threads_batch   yes        -        -          -
+#   batch_size      yes        -        yes        -       (lmstudio: mapped to eval_batch_size)
+#   context_size    yes        -        yes        yes     (splash: mapped to --max-context)
+#   host / port     yes        yes      yes        yes
+#   flash_attn      yes        -        yes        -       (lmstudio: mapped to flash_attention)
+#   cont_batching   yes        -        -          -
+#   parallel        yes        -        yes        -
+#   mlock           yes        -        -          -
+#   no_mmap         yes        -        -          -
+#   embedding       yes        -        -          -
+#   jinja           yes        -        -          -       (enables Jinja chat template)
+#   temperature     yes        -        -          -
+#   repeat_penalty  yes        -        -          -
+#   top_k           yes        -        -          -
+#   top_p           yes        -        -          -
+#   min_p           yes        -        -          -
+#
+# Splash honours only context_size (plus host / port). Sampling params
+# (temperature, repeat_penalty, top_k, top_p, min_p) are ignored for
+# Splash; pass other Splash flags through a profile's extra_args.
 
 defaults:
   gpu_layers: 99
@@ -220,7 +235,7 @@ defaults:
   embedding: false
   jinja: false
 
-  # Sampling defaults (llamacpp) — passed to llama-server as launch flags
+  # Sampling defaults (llamacpp only) — passed to llama-server as launch flags
   # (--temp, --repeat-penalty, --top-k, --top-p, --min-p). They set the
   # server-side defaults for API requests; parameters sent with a request
   # still override them per call.
@@ -245,11 +260,13 @@ defaults:
 #   description   Optional longer text shown only in the "Show model config"
 #                 pop-up.
 #   model         Model reference (file path for llamacpp, name for ollama,
-#                 publisher/repo/file for lmstudio)
-#   server        Server to use (llamacpp, ollama, lmstudio)
+#                 publisher/repo/file for lmstudio, Hugging Face
+#                 owner/repo id for splash)
+#   server        Server to use (llamacpp, ollama, lmstudio, splash)
 #   is_favourite  Pin this profile to the top of the menu (default: false).
 #                 Favourites sort before all other profiles.
-#   extra_args    Additional CLI flags appended verbatim (llamacpp only)
+#   extra_args    Additional CLI flags appended verbatim (llamacpp and
+#                 splash only)
 #   <param>       Any parameter from the defaults block
 
 profiles:
@@ -296,3 +313,20 @@ profiles:
   #   description: "Code Llama 13B via Ollama"
   #   server: ollama
   #   model: codellama:13b
+
+  # ── Splash example ─────────────────────────────────────────
+  # Model is a Hugging Face owner/repo id. It must be installed once
+  # before the launcher can use it: run "splash serve --model <id>" in a
+  # terminal (the first run downloads the model). The launcher checks the
+  # Hugging Face cache for the installed snapshot and never starts that
+  # download itself.
+  # Uncomment splash in the servers section above (set it to true).
+  # Other Splash flags (reasoning effort, kv format, max memory,
+  # --allowed-host for access by DNS name) go in extra_args.
+  #
+  # splash-qwen:
+  #   description: "Qwen3.8 27B via Splash"
+  #   server: splash
+  #   model: incoai/Qwen3.8-27B-Splash
+  #   context_size: 32768
+  #   extra_args: ["--default-reasoning-effort", "high"]
