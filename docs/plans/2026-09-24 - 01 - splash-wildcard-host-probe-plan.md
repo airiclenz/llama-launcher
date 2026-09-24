@@ -96,7 +96,10 @@ internal/launcher/config.go — applyFallbacks (nil host becomes defaultHost 127
 - `go test ./internal/launcher/ -run 'TestSplash' -count=1`
 **Commit:** `feat(launcher): let Splash accept the machine hostname on a LAN bind`
 
-## 3. Integration test covers a wildcard-bound Splash
+## 3. Integration test covers a wildcard-bound Splash — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): TestSplashWildcardHost asserts discovery's ActiveModel equals INTEGRATION_MODEL_SPLASH exactly (the same name TestSplashLifecycle's list-running-models step requires), not merely non-empty.
+NOTES (2026-09-24): not run live — the host already runs a user Splash (incoai/Qwen3.8-27B-Splash on 0.0.0.0:1111) on a 32 GB machine, so a second 16 GB load was not started; the test skips without INTEGRATION_MODEL_SPLASH and needs a manual host run.
 
 **What:** The real-Splash suite binds only `127.0.0.1`, which is why it missed this defect. Add a `0.0.0.0` case. Depends on items 1 and 2.
 **Goal:** `internal/launcher/integration_splash_test.go` has a test that starts a real Splash on `0.0.0.0:<free port>` and checks three things through the configured address: it waits until the server is healthy, discovery reports it Ready with the served model, and `Stop` frees the port and ends the process group. The test compiles under `-tags integration` and skips without `INTEGRATION_MODEL_SPLASH`.

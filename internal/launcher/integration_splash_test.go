@@ -10,6 +10,9 @@
 // the model has loaded, so the Starting state is observed through the
 // process table (ADR-0015): TestSplashLifecycle requires it on the way to
 // healthy, and TestSplashStopWhileLoading stops a server mid-load.
+// TestSplashWildcardHost binds 0.0.0.0 instead of loopback, so the probes
+// must dial loopback while the instance stays keyed by the configured
+// address (ADR-0006).
 //
 // Liveness checks on the start PID and its group go through the process
 // seam (signalPID / signalGroup with signal 0), never syscall.Kill, so the
@@ -48,13 +51,12 @@ func integrationSplashModel(t *testing.T) string {
 	return model
 }
 
-// resolveSplashProfile builds a one-profile config for model on a free
-// loopback port and resolves it the way the CLI does.
-func resolveSplashProfile(t *testing.T, logDir, model string) (*Config, *ResolvedProfile) {
+// resolveSplashProfile builds a one-profile config for model bound to host
+// on a free port and resolves it the way the CLI does.
+func resolveSplashProfile(t *testing.T, logDir, model, host string) (*Config, *ResolvedProfile) {
 	t.Helper()
 
 	server := "splash"
-	host := loopbackHost
 	port := freePort(t)
 	cfg := &Config{
 		LogDir:  logDir,
@@ -124,7 +126,7 @@ func TestSplashLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("splash backend not registered: %v", err)
 	}
-	cfg, profile := resolveSplashProfile(t, t.TempDir(), model)
+	cfg, profile := resolveSplashProfile(t, t.TempDir(), model, loopbackHost)
 
 	inst, err := StartServer(cfg, profile)
 	if err != nil {
@@ -202,7 +204,7 @@ func TestSplashStopWhileLoading(t *testing.T) {
 	if err != nil {
 		t.Fatalf("splash backend not registered: %v", err)
 	}
-	cfg, profile := resolveSplashProfile(t, t.TempDir(), model)
+	cfg, profile := resolveSplashProfile(t, t.TempDir(), model, loopbackHost)
 
 	inst, err := StartServer(cfg, profile)
 	if err != nil {
@@ -245,4 +247,68 @@ func TestSplashStopWhileLoading(t *testing.T) {
 	}
 
 	waitForProcessGone(t, inst.PID, splashStopTimeout)
+}
+
+// TestSplashWildcardHost starts a real Splash server bound to the IPv4
+// wildcard 0.0.0.0 and drives it through its configured address: it must
+// turn healthy, discovery must report it Ready with the served model, and
+// Stop must free the port and end the process group. Splash refuses a Host
+// header naming the wildcard, so each step passes only when the probes dial
+// loopback while the instance stays keyed by 0.0.0.0:<port> (ADR-0006).
+func TestSplashWildcardHost(t *testing.T) {
+	mustFindBinary(t, "splash")
+	model := integrationSplashModel(t)
+	b, err := GetLLMServer("splash")
+	if err != nil {
+		t.Fatalf("splash backend not registered: %v", err)
+	}
+	cfg, profile := resolveSplashProfile(t, t.TempDir(), model, "0.0.0.0")
+
+	inst, err := StartServer(cfg, profile)
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	killServerOnCleanup(t, inst)
+	addr := inst.Addr()
+
+	if !t.Run("wait-for-healthy", func(st *testing.T) {
+		waitForSplashHealthy(st, b, addr)
+	}) {
+		t.Fatal("server never became healthy; skipping the remaining steps")
+	}
+
+	t.Run("discovery-reports-ready", func(st *testing.T) {
+		found := findInstance(DiscoverRunningInstances(cfg), addr)
+		if found == nil {
+			st.Fatalf("discovery found no instance at %s", addr)
+		}
+		if found.Backend != "splash" || found.Starting || found.ActiveModel != model {
+			st.Errorf("discovery at %s = %+v, want a Ready splash serving %q", addr, found, model)
+		}
+	})
+
+	if !t.Run("stop", func(st *testing.T) {
+		result, err := Stop(addr)
+		if err != nil {
+			st.Fatalf("Stop(%s): %v", addr, err)
+		}
+		if result.Instance == nil || result.Instance.PID != inst.PID {
+			st.Errorf("Stop reported instance %+v, want the started PID %d", result.Instance, inst.PID)
+		}
+	}) {
+		t.Fatal("stop failed; skipping the stop verification")
+	}
+
+	t.Run("stopped", func(st *testing.T) {
+		waitForUnhealthy(st, b, addr, splashStopTimeout)
+		waitForProcessGone(st, inst.PID, splashStopTimeout)
+
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			st.Fatalf("port %s not released after Stop: %v", addr, err)
+		}
+		if err := listener.Close(); err != nil {
+			st.Errorf("closing the port-release probe listener: %v", err)
+		}
+	})
 }
