@@ -274,7 +274,11 @@ internal/launcher/server_test.go — TestTerminatePID; llama-launcher.TDD.md —
 - `go test ./internal/launcher/ -run 'TestProcessIdentity|TestParseProcStat|TestTerminatePID|TestStopServerAt' -count=1`
 **Commit:** `fix(launcher): verify PID identity before each stop signal`
 
-## 13. "Edit config" works where it can and is hidden where it cannot
+## 13. "Edit config" works where it can and is hidden where it cannot — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): editConfigCommand takes the config path and returns the built `*exec.Cmd` plus `ok` rather than a builder func; `menuOffersEdit(cfg)` wraps it for the six menu sites, and `doEditConfig` returns a new `errNoEditor` if reached with no editor (defensive; the menus never offer it then).
+NOTES (2026-09-24): the platform seam is a package var `editConfigGOOS = runtime.GOOS` in menu.go; TDD §16.6 says platform knowledge never sits in a shared-path `runtime.GOOS` branch, so §16.6 now names this read as a deliberate exception (no platform primitive, both branches compile everywhere).
+NOTES (2026-09-24): the numbered fallbacks are tested end to end (stdin piped with `q`/`e`, stdout captured) rather than through an extracted prompt builder; the TUI lists come from the extracted `stoppedMenuItems` / `loadedMenuItems` / `idleMenuItems`.
 
 **What:** Fixes audit finding "\"Edit config\" is macOS-only but offered in every menu variant" (ADR-0012).
 **Regression guard.** New tests carry the filter's prefixes (only TestMenuRefreshInterval matches today). The key-migration prompt offers no Edit config (Move / Not now / Never) and is out of the Goal. Every `doEditConfig` site consults `ok`: the 3 TUI item appends and cases (`runStoppedMenu`, `runLoadedMenu`, `runIdleMenu`) and the 3 `*Simple` menus, including the `[1-%d, e, q]` / `[1-%d, s, e, q]` prompts, the numbered item and the `e` branch. The item lists come from extracted builders (or a `menuOffersEdit` helper) the test asserts; an empty `VISUAL`/`EDITOR` counts as unset.

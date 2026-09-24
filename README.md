@@ -211,6 +211,8 @@ Run without arguments to get the TUI menu. It adapts to three states:
 - **Running with model** — switch models, unload model, stop server, show log, show model config, edit config
 - **Running (no model)** — load a profile, stop server, show log, edit config
 
+**Edit config** opens the config file with `open` on macOS (the default app for `.yaml` files). On other platforms it runs `$VISUAL`, or `$EDITOR` if `$VISUAL` is unset, in the terminal (a value with flags such as `code -w` works) and waits for the editor to exit. If neither is set, the menu leaves the item out.
+
 When more than one instance is running, the relevant actions (stop, unload, show log) present an instance picker disambiguated by `host:port`.
 
 Each profile row shows its title, the effective context size the backend will actually receive (compacted to `4K` / `65K` / `131K` / `1M`), a `[server]` tag when more than one backend is enabled, and the `★` favourite marker:

@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -863,5 +864,261 @@ func TestStopTargetItems_LabelsAuthFailedInstance(t *testing.T) {
 	}
 	if items[1].Label == "" || contains(items[1].Label, "auth failed") {
 		t.Errorf("identified row label = %q, want its backend name", items[1].Label)
+	}
+}
+
+// setEditConfigGOOS points editConfigCommand at goos for the rest of the
+// test. It swaps a package variable, so callers must not call t.Parallel().
+func setEditConfigGOOS(t *testing.T, goos string) {
+	t.Helper()
+
+	original := editConfigGOOS
+	editConfigGOOS = goos
+	t.Cleanup(func() { editConfigGOOS = original })
+}
+
+// withStdin feeds input to os.Stdin for the rest of the test, so a numbered
+// menu's readLine returns without a terminal. It swaps process state, so
+// callers must not call t.Parallel().
+func withStdin(t *testing.T, input string) {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+	if _, err := writer.WriteString(input); err != nil {
+		t.Fatalf("writing stdin: %v", err)
+	}
+	writer.Close()
+
+	original := os.Stdin
+	os.Stdin = reader
+	t.Cleanup(func() {
+		os.Stdin = original
+		reader.Close()
+	})
+}
+
+// TestEditConfigCommand pins which command "Edit config" runs: `open` on
+// darwin, and elsewhere $VISUAL before $EDITOR, split on whitespace with the
+// config path appended and the terminal attached. Neither set (or both
+// empty) means there is no command at all.
+func TestEditConfigCommand(t *testing.T) {
+	const path = "/home/user/.config/llama-launcher/config.yaml"
+
+	tests := []struct {
+		name     string
+		goos     string
+		visual   string
+		editor   string
+		wantArgs []string
+	}{
+		{"darwin opens the file whatever the editor", "darwin", "", "vim", []string{"open", path}},
+		{"linux splits EDITOR on whitespace", "linux", "", "code -w", []string{"code", "-w", path}},
+		{"linux prefers VISUAL over EDITOR", "linux", "nvim", "nano", []string{"nvim", path}},
+		{"linux treats a blank VISUAL as unset", "linux", "   ", "nano", []string{"nano", path}},
+		{"linux with neither set has no command", "linux", "", "", nil},
+		{"windows with neither set has no command", "windows", "", "", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setEditConfigGOOS(t, tc.goos)
+			t.Setenv("VISUAL", tc.visual)
+			t.Setenv("EDITOR", tc.editor)
+
+			cmd, ok := editConfigCommand(path)
+
+			if tc.wantArgs == nil {
+				if ok || cmd != nil {
+					t.Fatalf("editConfigCommand = (%v, %v), want (nil, false)", cmd, ok)
+				}
+				return
+			}
+			if !ok {
+				t.Fatal("editConfigCommand reported no command")
+			}
+			if got, want := strings.Join(cmd.Args, " "), strings.Join(tc.wantArgs, " "); got != want {
+				t.Errorf("args = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestEditConfigCommand_TerminalEditorOwnsTheTerminal pins that a terminal
+// editor inherits stdin/stdout/stderr, so it can draw and the menu waits
+// for it.
+func TestEditConfigCommand_TerminalEditorOwnsTheTerminal(t *testing.T) {
+	setEditConfigGOOS(t, "linux")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "vi")
+
+	cmd, ok := editConfigCommand("/tmp/config.yaml")
+
+	if !ok {
+		t.Fatal("editConfigCommand reported no command")
+	}
+	if cmd.Stdin != os.Stdin || cmd.Stdout != os.Stdout || cmd.Stderr != os.Stderr {
+		t.Error("the editor does not inherit the terminal")
+	}
+}
+
+// TestEditConfig_DoEditConfigRefusesWithoutEditor pins the refusal when the verb is reached
+// with no editor: an error naming the fix, never a failed exec.
+func TestEditConfig_DoEditConfigRefusesWithoutEditor(t *testing.T) {
+	setEditConfigGOOS(t, "linux")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+
+	err := doEditConfig(&Config{ConfigPath: "/tmp/config.yaml"})
+
+	if !errors.Is(err, errNoEditor) {
+		t.Errorf("doEditConfig = %v, want errNoEditor", err)
+	}
+}
+
+// editMenuConfig is a two-Profile config for the menu-variant tests.
+func editMenuConfig() *Config {
+	return &Config{
+		ConfigPath: "/tmp/config.yaml",
+		Servers:    map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		Profiles: map[string]Profile{
+			"big":   {Title: "Big", ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+			"small": {Title: "Small", ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+		},
+	}
+}
+
+// menuLabels lists the labels of items, separators left out.
+func menuLabels(items []menuItem) []string {
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		if !item.Separator {
+			labels = append(labels, item.Label)
+		}
+	}
+	return labels
+}
+
+// TestMenuItems_EditConfigOnlyWithAnEditor pins that every TUI menu variant
+// offers "Edit config" on darwin and with an editor set, and leaves it out
+// where neither `open` nor $VISUAL/$EDITOR can open the file.
+func TestMenuItems_EditConfigOnlyWithAnEditor(t *testing.T) {
+	inst := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, LogFile: "/tmp/server.log"}
+	builders := map[string]func(cfg *Config) []menuItem{
+		"stopped": func(cfg *Config) []menuItem { return stoppedMenuItems(cfg, cfg.ProfileNames(), true) },
+		"loaded":  func(cfg *Config) []menuItem { return loadedMenuItems(cfg, inst) },
+		"idle":    func(cfg *Config) []menuItem { return idleMenuItems(cfg, inst, cfg.ProfileNames()) },
+	}
+	platforms := []struct {
+		name     string
+		goos     string
+		editor   string
+		wantEdit bool
+	}{
+		{"darwin", "darwin", "", true},
+		{"linux with EDITOR", "linux", "vi", true},
+		{"linux without an editor", "linux", "", false},
+	}
+	for _, platform := range platforms {
+		for variant, build := range builders {
+			t.Run(platform.name+"/"+variant, func(t *testing.T) {
+				setEditConfigGOOS(t, platform.goos)
+				t.Setenv("VISUAL", "")
+				t.Setenv("EDITOR", platform.editor)
+
+				labels := menuLabels(build(editMenuConfig()))
+
+				hasEdit := strings.Contains(strings.Join(labels, "|"), "Edit config")
+				if hasEdit != platform.wantEdit {
+					t.Errorf("items %q: Edit config offered = %v, want %v", labels, hasEdit, platform.wantEdit)
+				}
+			})
+		}
+	}
+}
+
+// TestMenuSimple_EditConfigOnlyWithAnEditor pins the same rule for the
+// numbered fallbacks: with no editor neither the "Edit config" line nor the
+// `e` key in the Select prompt appears; with one, both do.
+func TestMenuSimple_EditConfigOnlyWithAnEditor(t *testing.T) {
+	inst := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080}
+	variants := []struct {
+		name       string
+		run        func(cfg *Config) error
+		withEdit   string
+		withoutKey string
+	}{
+		{
+			name:       "stopped",
+			run:        func(cfg *Config) error { return runStoppedMenuSimple(cfg, cfg.ProfileNames()) },
+			withEdit:   "Select [1-2, e, q]: ",
+			withoutKey: "Select [1-2, q]: ",
+		},
+		{
+			name:       "loaded",
+			run:        func(cfg *Config) error { return runLoadedMenuSimple(cfg, inst) },
+			withEdit:   "    5  Edit config\n",
+			withoutKey: "Select [1-4, q]: ",
+		},
+		{
+			name:       "idle",
+			run:        func(cfg *Config) error { return runIdleMenuSimple(cfg, inst, cfg.ProfileNames()) },
+			withEdit:   "Select [1-2, s, e, q]: ",
+			withoutKey: "Select [1-2, s, q]: ",
+		},
+	}
+	for _, variant := range variants {
+		t.Run(variant.name+"/with EDITOR", func(t *testing.T) {
+			setEditConfigGOOS(t, "linux")
+			t.Setenv("VISUAL", "")
+			t.Setenv("EDITOR", "vi")
+			withStdin(t, "q\n")
+
+			var err error
+			out := captureStdout(t, func() { err = variant.run(editMenuConfig()) })
+
+			if err != nil {
+				t.Fatalf("menu returned %v", err)
+			}
+			if !strings.Contains(out, variant.withEdit) {
+				t.Errorf("output lacks %q:\n%s", variant.withEdit, out)
+			}
+		})
+		t.Run(variant.name+"/without an editor", func(t *testing.T) {
+			setEditConfigGOOS(t, "linux")
+			t.Setenv("VISUAL", "")
+			t.Setenv("EDITOR", "")
+			withStdin(t, "q\n")
+
+			var err error
+			out := captureStdout(t, func() { err = variant.run(editMenuConfig()) })
+
+			if err != nil {
+				t.Fatalf("menu returned %v", err)
+			}
+			if strings.Contains(out, "Edit config") {
+				t.Errorf("output offers Edit config:\n%s", out)
+			}
+			if !strings.Contains(out, variant.withoutKey) {
+				t.Errorf("output lacks %q:\n%s", variant.withoutKey, out)
+			}
+		})
+	}
+}
+
+// TestMenuSimple_EKeyIgnoredWithoutAnEditor pins that typing `e` where the
+// verb is not offered is an invalid selection, not an attempt to edit.
+func TestMenuSimple_EKeyIgnoredWithoutAnEditor(t *testing.T) {
+	setEditConfigGOOS(t, "linux")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+	withStdin(t, "e\n")
+
+	var err error
+	_ = captureStdout(t, func() { err = runStoppedMenuSimple(editMenuConfig(), []string{"big", "small"}) })
+
+	if err == nil || !strings.Contains(err.Error(), "invalid selection") {
+		t.Errorf("runStoppedMenuSimple = %v, want an invalid-selection error", err)
 	}
 }

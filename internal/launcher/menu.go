@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -230,12 +231,8 @@ func runStoppedMenu(cfg *Config, stateSig string) error {
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := liveStatusHeaderFn(cfg, stateSig)
 
-	items := buildProfileItems(cfg, names)
-	items = append(items, menuItem{Separator: true})
-	if running := DiscoverRunningInstances(cfg); len(running) > 0 {
-		items = append(items, menuItem{Label: "Stop server"})
-	}
-	items = append(items, menuItem{Label: "Edit config"})
+	hasRunning := len(DiscoverRunningInstances(cfg)) > 0
+	items := stoppedMenuItems(cfg, names, hasRunning)
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter start & load · q quit", cfg.ShouldDisplayCentered(), menuTickInterval(cfg))
 
@@ -269,17 +266,7 @@ func runLoadedMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := liveStatusHeaderFn(cfg, stateSig)
 
-	items := []menuItem{}
-	if len(cfg.ProfileNames()) > 1 {
-		items = append(items, menuItem{Label: "Switch model"})
-	}
-	items = append(items, menuItem{Label: "Unload model"})
-	items = append(items, menuItem{Label: "Stop server"})
-	if inst.LogFile != "" {
-		items = append(items, menuItem{Label: "Show log"})
-	}
-	items = append(items, menuItem{Label: "Show model config"})
-	items = append(items, menuItem{Label: "Edit config"})
+	items := loadedMenuItems(cfg, inst)
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter confirm · q quit", cfg.ShouldDisplayCentered(), menuTickInterval(cfg))
 
@@ -320,13 +307,7 @@ func runIdleMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 	title := fmt.Sprintf("%sllama-launcher %s%s%s", cBoldLightGray, cReset+cDim, Version, cReset)
 	headerFn := liveStatusHeaderFn(cfg, stateSig)
 
-	items := buildProfileItems(cfg, names)
-	items = append(items, menuItem{Separator: true})
-	items = append(items, menuItem{Label: "Stop server"})
-	if inst.LogFile != "" {
-		items = append(items, menuItem{Label: "Show log"})
-	}
-	items = append(items, menuItem{Label: "Edit config"})
+	items := idleMenuItems(cfg, inst, names)
 
 	idx := selectMenu(title, headerFn, items, "↑↓ select · enter load · q quit", cfg.ShouldDisplayCentered(), menuTickInterval(cfg))
 
@@ -353,6 +334,57 @@ func runIdleMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 		return doEditConfig(cfg)
 	}
 	return nil
+}
+
+// stoppedMenuItems is the item list of the menu shown when no server is
+// running: the Profiles, a separator, "Stop server" when hasRunning says an
+// instance appeared after all, and "Edit config" where menuOffersEdit allows.
+func stoppedMenuItems(cfg *Config, names []string, hasRunning bool) []menuItem {
+	items := buildProfileItems(cfg, names)
+	items = append(items, menuItem{Separator: true})
+	if hasRunning {
+		items = append(items, menuItem{Label: "Stop server"})
+	}
+	if menuOffersEdit(cfg) {
+		items = append(items, menuItem{Label: "Edit config"})
+	}
+	return items
+}
+
+// loadedMenuItems is the item list of the menu shown while inst has a Model
+// loaded. "Switch model" needs a second Profile to switch to, "Show log" a
+// log file, and "Edit config" an editor (menuOffersEdit).
+func loadedMenuItems(cfg *Config, inst *RunningInstance) []menuItem {
+	items := []menuItem{}
+	if len(cfg.ProfileNames()) > 1 {
+		items = append(items, menuItem{Label: "Switch model"})
+	}
+	items = append(items, menuItem{Label: "Unload model"})
+	items = append(items, menuItem{Label: "Stop server"})
+	if inst.LogFile != "" {
+		items = append(items, menuItem{Label: "Show log"})
+	}
+	items = append(items, menuItem{Label: "Show model config"})
+	if menuOffersEdit(cfg) {
+		items = append(items, menuItem{Label: "Edit config"})
+	}
+	return items
+}
+
+// idleMenuItems is the item list of the menu shown while inst runs with no
+// Model: the Profiles to load, a separator, "Stop server", "Show log" when
+// inst has a log file, and "Edit config" where menuOffersEdit allows.
+func idleMenuItems(cfg *Config, inst *RunningInstance, names []string) []menuItem {
+	items := buildProfileItems(cfg, names)
+	items = append(items, menuItem{Separator: true})
+	items = append(items, menuItem{Label: "Stop server"})
+	if inst.LogFile != "" {
+		items = append(items, menuItem{Label: "Show log"})
+	}
+	if menuOffersEdit(cfg) {
+		items = append(items, menuItem{Label: "Edit config"})
+	}
+	return items
 }
 
 func doSwitchModel(cfg *Config, current *RunningInstance) error {
@@ -577,9 +609,55 @@ func doShowConfig(cfg *Config, inst *RunningInstance) error {
 	return nil
 }
 
+// editConfigGOOS is the platform editConfigCommand decides for: runtime.GOOS
+// in production, reassigned by tests so either branch runs on any host.
+var editConfigGOOS = runtime.GOOS
+
+// errNoEditor is what "Edit config" returns if it is reached with no editor
+// to run — the menus leave the verb out then, so only a $VISUAL/$EDITOR
+// cleared between drawing a menu and choosing from it gets here.
+var errNoEditor = errors.New("no editor to open the config with: set $VISUAL or $EDITOR")
+
+// editConfigCommand builds the command "Edit config" runs on path and reports
+// whether this platform has one. On darwin it is `open <path>`, which hands
+// the file to the user's default app and returns. Elsewhere it is $VISUAL,
+// else $EDITOR — an empty value counts as unset — split on whitespace so a
+// value such as "code -w" keeps its flags, with path appended and the
+// terminal attached, so Run waits for the editor to exit. With neither set,
+// ok is false and cmd is nil.
+func editConfigCommand(path string) (cmd *exec.Cmd, ok bool) {
+	if editConfigGOOS == "darwin" {
+		return exec.Command("open", path), true
+	}
+
+	editor := strings.Fields(os.Getenv("VISUAL"))
+	if len(editor) == 0 {
+		editor = strings.Fields(os.Getenv("EDITOR"))
+	}
+	if len(editor) == 0 {
+		return nil, false
+	}
+
+	cmd = exec.Command(editor[0], append(editor[1:], path)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd, true
+}
+
+// menuOffersEdit reports whether the menus offer "Edit config": only where
+// editConfigCommand has a command to run, so the verb is never shown where
+// it would fail.
+func menuOffersEdit(cfg *Config) bool {
+	_, ok := editConfigCommand(cfg.ConfigPath)
+	return ok
+}
+
 func doEditConfig(cfg *Config) error {
+	cmd, ok := editConfigCommand(cfg.ConfigPath)
+	if !ok {
+		return errNoEditor
+	}
 	fmt.Print(escClear + escCursorShow)
-	return exec.Command("open", cfg.ConfigPath).Run()
+	return cmd.Run()
 }
 
 // formatProfileParams renders the "Show model config" pop-up body. Which
@@ -999,13 +1077,19 @@ func runStoppedMenuSimple(cfg *Config, names []string) error {
 	for i, line := range simpleItems {
 		fmt.Printf("    %d  %s\n", i+1, line)
 	}
-	fmt.Printf("    e  Edit config\n    q  Quit\n\n  Select [1-%d, e, q]: ", len(names))
+	canEdit := menuOffersEdit(cfg)
+	keys := ""
+	if canEdit {
+		fmt.Println("    e  Edit config")
+		keys = ", e"
+	}
+	fmt.Printf("    q  Quit\n\n  Select [1-%d%s, q]: ", len(names), keys)
 
 	choice := readLine()
 	if choice == "q" || choice == "" {
 		return nil
 	}
-	if choice == "e" {
+	if choice == "e" && canEdit {
 		return doEditConfig(cfg)
 	}
 	idx := parseChoice(choice, len(names))
@@ -1053,9 +1137,11 @@ func runLoadedMenuSimple(cfg *Config, inst *RunningInstance) error {
 	n++
 	configIdx = n
 	fmt.Printf("    %d  Show config\n", n)
-	n++
-	editIdx = n
-	fmt.Printf("    %d  Edit config\n", n)
+	if menuOffersEdit(cfg) {
+		n++
+		editIdx = n
+		fmt.Printf("    %d  Edit config\n", n)
+	}
 	fmt.Println("    q  Quit")
 	fmt.Printf("\n  Select [1-%d, q]: ", n)
 
@@ -1099,7 +1185,14 @@ func runIdleMenuSimple(cfg *Config, inst *RunningInstance, names []string) error
 	for i, line := range simpleItems {
 		fmt.Printf("    %d  %s\n", i+1, line)
 	}
-	fmt.Printf("    s  Stop server\n    e  Edit config\n    q  Quit\n\n  Select [1-%d, s, e, q]: ", len(names))
+	fmt.Println("    s  Stop server")
+	canEdit := menuOffersEdit(cfg)
+	keys := ", s"
+	if canEdit {
+		fmt.Println("    e  Edit config")
+		keys += ", e"
+	}
+	fmt.Printf("    q  Quit\n\n  Select [1-%d%s, q]: ", len(names), keys)
 
 	choice := readLine()
 	if choice == "q" || choice == "" {
@@ -1108,7 +1201,7 @@ func runIdleMenuSimple(cfg *Config, inst *RunningInstance, names []string) error
 	if choice == "s" {
 		return doStopServer(cfg, inst)
 	}
-	if choice == "e" {
+	if choice == "e" && canEdit {
 		return doEditConfig(cfg)
 	}
 	idx := parseChoice(choice, len(names))
