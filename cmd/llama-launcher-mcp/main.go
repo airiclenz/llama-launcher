@@ -82,7 +82,12 @@ func main() {
 
 // newServer builds the MCP server and registers the tool surface. Read tools
 // are always available; mutating tools are omitted entirely when --read-only.
+//
+// newServer also sizes cfg's in-flight slots to maxInFlight: every tool runs
+// through the cap except stop_server, which bypasses it (see runUnbounded).
 func newServer(cfg *config) *mcp.Server {
+	cfg.slots = make(chan struct{}, maxInFlight)
+
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "llama-launcher",
 		Version: Version,
@@ -161,7 +166,7 @@ func newServer(cfg *config) *mcp.Server {
 		if err := validateTarget(args.Target); err != nil {
 			return toolError(err.Error()), nil, nil
 		}
-		return cfg.run(ctx, argsFor("stop", args.Target)...), nil, nil
+		return cfg.runUnbounded(ctx, argsFor("stop", args.Target)...), nil, nil
 	})
 
 	return s

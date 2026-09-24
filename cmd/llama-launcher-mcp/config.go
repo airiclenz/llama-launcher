@@ -38,6 +38,10 @@ type config struct {
 	llamaLauncherBin string
 	configPath       string
 	readOnly         bool
+	// slots bounds how many CLI subprocesses run at once across all tool
+	// calls: run holds one element for the life of its subprocess. newServer
+	// sizes it to maxInFlight; nil means unbounded (bare &config{} literals).
+	slots chan struct{}
 }
 
 func parseFlags(argv []string) (*config, error) {
@@ -125,6 +129,16 @@ const maxCapturedOutput = 1 << 20
 // maxCapturedOutput, so the caller knows the output is incomplete.
 const truncationNotice = "[output truncated: 1MiB cap reached]"
 
+// maxInFlight caps how many llama-launcher subprocesses the adapter runs at
+// once across all tool calls, so an allowlisted client firing calls in a loop
+// cannot fork the host without bound. Four covers a load, a status poll and a
+// log tail running side by side; further calls wait for a free slot.
+const maxInFlight = 4
+
+// slotWaitCanceledText is the tool-error text of a call whose request context
+// ended while it was still waiting for a free in-flight slot.
+const slotWaitCanceledText = "canceled while waiting for a free slot"
+
 // noOutputText is the sole content item of a successful run that wrote
 // nothing to either stream, so a result never carries empty content.
 const noOutputText = "(no output)"
@@ -172,7 +186,27 @@ func (w *limitedWriter) text() string {
 // subcommands print progress to stdout before they can fail. Each captured
 // stream is capped at maxCapturedOutput; content past the cap is dropped and
 // a truncation notice is appended.
+//
+// run first waits for one of the config's in-flight slots (see maxInFlight)
+// and holds it until the subprocess exits; if ctx ends while every slot is
+// taken, it returns slotWaitCanceledText as a tool error without running the
+// CLI. A nil slots channel runs unbounded.
 func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
+	if c.slots != nil {
+		select {
+		case c.slots <- struct{}{}:
+			defer func() { <-c.slots }()
+		case <-ctx.Done():
+			return toolError(slotWaitCanceledText)
+		}
+	}
+	return c.runUnbounded(ctx, args...)
+}
+
+// runUnbounded is run without the in-flight cap. Only stop_server uses it
+// directly: an explicit stop is what cancels an in-flight load (ADR-0010), so
+// it must never queue behind the load_profile calls holding the slots.
+func (c *config) runUnbounded(ctx context.Context, args ...string) *mcp.CallToolResult {
 	full := args
 	if c.configPath != "" {
 		full = append([]string{"--config", c.configPath}, args...)

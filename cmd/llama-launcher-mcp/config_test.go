@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -285,4 +287,141 @@ func TestRunErrorPathCapsBothStreams(t *testing.T) {
 	if n := strings.Count(got, truncationNotice); n != 2 {
 		t.Errorf("truncation notices = %d, want 2 (one per capped stream)", n)
 	}
+}
+
+// blockingCLI writes a fake llama-launcher that answers `stop` at once but
+// otherwise marks itself inside (an in.<pid> file in dir) and blocks until a
+// release file appears in dir, so a test can count the subprocesses running
+// at once and decide when they finish.
+func blockingCLI(t *testing.T) (bin, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI script is POSIX shell")
+	}
+	dir = t.TempDir()
+	bin = filepath.Join(dir, "fake-llama-launcher")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = stop ]; then echo stopped; exit 0; fi\n" +
+		"touch \"" + dir + "/in.$$\"\n" +
+		"while [ ! -e \"" + dir + "/release\" ]; do sleep 0.02; done\n" +
+		"rm -f \"" + dir + "/in.$$\"\n" +
+		"echo done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake CLI: %v", err)
+	}
+	return bin, dir
+}
+
+// insideCount reports how many blockingCLI subprocesses are currently inside.
+func insideCount(t *testing.T, dir string) int {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "in.*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(matches)
+}
+
+// waitInside polls until exactly want blockingCLI subprocesses are inside,
+// failing the test if that does not happen within a few seconds.
+func waitInside(t *testing.T, dir string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if insideCount(t, dir) == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("inside = %d, want %d", insideCount(t, dir), want)
+}
+
+// startBlockedRuns launches n concurrent cfg.run calls against a blockingCLI
+// and returns a function that releases them and collects their results. The
+// release also runs at cleanup, so a failing test never leaks subprocesses.
+func startBlockedRuns(t *testing.T, cfg *config, dir string, n int) func() []*mcp.CallToolResult {
+	t.Helper()
+	results := make([]*mcp.CallToolResult, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = cfg.run(context.Background(), "load", "qwen")
+		}(i)
+	}
+	var once sync.Once
+	release := func() []*mcp.CallToolResult {
+		once.Do(func() {
+			if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o644); err != nil {
+				t.Errorf("write release: %v", err)
+			}
+			wg.Wait()
+		})
+		return results
+	}
+	t.Cleanup(func() { release() })
+	return release
+}
+
+func TestRunBoundsInFlightSubprocesses(t *testing.T) {
+	bin, dir := blockingCLI(t)
+	cfg := &config{llamaLauncherBin: bin, slots: make(chan struct{}, maxInFlight)}
+	release := startBlockedRuns(t, cfg, dir, maxInFlight+2)
+
+	waitInside(t, dir, maxInFlight)
+	time.Sleep(200 * time.Millisecond) // give a fifth run the chance to slip in
+	if got := insideCount(t, dir); got != maxInFlight {
+		t.Fatalf("inside = %d while slots are held, want %d", got, maxInFlight)
+	}
+
+	for i, res := range release() {
+		if res.IsError {
+			t.Errorf("run %d: IsError, text %q", i, resultText(t, res))
+		}
+	}
+}
+
+func TestRunCanceledWhileWaitingForSlotIsError(t *testing.T) {
+	bin, dir := blockingCLI(t)
+	cfg := &config{llamaLauncherBin: bin, slots: make(chan struct{}, maxInFlight)}
+	startBlockedRuns(t, cfg, dir, maxInFlight)
+	waitInside(t, dir, maxInFlight)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := cfg.run(ctx, "load", "qwen")
+	if !res.IsError {
+		t.Fatal("a run canceled while waiting for a slot should be flagged as error")
+	}
+	if got := resultText(t, res); got != slotWaitCanceledText {
+		t.Errorf("text = %q, want %q", got, slotWaitCanceledText)
+	}
+	if got := insideCount(t, dir); got != maxInFlight {
+		t.Errorf("inside = %d, want %d: the canceled call must not run the CLI", got, maxInFlight)
+	}
+}
+
+func TestStopServerBypassesInFlightCap(t *testing.T) {
+	bin, dir := blockingCLI(t)
+	cfg := &config{llamaLauncherBin: bin}
+	s := startAdapter(t, cfg, loopbackAllow(t)) // newServer sizes cfg.slots
+	if cap(cfg.slots) != maxInFlight {
+		t.Fatalf("slots cap = %d, want %d", cap(cfg.slots), maxInFlight)
+	}
+	startBlockedRuns(t, cfg, dir, maxInFlight)
+	waitInside(t, dir, maxInFlight)
+
+	if got := callText(t, s, "stop_server", map[string]any{}); got != "stopped" {
+		t.Errorf("stop_server text = %q, want %q", got, "stopped")
+	}
+}
+
+func TestRunWithoutSlotsIsUnbounded(t *testing.T) {
+	bin, dir := blockingCLI(t)
+	cfg := &config{llamaLauncherBin: bin}
+	release := startBlockedRuns(t, cfg, dir, maxInFlight+2)
+
+	waitInside(t, dir, maxInFlight+2)
+	release()
 }

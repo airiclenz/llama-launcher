@@ -104,7 +104,9 @@ cmd/llama-launcher-mcp/integration_test.go — callText; internal/launcher/cli.g
 - `go test ./cmd/llama-launcher-mcp/ -count=1`
 **Commit:** `fix(mcp): keep stdout as the sole first tool-result item`
 
-## 4. MCP adapter bounds in-flight subprocesses
+## 4. MCP adapter bounds in-flight subprocesses — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): the stop_server bypass is a sibling method `config.runUnbounded` (the exec body, which `run` wraps with the slot acquire/release) rather than a flag on `run`; the stop_server test drives the real handler through `startAdapter` while 4 `config.run` calls hold the slots.
 
 **What:** Fixes audit finding "No bound on in-flight MCP tool subprocesses".
 **Regression guard.** `stop_server` never waits on the cap — it runs outside the 4 slots, so held `load_profile` calls cannot delay the stop that cancels a load; the item yields to ADR-0010 ("An explicit stop stops it", docs/adr/0010-starting-instances-are-visible-and-stoppable.md). The semaphore is a field on `config` acquired in `config.run` (the one exec site; handlers have no runner seam); nil means unbounded, since tests build `&config{}` literals.
