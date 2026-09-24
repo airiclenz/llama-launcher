@@ -806,3 +806,62 @@ func TestFormatProfileParams_RedactsAPIKey(t *testing.T) {
 		t.Errorf("expected redacted --api-key line, got: %v", lines)
 	}
 }
+
+// TestServerStatusLines_AuthFailedInstance pins the menu header rendering
+// of a server refusing the configured api_key: its Backend "" matches no
+// enabled backend's line, so it gets a line of its own carrying the shared
+// auth-failed label, while the enabled backends keep their lines.
+func TestServerStatusLines_AuthFailedInstance(t *testing.T) {
+	t.Parallel()
+
+	noMem := false
+	cfg := &Config{
+		Servers:          map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		ShowMemoryStatus: &noMem,
+	}
+	instances := []*RunningInstance{
+		{Host: "127.0.0.1", Port: 9090, AuthFailed: true},
+		{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "llama3"},
+	}
+
+	lines := serverStatusLines(cfg, instances)
+
+	want := "auth failed at 127.0.0.1:9090 — check api_key in the servers section"
+	var authLine string
+	for _, line := range lines {
+		if contains(line, "127.0.0.1:9090") {
+			authLine = line
+		}
+	}
+	if !contains(authLine, want) {
+		t.Errorf("header lacks %q: %v", want, lines)
+	}
+	if contains(authLine, "llama3") || contains(authLine, "stopped") {
+		t.Errorf("auth-failed line renders a model or a stopped state: %q", authLine)
+	}
+}
+
+// TestStopTargetItems_LabelsAuthFailedInstance pins the stop sub-menu row
+// of a server refusing the configured api_key: the shared auth-failed
+// label, never an empty backend name beside the bare address.
+func TestStopTargetItems_LabelsAuthFailedInstance(t *testing.T) {
+	t.Parallel()
+
+	instances := []*RunningInstance{
+		{Host: "127.0.0.1", Port: 9090, AuthFailed: true},
+		{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "llama3"},
+	}
+
+	items := stopTargetItems(instances)
+
+	if len(items) != len(instances) {
+		t.Fatalf("got %d items, want %d", len(items), len(instances))
+	}
+	want := "auth failed at 127.0.0.1:9090 — check api_key in the servers section"
+	if items[0].Label != want {
+		t.Errorf("auth-failed row label = %q, want %q", items[0].Label, want)
+	}
+	if items[1].Label == "" || contains(items[1].Label, "auth failed") {
+		t.Errorf("identified row label = %q, want its backend name", items[1].Label)
+	}
+}

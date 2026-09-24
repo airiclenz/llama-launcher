@@ -25,6 +25,7 @@ type statusJSONEntry struct {
 	// ActiveModel is the machine contract this plan deliberately leaves raw:
 	// clients match on the id the server reported, path and all.
 	ActiveModel string `json:"active_model"`
+	AuthFailed  bool   `json:"auth_failed"`
 }
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
@@ -203,7 +204,7 @@ func TestCmdStatusJSON_ListsEveryInstanceOfABackend(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &raw); err != nil {
 		t.Fatalf("re-unmarshalling status JSON: %v", err)
 	}
-	for _, key := range []string{"backend", "running", "starting", "address", "active_profile", "active_model", "pid", "uptime_seconds"} {
+	for _, key := range []string{"backend", "running", "starting", "address", "active_profile", "active_model", "pid", "uptime_seconds", "auth_failed"} {
 		if _, ok := raw[0][key]; !ok {
 			t.Errorf("running entry is missing documented key %q: %v", key, raw[0])
 		}
@@ -902,6 +903,135 @@ func TestRun_ExitCodes(t *testing.T) {
 			_, code := runCLI(t, cfgPath, c.args...)
 			if code != c.want {
 				t.Errorf("Run(%v) exit = %d, want %d", c.args, code, c.want)
+			}
+		})
+	}
+}
+
+// authFailedCfg returns a startingCfg for backend at healthyAddr plus a
+// profile of the same backend at a server answering every request with 401,
+// so discovery reports that second address as one AuthFailed row. It
+// returns the config and the refusing address.
+func authFailedCfg(t *testing.T, backend, healthyAddr string) (*Config, string) {
+	t.Helper()
+
+	refusingHost, refusingPort := authRefusingServer(t, http.StatusUnauthorized)
+	cfg := startingCfg(t, backend, healthyAddr)
+	cfg.Profiles["refusing"] = Profile{ProfileParams: ProfileParams{Host: &refusingHost, Port: &refusingPort}}
+	return cfg, fmt.Sprintf("%s:%d", refusingHost, refusingPort)
+}
+
+// TestCmdStatus_RendersAuthFailedInstance pins the human rendering of a
+// server refusing the configured api_key: one row carrying the shared
+// auth-failed label, never the bare address with no backend, and no panic
+// from the fixed-width state column. Not parallel: captureStdout swaps
+// os.Stdout.
+func TestCmdStatus_RendersAuthFailedInstance(t *testing.T) {
+	srv := newFakeLlamaCppServerServingModel(t, "healthy-model")
+	cfg, refusingAddr := authFailedCfg(t, "llamacpp", addrFromURL(t, srv.URL))
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStatus(cfg, nil) })
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (servers are running)", code)
+	}
+	want := "auth failed at " + refusingAddr + " — check api_key in the servers section"
+	if !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, refusingAddr) && strings.Contains(line, "LLaMA.cpp") {
+			t.Errorf("auth-failed row names a backend: %q", line)
+		}
+	}
+	if !strings.Contains(out, "healthy-model") {
+		t.Errorf("the healthy instance's row lost its model:\n%s", out)
+	}
+}
+
+// TestCmdStatusJSON_ReportsAuthFailedInstance pins the machine contract
+// for a server refusing the configured api_key: it is one object with
+// backend "", running=false and auth_failed=true, while the healthy
+// backend's object keeps its values and carries auth_failed=false. Not
+// parallel: captureStdout swaps os.Stdout.
+func TestCmdStatusJSON_ReportsAuthFailedInstance(t *testing.T) {
+	srv := newFakeLlamaCppServer(t)
+	healthyAddr := addrFromURL(t, srv.URL)
+	cfg, refusingAddr := authFailedCfg(t, "llamacpp", healthyAddr)
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStatusJSON(cfg) })
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (servers are running)", code)
+	}
+	entries := decodeStatusJSON(t, out)
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(entries), entries)
+	}
+	healthy, refusing := entries[0], entries[1]
+	if healthy.Backend != "llamacpp" || healthy.Address != healthyAddr || !healthy.Running || healthy.AuthFailed {
+		t.Errorf("healthy entry = %+v, want llamacpp at %s, running, auth_failed false", healthy, healthyAddr)
+	}
+	if refusing.Backend != "" || refusing.Address != refusingAddr || refusing.Running || refusing.Starting || !refusing.AuthFailed {
+		t.Errorf("auth-failed entry = %+v, want backend \"\" at %s, running false, auth_failed true", refusing, refusingAddr)
+	}
+}
+
+// TestCmdUnload_AuthFailedInstance pins CLI unload against a server
+// refusing the configured api_key: it is listed among ambiguous candidates
+// with the shared auth-failed label, and unloading it — alone, or by a
+// profile at its address — fails with the authFailedErr message instead of
+// "No model loaded". Not parallel: captureStdout swaps os.Stdout.
+func TestCmdUnload_AuthFailedInstance(t *testing.T) {
+	t.Run("ambiguous listing labels it", func(t *testing.T) {
+		srv := newFakeLlamaCppServerServingModel(t, "healthy-model")
+		cfg, refusingAddr := authFailedCfg(t, "llamacpp", addrFromURL(t, srv.URL))
+
+		var code int
+		errOut := captureStderr(t, func() {
+			_ = captureStdout(t, func() { code = cmdUnload(cfg, nil) })
+		})
+
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (ambiguous target); stderr:\n%s", code, errOut)
+		}
+		want := "  auth failed at " + refusingAddr + " — check api_key in the servers section\n"
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut)
+		}
+		if !strings.Contains(errOut, "healthy-model") {
+			t.Errorf("stderr lost the healthy candidate:\n%s", errOut)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		args func(cfg *Config) []string
+	}{
+		{"the only candidate", func(*Config) []string { return nil }},
+		{"named by a profile", func(*Config) []string { return []string{"refusing"} }},
+	} {
+		t.Run(tt.name+" is refused with the auth error", func(t *testing.T) {
+			refusingHost, refusingPort := authRefusingServer(t, http.StatusUnauthorized)
+			cfg := sharedAddrCfg(t, refusingHost, refusingPort, "llamacpp")
+			cfg.Profiles["refusing"] = Profile{}
+
+			var code int
+			var out string
+			errOut := captureStderr(t, func() {
+				out = captureStdout(t, func() { code = cmdUnload(cfg, tt.args(cfg)) })
+			})
+
+			if code != 3 {
+				t.Errorf("exit code = %d, want 3; stdout:\n%s\nstderr:\n%s", code, out, errOut)
+			}
+			if !strings.Contains(errOut, "check api_key") || !strings.Contains(errOut, ErrAuthFailed.Error()) {
+				t.Errorf("stderr lacks the authFailedErr message:\n%s", errOut)
+			}
+			if strings.Contains(out, "No model loaded") {
+				t.Errorf("stdout reports no model instead of the auth failure:\n%s", out)
 			}
 		})
 	}

@@ -163,6 +163,11 @@ func cmdUnload(cfg *Config, args []string) int {
 		addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
 		instances := DiscoverRunningInstances(cfg)
 		target = findInstance(instances, addr)
+		if target != nil && target.AuthFailed {
+			if code, refused := refuseAuthFailedUnload(cfg, target); refused {
+				return code
+			}
+		}
 		// A Starting instance has no active model yet but is a valid unload
 		// target: unload on a managed backend reduces to stop (ADR-0010).
 		if target == nil || target.Backend != profile.Backend || (target.ActiveModel == "" && !target.Starting) {
@@ -172,8 +177,10 @@ func cmdUnload(cfg *Config, args []string) int {
 	} else {
 		instances := DiscoverRunningInstances(cfg)
 		var loaded []*RunningInstance
+		// An AuthFailed instance is a candidate too, so that unloading it
+		// names the auth failure rather than "No model loaded".
 		for _, inst := range instances {
-			if inst.ActiveModel != "" || inst.Starting {
+			if inst.ActiveModel != "" || inst.Starting || inst.AuthFailed {
 				loaded = append(loaded, inst)
 			}
 		}
@@ -184,11 +191,22 @@ func cmdUnload(cfg *Config, args []string) int {
 		if len(loaded) > 1 {
 			fmt.Fprintln(os.Stderr, "Multiple models loaded — specify which to unload:")
 			for _, inst := range loaded {
-				fmt.Fprintf(os.Stderr, "  %s at %s: %s\n", backendDisplayName(inst.Backend), inst.Addr(), unloadTargetLabel(inst))
+				if inst.AuthFailed {
+					fmt.Fprintf(os.Stderr, "  %s\n", instanceAtLabel(inst))
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "  %s: %s\n", instanceAtLabel(inst), unloadTargetLabel(inst))
 			}
 			return 2
 		}
 		target = loaded[0]
+		if target.AuthFailed {
+			if code, refused := refuseAuthFailedUnload(cfg, target); refused {
+				return code
+			}
+			fmt.Println("No model loaded.")
+			return 1
+		}
 	}
 
 	res, err := Unload(target.Backend, target.Addr())
@@ -203,6 +221,20 @@ func cmdUnload(cfg *Config, args []string) int {
 		fmt.Printf("Model unloaded (server still running at %s:%d)\n", res.Instance.Host, res.Instance.Port)
 	}
 	return 0
+}
+
+// refuseAuthFailedUnload refuses an unload of an AuthFailed instance with
+// the authFailedErr message, re-probed by discovery's own rule
+// (authRefusalAt). It reports refused false when the server no longer
+// refuses the api_key — it changed since discovery — and leaves the caller
+// to report what it finds instead.
+func refuseAuthFailedUnload(cfg *Config, inst *RunningInstance) (int, bool) {
+	err := authRefusalAt(cfg, inst.Addr())
+	if err == nil {
+		return 0, false
+	}
+	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	return 3, true
 }
 
 // unloadTargetLabel describes one candidate in the ambiguous-unload listing:
@@ -311,7 +343,7 @@ func resolveTargetInstance(cfg *Config, target string) (*RunningInstance, error)
 		}
 		fmt.Fprintln(os.Stderr, "Multiple servers running — specify which to stop:")
 		for _, inst := range running {
-			fmt.Fprintf(os.Stderr, "  %s at %s\n", backendDisplayName(inst.Backend), inst.Addr())
+			fmt.Fprintf(os.Stderr, "  %s\n", instanceAtLabel(inst))
 		}
 		return nil, fmt.Errorf("ambiguous target")
 	}
@@ -402,12 +434,21 @@ func cmdStatus(cfg *Config, args []string) int {
 
 	maxLen := 0
 	for _, inst := range instances {
+		if inst.AuthFailed {
+			continue
+		}
 		if n := len(backendDisplayName(inst.Backend)); n > maxLen {
 			maxLen = n
 		}
 	}
 
 	for _, inst := range instances {
+		// An AuthFailed row has no backend, state or model for the columns:
+		// its label is the whole row.
+		if inst.AuthFailed {
+			fmt.Printf("  ● %s\n", authFailedLabel(inst))
+			continue
+		}
 		b, err := GetLLMServer(inst.Backend)
 		if err != nil {
 			continue
@@ -552,8 +593,11 @@ func cmdList(cfg *Config, args []string) int {
 // appear (ADR-0006). A Starting instance (ADR-0010) reports running=false
 // with starting=true — running keeps meaning healthy. Entries are grouped
 // by backend name in sorted order; within a backend, instances are ordered
-// by address. Exit code matches the human path: 0 if any instance was
-// discovered (healthy or Starting), 1 if all are stopped.
+// by address. An AuthFailed address (a server refusing the configured
+// api_key) follows the backend entries as one object with backend "",
+// running=false and auth_failed=true; every other entry carries
+// auth_failed=false. Exit code matches the human path: 0 if any instance
+// was discovered (healthy, Starting or AuthFailed), 1 if all are stopped.
 func cmdStatusJSON(cfg *Config) int {
 	type entry struct {
 		Backend       string `json:"backend"`
@@ -564,6 +608,7 @@ func cmdStatusJSON(cfg *Config) int {
 		ActiveModel   string `json:"active_model"`
 		PID           int    `json:"pid"`
 		UptimeSeconds int64  `json:"uptime_seconds"`
+		AuthFailed    bool   `json:"auth_failed"`
 	}
 
 	var backends []string
@@ -601,6 +646,15 @@ func cmdStatusJSON(cfg *Config) int {
 		if !matched {
 			output = append(output, entry{Backend: name})
 		}
+	}
+	// AuthFailed rows have Backend "", which the per-backend loop never
+	// matches, so they are emitted on their own.
+	for _, inst := range instances {
+		if !inst.AuthFailed {
+			continue
+		}
+		anyRunning = true
+		output = append(output, entry{Address: inst.Addr(), AuthFailed: true})
 	}
 
 	data, err := json.MarshalIndent(output, "", "  ")
@@ -690,7 +744,7 @@ func cmdLogs(cfg *Config, args []string) int {
 		} else if len(instances) > 1 {
 			fmt.Fprintln(os.Stderr, "Multiple servers running — specify which to show logs for:")
 			for _, c := range instances {
-				fmt.Fprintf(os.Stderr, "  %s at %s\n", backendDisplayName(c.Backend), c.Addr())
+				fmt.Fprintf(os.Stderr, "  %s\n", instanceAtLabel(c))
 			}
 			return 2
 		}
@@ -698,6 +752,13 @@ func cmdLogs(cfg *Config, args []string) int {
 
 	if inst == nil {
 		fmt.Println("No server running.")
+		return 1
+	}
+
+	// An explicit host:port target can still name an AuthFailed row, which
+	// no backend identified and so no launcher-managed log belongs to.
+	if inst.AuthFailed {
+		fmt.Fprintf(os.Stderr, "No launcher-managed log is known for that server: %s.\n", authFailedLabel(inst))
 		return 1
 	}
 

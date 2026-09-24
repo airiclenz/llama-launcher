@@ -461,10 +461,16 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 
 // stopTargetItems builds the selection rows for the multiple-servers stop
 // menu. A Starting instance (ADR-0010) is a first-class stop target and is
-// labelled so the user knows the stop kills an in-flight model load.
+// labelled so the user knows the stop kills an in-flight model load. An
+// AuthFailed instance has no backend to name, so authFailedLabel is its
+// whole row.
 func stopTargetItems(instances []*RunningInstance) []menuItem {
 	items := make([]menuItem, len(instances))
 	for i, inst := range instances {
+		if inst.AuthFailed {
+			items[i] = menuItem{Label: authFailedLabel(inst)}
+			continue
+		}
 		desc := inst.Addr()
 		if inst.Starting {
 			desc += " · " + startingLabel
@@ -861,6 +867,23 @@ func serverLabel(backendName string) string {
 	return backendDisplayName(backendName)
 }
 
+// authFailedLabel is how every listing renders an AuthFailed instance: no
+// backend identified the server, so the row names the address and the fix
+// in place of a backend, model or state.
+func authFailedLabel(inst *RunningInstance) string {
+	return fmt.Sprintf("auth failed at %s — check api_key in the servers section", inst.Addr())
+}
+
+// instanceAtLabel names one instance in a candidate listing as
+// "<backend> at <addr>", or by authFailedLabel for an AuthFailed instance,
+// which has no backend to name.
+func instanceAtLabel(inst *RunningInstance) string {
+	if inst.AuthFailed {
+		return authFailedLabel(inst)
+	}
+	return fmt.Sprintf("%s at %s", backendDisplayName(inst.Backend), inst.Addr())
+}
+
 // statusTickInterval is how often the open menu re-renders its header so the
 // memory/GPU readout stays current. Backend probing is not tied to this tick;
 // it stays throttled to refresh_duration inside liveStatusHeaderFn.
@@ -944,6 +967,13 @@ func serverStatusLines(cfg *Config, instances []*RunningInstance) []string {
 				detail += " · " + modelDisplayName(inst.ActiveModel)
 			}
 			lines = append(lines, fmt.Sprintf("%s●%s %-*s  %s", cGreen, cReset, maxLen, serverName, detail))
+		}
+	}
+	// AuthFailed rows have Backend "", which no enabled backend's line
+	// collects, so they get lines of their own.
+	for _, inst := range instances {
+		if inst.AuthFailed {
+			lines = append(lines, fmt.Sprintf("%s●%s %s", cRed, cReset, authFailedLabel(inst)))
 		}
 	}
 
@@ -1054,7 +1084,11 @@ func runIdleMenuSimple(cfg *Config, inst *RunningInstance, names []string) error
 	if inst.Starting {
 		status = startingLabel
 	}
-	if inst.PID > 0 {
+	if inst.AuthFailed {
+		// No backend identified the server, so there is no server line to
+		// print: the label names the address and the fix.
+		fmt.Printf("  Status:  %s\n\n  Load a profile:\n\n", authFailedLabel(inst))
+	} else if inst.PID > 0 {
 		fmt.Printf("  Status:  %s\n  Server:  %s · %s:%d · PID %d · Uptime %s\n\n  Load a profile:\n\n",
 			status, displayName, inst.Host, inst.Port, inst.PID, formatUptime(inst.Uptime()))
 	} else {

@@ -102,7 +102,7 @@ func newServer(cfg *config) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "server_status",
-		Description: "Report every running or still-starting server instance plus each idle enabled backend (running, starting, address, active_profile, active_model, pid, uptime_seconds) as JSON. An instance still loading its model reports starting=true with running=false.",
+		Description: "Report every running or still-starting server instance plus each idle enabled backend (running, starting, address, active_profile, active_model, pid, uptime_seconds, auth_failed) as JSON. An instance still loading its model reports starting=true with running=false. A server refusing the configured api_key reports auth_failed=true with backend \"\" and running=false.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, any, error) {
 		return cfg.run(ctx, "status", "--json"), nil, nil
 	})
