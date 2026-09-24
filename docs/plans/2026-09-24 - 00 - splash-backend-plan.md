@@ -215,7 +215,10 @@ internal/launcher/process_windows.go — requireProcessControl; AGENTS.md`
 **Acceptance:** `go vet ./launcher/`, and `for f in CONTEXT.md docs/adr/0014-*.md skills/manage-llm-server/SKILL.md launcher/doc.go AGENTS.md; do grep -qi splash "$f" || echo "MISSING $f"; done` prints nothing.
 **Commit:** `docs: add Splash to the domain docs and record ADR-0014`
 
-## 8. TDD and README
+## 8. TDD and README — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): README Goal bullet names "the PATH symlink"; per the item's regression guard the setup text uses the wrapper-script wording and warns against a plain symlink instead.
+NOTES (2026-09-24): §5.4 gained a separate "Runtime binaries" table (llama-server, ollama, lms, splash) beside the Go-module table; it does not cover `lsof`/`ps`/`tail`, so bead `llama-launcher-readme-requirements-host-binaries` stays open.
+NOTES (2026-09-24): beyond the Goal's listed sections, the approach's enumeration rule also brought Splash into TDD §6.3–§6.5, §6.8, §7.2, §16.6, the §5.3 "Adding a new LLM Server" steps (MCP `knownBackends`), a new §8.1 Splash flag table, and README's intro line, starting-instance paragraph and Windows platform row.
 
 **What:** Depends on items 1–6.
 **Goal:**
