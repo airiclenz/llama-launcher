@@ -90,7 +90,7 @@ TestWriteRedactsTheSecretFromWhatTheStoreSaid, padToCutInsideTheKey; internal/la
 - `go test ./internal/keystore/ -count=1`
 **Commit:** `fix(keystore): refuse keychain values security -i could reparse`
 
-## 3. MCP tool results keep stdout as the sole first content item
+## 3. MCP tool results keep stdout as the sole first content item — ✅ DONE (2026-09-24)
 
 **What:** Fixes audit finding "The MCP adapter fuses stderr into its JSON tool results".
 **Goal:** For exit 0 or 1, `Content[0]` is the CLI's stdout verbatim (plus only the truncation notice when the cap hit) and non-empty stderr follows as `Content[1]`; empty stdout → the stderr item alone; both empty → the single item `(no output)`. `list_profiles` output with a plaintext-key warning parses as JSON from `Content[0]`. Exit ≥ 2 is unchanged.

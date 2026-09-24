@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -116,8 +117,57 @@ func TestRunExitOneWithStderrOnlyIsNotError(t *testing.T) {
 	if res.IsError {
 		t.Error("exit 1 should not be flagged as error")
 	}
+	if len(res.Content) != 1 {
+		t.Fatalf("content items = %d, want exactly 1 (the stderr text)", len(res.Content))
+	}
 	if got := resultText(t, res); got != "no server running" {
 		t.Errorf("text = %q", got)
+	}
+}
+
+// A warning on stderr (e.g. the plaintext-key notice) must not be fused into
+// stdout: the JSON payload stays alone in Content[0] so it still parses, and
+// the warning follows as Content[1].
+func TestRunStderrWarningFollowsStdoutAsSecondItem(t *testing.T) {
+	const warning = "warning: plaintext api_key in config"
+	cfg := &config{llamaLauncherBin: fakeCLI(t, `[{"name":"qwen"}]`, warning+"\n", 0)}
+
+	res := cfg.run(context.Background(), "list", "--json")
+
+	if res.IsError {
+		t.Fatal("exit 0 with a stderr warning should not be flagged as error")
+	}
+	if len(res.Content) != 2 {
+		t.Fatalf("content items = %d, want 2 (stdout, then stderr)", len(res.Content))
+	}
+	var profiles []map[string]any
+	if err := json.Unmarshal([]byte(resultText(t, res)), &profiles); err != nil {
+		t.Errorf("Content[0] does not parse as JSON: %v", err)
+	}
+	second, ok := res.Content[1].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("Content[1] is %T, want *mcp.TextContent", res.Content[1])
+	}
+	if second.Text != warning {
+		t.Errorf("Content[1] = %q, want %q", second.Text, warning)
+	}
+}
+
+// A successful run that writes nothing to either stream still returns content:
+// the single "(no output)" item.
+func TestRunNoOutputReturnsPlaceholder(t *testing.T) {
+	cfg := &config{llamaLauncherBin: fakeCLI(t, "", "", 0)}
+
+	res := cfg.run(context.Background(), "unload")
+
+	if res.IsError {
+		t.Fatal("exit 0 with no output should not be flagged as error")
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("content items = %d, want 1", len(res.Content))
+	}
+	if got := resultText(t, res); got != noOutputText {
+		t.Errorf("text = %q, want %q", got, noOutputText)
 	}
 }
 

@@ -125,6 +125,10 @@ const maxCapturedOutput = 1 << 20
 // maxCapturedOutput, so the caller knows the output is incomplete.
 const truncationNotice = "[output truncated: 1MiB cap reached]"
 
+// noOutputText is the sole content item of a successful run that wrote
+// nothing to either stream, so a result never carries empty content.
+const noOutputText = "(no output)"
+
 // limitedWriter retains at most limit bytes of what is written to it and
 // discards the rest, recording that truncation happened. Write always reports
 // the full input as consumed and never returns an error, so the subprocess
@@ -158,7 +162,8 @@ func (w *limitedWriter) text() string {
 
 // run executes `llama-launcher [--config path] <args...>` and maps the result
 // to an MCP tool result, keyed off the CLI's exit code: 0 is success and
-// stdout becomes the tool's text content; 1 is an informational negative
+// stdout becomes the tool's first text content item, with any stderr as a
+// second item (see successContent); 1 is an informational negative
 // (e.g. `status --json` exits 1 when nothing is running but still emits the
 // JSON array) and is returned as normal content so the caller keeps the data;
 // anything else — exit >= 2, a signal, or a failure to run the CLI at all —
@@ -197,19 +202,27 @@ func (c *config) run(ctx context.Context, args ...string) *mcp.CallToolResult {
 		}
 	}
 
-	text := out
+	return &mcp.CallToolResult{Content: successContent(out, errOut)}
+}
+
+// successContent maps the captured streams of a run that exited 0 or 1 to
+// tool-result content. Stdout, verbatim, is always the first item so a
+// machine-readable payload (e.g. `list --json`) parses from Content[0] on its
+// own; non-empty stderr (warnings, notices) follows as a separate item rather
+// than being fused into it. An empty stream contributes no item, and when both
+// are empty the single item is noOutputText.
+func successContent(out, errOut string) []mcp.Content {
+	content := make([]mcp.Content, 0, 2)
+	if out != "" {
+		content = append(content, &mcp.TextContent{Text: out})
+	}
 	if errOut != "" {
-		if text != "" {
-			text += "\n"
-		}
-		text += errOut
+		content = append(content, &mcp.TextContent{Text: errOut})
 	}
-	if text == "" {
-		text = "(no output)"
+	if len(content) == 0 {
+		content = append(content, &mcp.TextContent{Text: noOutputText})
 	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{&mcp.TextContent{Text: text}},
-	}
+	return content
 }
 
 // exitCode extracts the process exit code from a cmd.Run error. It returns -1
