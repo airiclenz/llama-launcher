@@ -30,7 +30,14 @@
 
 **Out of scope:** Gateway implementation; multi-host/federation; version bumps or release tags; changes to ADR-0002 or the CLI listener rule; any changes to how keys are stored or fetched.
 
-## 1. Empirically settle the two llama-server API-key questions
+## 1. Empirically settle the two llama-server API-key questions — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): observed on llama-server b10851 (commit 67672dc5b) with INTEGRATION_MODEL_LLAMACPP set to the LM Studio bundled nomic-embed-text-v1.5.Q4_K_M.gguf: (a) no echo of the LLAMA_API_KEY value or an --api-key argv value in the server log; (b) append — both keys answer 200 on /v1/models, a wrong key 401. Matches common/arg.cpp (env handlers run first, CLI --api-key handler push_back()s onto the same api_keys vector).
+NOTES (2026-09-24): deferred — CHANGELOG.md:17 (released 1.7.0 Security entry) still says "override still wins": the implementer protocol forbids editing the CHANGELOG file; the correction is carried by this sidecar's CHANGELOG entry for the closeout to apply.
+NOTES (2026-09-24): the test reports answers (a) and (b) via t.Logf (visible with -v) and asserts only the invariants the launcher relies on (configured key 200, extra_args key 200, wrong key 401, env key beside an override either 200 or 401); a future build that echoes keys or switches to replace would not fail the suite — item 2's unconditional redaction covers the echo case.
+NOTES (2026-09-24): the tagged test reuses the tagged suite helpers freePort, waitForHealthy, killServerOnCleanup, llamaCppBackend and llamaCppHealthyTimeout; it does not reference mustFindBinary or integrationLlamaCppModel.
+NOTES (2026-09-24): TODO.md:31 left unticked (dated note added under it; the item is listed under CLOSES for the closeout instead of ticking the register).
+NOTES (2026-09-24): the docs/handoffs/ 2026-07-19 - 02 handoff residue line was updated in place (local-only, gitignored — not in FILES).
 
 **What:** Recast at the regression check (2026-09-03). Add one integration test (build tag `integration`, following the existing `make test-integration` convention, skipped when no `llama-server` on PATH) that starts a llama-server via the launcher's own launch path and answers: (a) does the server's own log file contain the `LLAMA_API_KEY` value or a `--api-key` argv echo — feed a sentinel key and grep the log; (b) when `extra_args` supplies `--api-key OTHER`, are BOTH keys valid (llama.cpp appends) or only the extra-args key (env ignored)? Assert against live behaviour, not the comment's claim. Write the answers as dated notes into `TODO.md:31` (append-vs-replace) and under the residue line the 2026-07-19 handoff points at, replacing "possibly-open" with the observed result and the tested build string (read the build from `llama-server --version` at test time; never hard-code one). If the build under test appends, state explicitly in the TODO note that both keys are valid — this is the fact item 2's redaction guards against.
 

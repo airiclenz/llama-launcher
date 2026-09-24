@@ -150,9 +150,10 @@ func (b *LlamaCpp) QueryLiveParams(addr string) (*ProfileParams, error) {
 
 // BuildServerEnv hands the configured api_key to llama-server through the
 // environment rather than argv, so the credential never shows up in ps output.
-// llama-server reads LLAMA_API_KEY only when no --api-key flag is present
-// (llama.cpp common/arg.cpp is the authority), so a user's extra_args
-// --api-key override still wins.
+// llama-server applies LLAMA_API_KEY first and then appends every --api-key
+// flag to the same key list (llama.cpp common/arg.cpp; observed on b10851 by
+// TestLlamaServerAPIKey), so a user's extra_args --api-key override adds a
+// second valid key rather than replacing the configured one.
 func (b *LlamaCpp) BuildServerEnv(cfg *Config, _ *ResolvedProfile) []string {
 	key := cfg.APIKeyFor(b.Name())
 	if key == "" {

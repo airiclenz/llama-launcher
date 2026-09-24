@@ -231,8 +231,8 @@ func TestLlamaCppBuildServerArgs(t *testing.T) {
 
 // TestLlamaCppBuildServerEnv proves the api_key is handed to llama-server
 // through the environment instead of argv, so the credential stays out of ps
-// output (llama-server reads LLAMA_API_KEY only when no --api-key flag is
-// given, so an extra_args override still wins).
+// output (llama-server appends any extra_args --api-key to the LLAMA_API_KEY
+// key, so both stay valid — see TestLlamaServerAPIKey).
 func TestLlamaCppBuildServerEnv(t *testing.T) {
 	t.Parallel()
 
