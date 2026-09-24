@@ -221,6 +221,15 @@ type StartupProber interface {
 	StartingUp(addr string) bool
 }
 
+// binaryInstallHinter is implemented by managed LLM Servers whose server
+// binary needs setup guidance beyond "not found" — for example a command that
+// must be put on PATH through a wrapper script. startManagedServer appends the
+// hint to its "server binary not found" error; servers without it keep the
+// bare message.
+type binaryInstallHinter interface {
+	BinaryInstallHint() string
+}
+
 // ResolvedProfile holds a fully merged profile ready for use by a backend.
 type ResolvedProfile struct {
 	Name        string

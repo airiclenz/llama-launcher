@@ -1750,6 +1750,49 @@ func TestStartServer_BinaryNotFound(t *testing.T) {
 	}
 }
 
+// TestStartManagedServerBinaryInstallHint: a managed backend implementing
+// binaryInstallHinter gets its setup hint appended to the "server binary not
+// found" error, while a backend without one keeps the bare message.
+// Not parallel: it rewrites PATH.
+func TestStartManagedServerBinaryInstallHint(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no server binary anywhere on PATH
+
+	// A provably-closed port, so the StartingUp probe and the port-occupant
+	// check both pass and the start reaches the binary lookup.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a loopback port: %v", err)
+	}
+	host := "127.0.0.1"
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+
+	cfg := &Config{LogDir: t.TempDir()}
+	profile := &ResolvedProfile{
+		Name:          "x",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	t.Run("hinter appends its hint", func(t *testing.T) {
+		splash := &Splash{}
+		_, err := startManagedServer(cfg, profile, splash)
+		if err == nil {
+			t.Fatal("startManagedServer succeeded, want a 'server binary not found' error")
+		}
+		want := "server binary not found: splash — " + splash.BinaryInstallHint()
+		if err.Error() != want {
+			t.Errorf("err = %q, want %q", err, want)
+		}
+	})
+
+	t.Run("llamacpp message is unchanged", func(t *testing.T) {
+		_, err := startManagedServer(cfg, profile, &LlamaCpp{})
+		if err == nil || err.Error() != "server binary not found: llama-server" {
+			t.Errorf("err = %v, want exactly 'server binary not found: llama-server'", err)
+		}
+	})
+}
+
 // TestLoadProfile_Orchestration_WaitTimeout pins the managed health-wait
 // failure: when the started server never turns healthy, loadProfile reports
 // started=false and the error carries the recovery guidance — the spawned

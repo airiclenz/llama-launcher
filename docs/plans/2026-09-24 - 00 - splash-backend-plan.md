@@ -63,7 +63,9 @@
 - 8 (re-check round 2): guard folded (setup text notes a launchd/MCP-adapter PATH must include the wrapper's directory).
 - 9 (re-check round 2): guard folded (`backend-tests-plan.md` excluded as archival; Starting/503/health-signal rule with its own grep).
 
-## 1. Splash LLM Server core
+## 1. Splash LLM Server core — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): HealthCheck also routes a 401/403 on /ready through authFailedErr for the actionable auth message (the plan says only "anything else is an error"); /ready is public in Splash, so this only fires for a foreign server.
+NOTES (2026-09-24): TestGetLLMServer_Known in backend_test.go still lists only the three original servers; splash registration is covered by the new TestSplashRegistered instead.
 
 **What:** Recast at the regression check (2026-09-24).
 **Goal:** `GetLLMServer("splash")` returns a `ManagedLLMServer` that also implements `StartupProber` and `ModelLister`. It passes its own unit tests for identification, argument building, env and param specs.

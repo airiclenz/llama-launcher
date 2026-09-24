@@ -88,6 +88,9 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 
 	binary := mb.ServerBinary(cfg)
 	if _, err := exec.LookPath(binary); err != nil {
+		if hinter, ok := mb.(binaryInstallHinter); ok {
+			return nil, fmt.Errorf("server binary not found: %s — %s", binary, hinter.BinaryInstallHint())
+		}
 		return nil, fmt.Errorf("server binary not found: %s", binary)
 	}
 
