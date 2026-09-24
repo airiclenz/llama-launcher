@@ -40,6 +40,13 @@ func requireProcessControl() error {
 	return fmt.Errorf("starting a server process: %w", ErrUnsupported)
 }
 
+// requireProcessStop refuses stopping a server by its PID: with no signal to
+// send, a server its native stop hook does not stop stays up, and the stop
+// verbs say so with this sentinel rather than a generic failure.
+func requireProcessStop() error {
+	return fmt.Errorf("stopping a server process: %w", ErrUnsupported)
+}
+
 // listProcesses refuses to read the process table: nothing the launcher could
 // find there is a process it could signal on windows, so a loading Splash
 // stays invisible here (ADR-0015).

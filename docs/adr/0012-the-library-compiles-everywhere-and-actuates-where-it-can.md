@@ -23,20 +23,19 @@ the verb returns a clean sentinel instead of failing to build.**
   load/unload, and activation against an **already-running** server all work; the `lms`
   shell-outs carry no unix dependency. What needs unix process control — forking a managed
   `llama-server` or `ollama serve`, and every kill-by-PID stop path — does not act. Every
-  per-OS stub returns an error wrapping the new exported sentinel `ErrUnsupported`, but only
-  the paths that hand that error straight back let a client match it, and the split is
-  four-way: **starting a managed server** (`startManagedServer` asks `requireProcessControl()`
-  before it forks), **the interactive menu** (`RunInteractiveMenu` asks
-  `requireInteractiveMenu()` — the menu never was supported on windows; the CLI now degrades
-  with a sentence rather than a build error) and **auto-starting an external Ollama**
-  (`connectExternalServer` wraps the `TryStart` error, whose `requireProcessControl()` refusal
-  carries the sentinel) all return it wrapped, while **the stop verbs** never produce one at
-  all (`IsProcessAlive` is false on windows, so the escalation is never entered, and
-  `Stop`/`Unload` end at the generic "PID could not be determined" — except for LM Studio,
-  whose `lms server stop` hook genuinely stops the server). Carrying the sentinel through that
-  last path would be additive and would not change darwin behaviour; it is a known gap in this
-  decision's precision, left open only because there is no windows host to prove it against,
-  and tracked in `TODO.md`.
+  per-OS stub returns an error wrapping the new exported sentinel `ErrUnsupported`, and all
+  four refusal paths hand it back wrapped so a client can match it: **starting a managed
+  server** (`startManagedServer` asks `requireProcessControl()` before it forks), **the
+  interactive menu** (`RunInteractiveMenu` asks `requireInteractiveMenu()` — the menu never
+  was supported on windows; the CLI now degrades with a sentence rather than a build error),
+  **auto-starting an external Ollama** (`connectExternalServer` wraps the `TryStart` error,
+  whose `requireProcessControl()` refusal carries the sentinel) and **the stop verbs**
+  (`stopServerAt` asks `requireProcessStop()` once the stop mechanisms have run and the
+  server is still reachable, and wraps its refusal: `server at <addr> is still reachable and
+  could not be stopped: stopping a server process: …`). The stop guard names the refusal
+  after the mechanisms rather than before them, so LM Studio's `lms server stop` hook still
+  genuinely stops the server; a stop hook that itself fails keeps its own "stop hook failed"
+  error.
 
 > **Amended 2026-07-29** (same day as ratification, during the v1.6.1 documentation pass — no
 > prior amendment convention existed in `docs/adr/`, so this is it). The windows bullet above
@@ -58,6 +57,18 @@ the verb returns a clean sentinel instead of failing to build.**
 > LM Studio server that `TryStart` launched but that misses its 15 s health window is left
 > running, and the error wraps the sentinel, naming the spawned PID and log path when the
 > backend tracks them (Ollama does, LM Studio does not).
+
+> **Amended 2026-09-24** (stop-auth-scope and windows-unsupported plan). The windows bullet
+> above said **the stop verbs** never produced the sentinel: "`IsProcessAlive` is false on
+> windows, so the escalation is never entered, and `Stop`/`Unload` end at the generic 'PID
+> could not be determined' … it is a known gap in this decision's precision." That gap is
+> closed, and its register entry with it. The process seam gains a sixth function,
+> `requireProcessStop()` (nil on unix, a refusal wrapping `ErrUnsupported` on windows), and
+> `stopServerAt` wraps its refusal when a stop leaves the server reachable, so `Stop`, an
+> `Unload` that reduces to one on a managed backend, and `LoadProfile`'s stop step all carry
+> the sentinel on windows. Nothing changes on darwin or linux, where the guard permits and
+> every stop outcome and message stays byte-identical. The bullet now describes all four
+> refusal paths as preserving the sentinel.
 
 Two alternatives were rejected. **Client-side build tags** (each importer fences the launcher
 behind `//go:build darwin || linux` and stubs the rest) pushes one library's platform knowledge

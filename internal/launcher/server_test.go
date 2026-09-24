@@ -2282,6 +2282,166 @@ func TestStopServerAt_TryStopFlipsHealthCheck(t *testing.T) {
 	}
 }
 
+// refuseProcessStop substitutes a stop seam that refuses stopping by PID,
+// the way process_windows.go's requireProcessStop does, and restores the
+// real seam when the test ends. Callers are not parallel: the seam is a
+// package variable.
+func refuseProcessStop(t *testing.T) {
+	t.Helper()
+	previous := processStopGuard
+	processStopGuard = func() error {
+		return fmt.Errorf("stopping a server process: %w", ErrUnsupported)
+	}
+	t.Cleanup(func() { processStopGuard = previous })
+}
+
+// survivingStopServer is a registry stub whose server is always healthy and
+// whose native stop hook is a no-op, like llamacpp's or Ollama's: with
+// nothing listening for the PID path to signal, every stop leaves it
+// reachable.
+type survivingStopServer struct {
+	hookStopServer
+}
+
+func (s *survivingStopServer) TryStop(addr string) error {
+	s.tryStops = append(s.tryStops, addr)
+	return nil
+}
+
+// survivingManagedServer is survivingStopServer as a managed backend, so an
+// Unload of it reduces to a stop.
+type survivingManagedServer struct {
+	survivingStopServer
+}
+
+func (s *survivingManagedServer) ServerBinary(*Config) string { return "surviving-server" }
+func (s *survivingManagedServer) BuildServerArgs(*Config, *ResolvedProfile) []string {
+	return nil
+}
+func (s *survivingManagedServer) BuildServerEnv(*Config, *ResolvedProfile) []string {
+	return nil
+}
+
+// registerStub adds b to the backend registry and removes it when the test
+// ends. Callers are not parallel: the registry is process-global.
+func registerStub(t *testing.T, b LLMServer) {
+	t.Helper()
+	RegisterLLMServer(b)
+	t.Cleanup(func() { delete(llmServers, b.Name()) })
+}
+
+// TestStop_RefusingStopSeamWrapsErrUnsupported: on a build whose process
+// seam refuses stopping by PID (windows), a Stop that leaves the server
+// reachable wraps ErrUnsupported instead of ending at the generic "PID
+// could not be determined". Not parallel: it swaps processStopGuard and the
+// backend registry.
+func TestStop_RefusingStopSeamWrapsErrUnsupported(t *testing.T) {
+	refuseProcessStop(t)
+	stub := &survivingStopServer{hookStopServer{name: "survivingstop"}}
+	registerStub(t, stub)
+
+	result, err := Stop(deadAddr(t))
+
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Stop = %v, want it to wrap ErrUnsupported", err)
+	}
+	if !strings.Contains(err.Error(), "still reachable and could not be stopped") {
+		t.Errorf("error %q missing the could-not-be-stopped message", err)
+	}
+	if strings.Contains(err.Error(), "PID could not be determined") {
+		t.Errorf("error %q still carries the generic PID message", err)
+	}
+	if result == nil {
+		t.Error("StopResult = nil, want non-nil even on error")
+	}
+}
+
+// TestUnload_ManagedRefusingStopSeamWrapsErrUnsupported: an Unload on a
+// managed backend reduces to a stop, so under a refusing seam it wraps
+// ErrUnsupported too. Not parallel: it swaps processStopGuard and the
+// backend registry.
+func TestUnload_ManagedRefusingStopSeamWrapsErrUnsupported(t *testing.T) {
+	refuseProcessStop(t)
+	stub := &survivingManagedServer{survivingStopServer{hookStopServer{name: "survivingmanaged"}}}
+	registerStub(t, stub)
+
+	result, err := Unload(stub.name, deadAddr(t))
+
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Unload = %v, want it to wrap ErrUnsupported", err)
+	}
+	if result == nil || !result.ServerStopped {
+		t.Errorf("StopResult = %+v, want the managed stop outcome", result)
+	}
+}
+
+// TestStop_PermittingStopSeamKeepsUnixMessage: with the host's own seam
+// (unix permits stopping by PID), a Stop that leaves the server reachable
+// keeps its unix message and carries no ErrUnsupported. Not parallel: it
+// mutates the backend registry.
+func TestStop_PermittingStopSeamKeepsUnixMessage(t *testing.T) {
+	if requireProcessStop() != nil {
+		t.Skip("this platform's process seam refuses stopping by PID")
+	}
+	stub := &survivingStopServer{hookStopServer{name: "survivingunix"}}
+	registerStub(t, stub)
+
+	_, err := Stop(deadAddr(t))
+
+	if err == nil || !strings.Contains(err.Error(), "PID could not be determined") {
+		t.Fatalf("Stop = %v, want the PID-could-not-be-determined error", err)
+	}
+	if errors.Is(err, ErrUnsupported) {
+		t.Errorf("error %q wraps ErrUnsupported, want the unix message unchanged", err)
+	}
+}
+
+// TestStopServerAt_HookStopSucceedsUnderRefusingSeam: the stop guard names
+// its refusal only after the stop mechanisms ran, so a native stop hook
+// that works (LM Studio's lms server stop) still stops the server on a
+// build that cannot stop by PID. Not parallel: it swaps processStopGuard
+// and the backend registry.
+func TestStopServerAt_HookStopSucceedsUnderRefusingSeam(t *testing.T) {
+	refuseProcessStop(t)
+	stub := &hookStopServer{name: "hookstoprefusing"}
+	registerStub(t, stub)
+
+	_, err := stopServerAt(stub.name, "127.0.0.1:1", true, nil)
+
+	if err != nil {
+		t.Fatalf("stopServerAt = %v, want nil once the stop hook stops the server", err)
+	}
+}
+
+// namedExternalBackend is fakeExternalBackend under a name of its own, so
+// it can be registered beside the real backends.
+type namedExternalBackend struct {
+	fakeExternalBackend
+	name string
+}
+
+func (n *namedExternalBackend) Name() string { return n.name }
+
+// TestStartServer_TryStartUnsupportedWrapsErrUnsupported pins the external
+// auto-start refusal (ADR-0012): StartServer — what LoadProfile delegates
+// to — against an external backend whose TryStart returns the windows
+// requireProcessControl refusal wraps ErrUnsupported. Not parallel: it
+// mutates the backend registry.
+func TestStartServer_TryStartUnsupportedWrapsErrUnsupported(t *testing.T) {
+	stub := &namedExternalBackend{
+		fakeExternalBackend: fakeExternalBackend{startErr: fmt.Errorf("starting a server process: %w", ErrUnsupported)},
+		name:                "unsupportedexternal",
+	}
+	registerStub(t, stub)
+	profile := orchProfile(stub.name, "chat", "qwen", "127.0.0.1", 1)
+
+	_, err := StartServer(&Config{}, profile)
+
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("StartServer = %v, want it to wrap ErrUnsupported", err)
+	}
+}
+
 // startingStopServer is a registry stub for a managed-style backend whose
 // server answers 503 while loading (ADR-0010): HealthCheck always fails —
 // exactly like a real Starting llama-server's — and StartingUp delegates to

@@ -64,7 +64,11 @@ launcher/launcher_test.go — writeConfig, standInConfig, deadAddr; launcher/lau
 
 **Commit:** `fix(launcher): stop signals a 401/403 listener only at a configured address`
 
-## 2. Stop verbs wrap ErrUnsupported where the platform cannot stop by PID
+## 2. Stop verbs wrap ErrUnsupported where the platform cannot stop by PID — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: §6.5's stop-failure paragraph, the server.go file row, the server_test.go file row, §12.2 (a new row for the five tests) and §16.5's "windows stubs have no test host" sentence all describe the stop path or its tests, which this item changed
+NOTES (2026-09-24): the TDD rows the plan placed at 483, 514 and 898 now sit at 488/489 (process_unix.go / process_windows.go), 515 (server_test.go) and 899 (the lsof row, which gains its windows message); the ADR-0012 windows bullet was rewritten to describe all four paths preserving the sentinel, and the third amendment quotes the old gap text without the "tracked in TODO.md" clause
+NOTES (2026-09-24): the tests share two new helpers, refuseProcessStop and registerStub, and three stubs: survivingStopServer and survivingManagedServer (built on hookStopServer) and namedExternalBackend (fakeExternalBackend under a registrable name). TestStop_PermittingStopSeamKeepsUnixMessage skips when the host's own requireProcessStop refuses, so the windows test build does not fail it
 
 **What:**
 **Goal:** A `Stop` — or an `Unload` that reduces to one on a managed backend — that leaves the server reachable on a build whose process seam refuses stopping returns an error wrapping `ErrUnsupported`; on unix every stop outcome and message is byte-identical, and a native stop hook that works (LM Studio's `lms server stop`) still succeeds. TDD §16.6, `launcher/doc.go`, README and ADR-0012 state that all four windows refusal paths preserve the sentinel.

@@ -362,6 +362,11 @@ type processEntry struct {
 // table instead of the live one.
 var processTable = listProcesses
 
+// processStopGuard reports whether this build may stop a server by its PID
+// (requireProcessStop in the per-platform process files). A variable so
+// tests can substitute a refusing seam on a host whose own seam permits.
+var processStopGuard = requireProcessStop
+
 // parseProcessTable parses `ps -o pid=,pgid=,command=` output, skipping rows
 // whose PID or PGID does not parse. Only the PID and PGID are read by
 // position; ps joins the arguments with spaces, so the command it prints
@@ -402,7 +407,11 @@ func parseProcessTable(out string) []processEntry {
 // with 503 for the whole model load), and a survived auth-refusing one
 // answers 401/403, so health alone would report either as stopped
 // (ADR-0010). Returns the signalled PID (0 when none was found) and an error
-// when the server survived the mechanisms run.
+// when the server survived the mechanisms run. On a build whose process seam
+// refuses stopping by PID (processStopGuard, windows) that error wraps
+// ErrUnsupported, unless the backend's native stop hook itself failed: the
+// guard names the refusal after the mechanisms ran, so a working hook (LM
+// Studio's `lms server stop`) still stops the server there.
 func stopServerAt(backend, addr string, nativeHook bool, progress ProgressFunc) (int, error) {
 	b, err := GetLLMServer(backend)
 	if err != nil {
@@ -435,6 +444,9 @@ func stopServerAt(backend, addr string, nativeHook bool, progress ProgressFunc) 
 	}
 	if stopErr != nil {
 		return pid, fmt.Errorf("server at %s is still reachable; %s stop hook failed: %v", addr, b.DisplayName(), stopErr)
+	}
+	if guardErr := processStopGuard(); guardErr != nil {
+		return pid, fmt.Errorf("server at %s is still reachable and could not be stopped: %w", addr, guardErr)
 	}
 	if pid <= 0 {
 		return pid, fmt.Errorf("server at %s is still reachable and its PID could not be determined: %v", addr, pidErr)

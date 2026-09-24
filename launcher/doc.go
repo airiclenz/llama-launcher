@@ -61,13 +61,14 @@
 // exception that keeps working, since its server start and stop are lms CLI
 // calls.
 //
-// Match on the sentinel only where a windows refusal preserves it. Starting
-// a managed llama-server or Splash server refuses before it forks, and
-// LoadProfile against a stopped Ollama refuses to start the daemon; both
-// return an error wrapping ErrUnsupported, so errors.Is finds it. One path
-// reports in its own words instead: a Stop — or an Unload that reduces to
-// one on a managed backend — ends with the server still reachable and its
-// PID undetermined. That is a plain error, not a wrapped sentinel.
+// Every windows refusal preserves the sentinel, so errors.Is finds
+// ErrUnsupported on each of them. Starting a managed llama-server or Splash
+// server refuses before it forks, and LoadProfile against a stopped Ollama
+// refuses to start the daemon. A Stop — or an Unload that reduces to one on
+// a managed backend, or the stop step of a LoadProfile — that leaves the
+// server reachable because no PID can be signalled returns an error wrapping
+// it too, unless the backend's own stop hook failed: that error names the
+// hook instead. LM Studio's stop hook works there, so its stop succeeds.
 //
 // # One Config per process
 //

@@ -1,7 +1,7 @@
 //go:build unix
 
 // Process control on the platforms that have it. Every unix-only primitive
-// the launcher needs to fork, find and stop a server lives behind these five
+// the launcher needs to fork, find and stop a server lives behind these six
 // functions; process_windows.go answers the same signatures with the
 // unsupported sentinel so the package builds — and actuates over HTTP —
 // there too (ADR-0012).
@@ -36,6 +36,13 @@ func signalGroup(pid int, sig syscall.Signal) error {
 // requireProcessControl reports whether this build may fork a server it is
 // expected to be able to stop again. Unix can, so the fork paths proceed.
 func requireProcessControl() error {
+	return nil
+}
+
+// requireProcessStop reports whether this build may stop a server by its
+// PID. Unix can, so a stop that leaves the server reachable reports the
+// mechanism that failed instead.
+func requireProcessStop() error {
 	return nil
 }
 

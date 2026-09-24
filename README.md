@@ -333,7 +333,7 @@ The package **compiles on macOS, Linux and Windows**, and each verb works wherev
 |---|---|
 | macOS | Everything. |
 | Linux | Everything. (Only the TUI's macOS-specific memory readout is dropped.) |
-| Windows | Everything the launcher drives over HTTP: discovery, model load/unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio start/stop works via the `lms` CLI. Starting `llama-server`, `splash` or `ollama serve` is refused (wrapping `ErrUnsupported`) because Windows lacks the unix process control the launcher would need to stop it again. |
+| Windows | Everything the launcher drives over HTTP: discovery, model load/unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio start/stop works via the `lms` CLI. Starting `llama-server`, `splash` or `ollama serve` is refused (wrapping `ErrUnsupported`) because Windows lacks the unix process control the launcher would need to stop it again, and stopping a running llama-server, Ollama or Splash server is refused the same way (the error wraps `ErrUnsupported`). |
 
 ## Building
 
