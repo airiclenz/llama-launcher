@@ -287,7 +287,7 @@ Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no t
 The launcher is importable as well as runnable: the `launcher/` package is a curated Go API over the same core, so your program can load a profile, see what is running, and stop or unload it in-process instead of shelling out to the CLI ([ADR-0011](docs/adr/0011-public-library-facade.md), [TDD §16](llama-launcher.TDD.md#16-public-library-facade)).
 
 ```bash
-go get github.com/airiclenz/llama-launcher/launcher@v1.7.0
+go get github.com/airiclenz/llama-launcher/launcher@v1.8.0
 ```
 
 ```go
