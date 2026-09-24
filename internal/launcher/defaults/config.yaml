@@ -321,8 +321,11 @@ profiles:
   # Hugging Face cache for the installed snapshot and never starts that
   # download itself.
   # Uncomment splash in the servers section above (set it to true).
-  # Other Splash flags (reasoning effort, kv format, max memory,
-  # --allowed-host for access by DNS name) go in extra_args.
+  # Other Splash flags (reasoning effort, kv format, max memory) go in
+  # extra_args. When host is not loopback (e.g. 0.0.0.0), the launcher
+  # adds --allowed-host for this machine's hostname and its short form,
+  # so LAN clients can use the hostname; add --allowed-host to extra_args
+  # only for other names, such as a proxy or an alias.
   #
   # splash-qwen:
   #   description: "Qwen3.8 27B via Splash"

@@ -103,7 +103,8 @@ Splash, like `llamacpp`, is restarted to switch models: each profile starts `spl
 
   A launcher or MCP adapter started by launchd does not see your shell's `PATH`, so its `PATH` must include the wrapper's directory (e.g. `~/.local/bin`) too.
 - **Install each model once, by hand.** Run `splash serve --model <owner/repo>` in a terminal; the first run downloads the model, which can take around twenty minutes. The launcher checks the Hugging Face cache (`$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`) for the installed model and refuses a profile whose model is not there, naming that command. It never starts the download itself ([ADR-0014](docs/adr/0014-splash-models-must-be-installed.md)).
-- **Parameters.** `context_size` becomes `--max-context`, and `host` / `port` become `--host` / `--port`. Sampling parameters are ignored. Pass any other Splash flag — reasoning effort, KV format, max memory, `--allowed-host` for access by DNS name — through the profile's `extra_args`.
+- **Parameters.** `context_size` becomes `--max-context`, and `host` / `port` become `--host` / `--port`. Sampling parameters are ignored. Pass any other Splash flag — reasoning effort, KV format, max memory — through the profile's `extra_args`.
+- **Network access.** Splash refuses requests whose `Host` names a host it does not know. When a profile's `host` is not loopback (for example `0.0.0.0` or a LAN address), the launcher adds `--allowed-host` for the machine's hostname and its short form (`Apollo-II.local` and `Apollo-II`), so LAN clients can reach it by IP or by hostname. Add `--allowed-host` to `extra_args` only for other names, such as a reverse proxy or a DNS alias. A Splash bound to `0.0.0.0` is still probed, listed and stopped by its configured address; the launcher's own checks reach it over loopback.
 
 ### API keys
 
@@ -347,7 +348,7 @@ make clean             # Remove the binaries
 
 `make cross` is the platform contract as a check ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)): it builds and vets the whole tree — test files included — for macOS, Linux and Windows, so a portability regression fails here instead of in an importing client's CI.
 
-`make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio, Splash) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA`, and/or `INTEGRATION_MODEL_LMSTUDIO` to exercise the model load/unload steps. The Splash test runs only with `INTEGRATION_MODEL_SPLASH` set to an already-installed `owner/repo`.
+`make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio, Splash) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA`, and/or `INTEGRATION_MODEL_LMSTUDIO` to exercise the model load/unload steps. The Splash tests (`TestSplashLifecycle`, `TestSplashStopWhileLoading`, and `TestSplashWildcardHost`, which binds Splash to `0.0.0.0`) run only with `INTEGRATION_MODEL_SPLASH` set to an already-installed `owner/repo`.
 
 The version is read from the `VERSION` file and injected at build time.
 

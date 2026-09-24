@@ -116,7 +116,12 @@ internal/launcher/integration_llamacpp_test.go — killServerOnCleanup; internal
 - `go test -tags integration ./internal/launcher/ -run 'TestSplash' -count=1` (skips without the env var; a manual run on the host exercises it)
 **Commit:** `test(launcher): cover a Splash bound to 0.0.0.0 in the integration suite`
 
-## 4. Docs: wildcard probing and the automatic hostname
+## 4. Docs: wildcard probing and the automatic hostname — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): re-derived from the assumption that the wildcard probe case sits inside the §12.1 `TestSplashHealthCheck`/`TestSplashStartingUp` rows — item 1 put it in its own `TestSplashWildcardProbe`, so it got its own §12.1 row next to them, and those two rows were left as they were.
+NOTES (2026-09-24): README — the automatic hostname and wildcard probing went into a new **Network access** bullet directly after the Splash **Parameters** bullet, which now lists only the `extra_args` flags; the stale "for access by DNS name" wording is gone.
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md (`backend_http_test.go` row and §12.1 `TestDiscoverRunningInstances_*` row): made necessary by documenting item 1's `TestProbeAddr` and `TestDiscoverRunningInstances_WildcardSplash`.
+NOTES (2026-09-24): item 1's `identifyBackend` wildcard subtest in `server_test.go` is not named on its own; the `server_test.go` row already lists `identifyBackend`.
 
 **What:** Recast at the regression check (2026-09-24). This item owns every doc change for items 1–3. Depends on items 1, 2 and 3.
 **Regression guard.** Item 4 owns the docs for items 1–3. It adds a §12.5 integration-table row for item 3's `TestSplashWildcardHost` (the TDD has no file-table row for `integration_splash_test.go`) and names it wherever the Splash integration tests are listed: the `INTEGRATION_MODEL_SPLASH` row and README's "The Splash test" sentence. State "Depends on items 1, 2 and 3".
