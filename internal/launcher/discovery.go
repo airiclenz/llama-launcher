@@ -23,11 +23,11 @@ type RunningInstance struct {
 	LogFile       string
 	ActiveProfile string
 	ActiveModel   string
-	// Starting marks an instance whose process is up and address bound but
-	// whose health check does not pass yet — llama-server answers /health
-	// with 503 for the whole model load. Splash binds its address only once
-	// the model has loaded, so a loading Splash is never Starting. See
-	// ADR-0010.
+	// Starting marks an instance whose process is up but whose health check
+	// does not pass yet — llama-server holds its address and answers /health
+	// with 503 for the whole model load; a loading Splash has not bound its
+	// address yet and is found by its command line instead. See ADR-0010
+	// and ADR-0015.
 	Starting bool
 }
 
@@ -128,14 +128,14 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 	}
 	if b.HealthCheck(addr) != nil {
 		// A failing health check does not always mean nothing is there: a
-		// managed llama-server answers 503 during its whole model load (a
-		// loading Splash has not bound its address yet, so it never reaches
-		// this branch). The StartupProber fallback surfaces that window as a Starting instance
-		// (ADR-0010). ListRunningModels is skipped — the server cannot
-		// answer yet — so ActiveModel/ActiveProfile stay empty (with no
-		// model, several profiles sharing the address would be ambiguous
+		// managed llama-server answers 503 during its whole model load, and
+		// a loading Splash is up but has not bound its address yet. The
+		// startingUp fallback surfaces that window as a Starting instance
+		// (ADR-0010, ADR-0015). ListRunningModels is skipped — the server
+		// cannot answer yet — so ActiveModel/ActiveProfile stay empty (with
+		// no model, several profiles sharing the address would be ambiguous
 		// anyway).
-		if sp, ok := b.(StartupProber); ok && sp.StartingUp(addr) {
+		if startingUp(b, addr) {
 			inst.Starting = true
 			return inst
 		}
@@ -268,6 +268,13 @@ func fillRuntimeDetails(cfg *Config, inst *RunningInstance) {
 	if inst.PID == 0 {
 		if pid, err := findListeningPID(inst.Addr()); err == nil && pid > 0 {
 			inst.PID = pid
+		}
+	}
+	// A Starting Splash has no listening socket yet; its PID comes from the
+	// process table instead (ADR-0015).
+	if inst.PID == 0 && inst.Starting {
+		if b, err := GetLLMServer(inst.Backend); err == nil {
+			inst.PID = loadingPID(b, inst.Addr())
 		}
 	}
 	if inst.StartedAt.IsZero() && inst.PID > 0 {

@@ -2058,3 +2058,154 @@ func toolOnlyPATH(t *testing.T, tools ...string) string {
 	}
 	return dir
 }
+
+// pinLoadingSplash replaces the process table with one holding a single
+// launcher-forked Splash (a session leader) loading for addr, and reports
+// nothing listening anywhere — the window in which Splash has not bound its
+// address yet (ADR-0015). alive decides whether the entry is still listed,
+// so a test can make it vanish once the process is gone. Not for parallel
+// tests: it rewrites package seams.
+func pinLoadingSplash(t *testing.T, pid int, addr string, alive func() bool) {
+	t.Helper()
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("splitting %q: %v", addr, err)
+	}
+	args := strings.Fields("/bin/sh /Users/u/.local/bin/splash serve --model o/r --host " + host + " --port " + port)
+	prevTable, prevListener := processTable, addrHasListener
+	processTable = func() ([]processEntry, error) {
+		if !alive() {
+			return nil, nil
+		}
+		return []processEntry{{PID: pid, PGID: pid, Args: args}}, nil
+	}
+	addrHasListener = func(string) bool { return false }
+	t.Cleanup(func() { processTable, addrHasListener = prevTable, prevListener })
+}
+
+// TestStartingUp_LoadingSplash covers ADR-0015: a Splash that is loading
+// but has not bound its address is Starting, found by its process; the
+// same process is ignored once anything listens at the address, and a
+// backend without a LoadingProcessFinder never consults the table.
+func TestStartingUp_LoadingSplash(t *testing.T) {
+	addr := deadAddr(t)
+	pinLoadingSplash(t, 4242, addr, func() bool { return true })
+	splash, err := GetLLMServer("splash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	llamacpp, err := GetLLMServer("llamacpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !startingUp(splash, addr) {
+		t.Error("startingUp(splash) = false, want true for a loading Splash process")
+	}
+	if got := loadingPID(splash, addr); got != 4242 {
+		t.Errorf("loadingPID(splash) = %d, want 4242", got)
+	}
+	if startingUp(llamacpp, addr) {
+		t.Error("startingUp(llamacpp) = true, want false: llamacpp has no LoadingProcessFinder")
+	}
+
+	addrHasListener = func(string) bool { return true }
+	if startingUp(splash, addr) {
+		t.Error("startingUp(splash) = true with a listener at the address, want false")
+	}
+}
+
+func TestDiscoverRunningInstances_ReportsLoadingSplash(t *testing.T) {
+	addr := deadAddr(t)
+	pinLoadingSplash(t, 4242, addr, func() bool { return true })
+	host, portStr, _ := net.SplitHostPort(addr)
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"splash": {Enabled: true}},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{Server: strPtrLocal("splash"), Host: &host, Port: &port}
+
+	instances := DiscoverRunningInstances(cfg)
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 Starting instance, got %d: %+v", len(instances), instances)
+	}
+	inst := instances[0]
+	if inst.Backend != "splash" || !inst.Starting || inst.Addr() != addr {
+		t.Errorf("instance = %+v, want a Starting splash at %s", inst, addr)
+	}
+	fillRuntimeDetails(cfg, inst)
+	if inst.PID != 4242 {
+		t.Errorf("PID = %d, want 4242 from the process table", inst.PID)
+	}
+}
+
+func TestStartManagedServer_RefusesLoadingSplash(t *testing.T) {
+	// Not parallel: rewrites PATH and package seams.
+	addr := deadAddr(t)
+	pinLoadingSplash(t, 4242, addr, func() bool { return true })
+	t.Setenv("PATH", t.TempDir())
+	host, portStr, _ := net.SplitHostPort(addr)
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+	b, err := GetLLMServer("splash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := &ResolvedProfile{
+		Name:          "splash",
+		ModelPath:     "o/r",
+		Backend:       "splash",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+
+	_, err = startManagedServer(&Config{LogDir: t.TempDir()}, profile, b.(ManagedLLMServer))
+
+	if err == nil || !strings.Contains(err.Error(), "still starting up") {
+		t.Fatalf("err = %v, want the still-starting-up refusal", err)
+	}
+	if !strings.Contains(err.Error(), "PID 4242") {
+		t.Errorf("err = %v, want it to name the loading PID 4242", err)
+	}
+}
+
+// TestStopInstance_LoadingSplash covers ADR-0015's stop: a loading Splash
+// holds no address, so identification and the PID both come from the
+// process table, and the stop signals that process like any other.
+func TestStopInstance_LoadingSplash(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep not available")
+	}
+	cmd := exec.Command("sleep", "60")
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start a detached child here: %v", err)
+	}
+	// Reap the child as soon as it exits: a zombie still counts as alive.
+	go cmd.Wait()
+	t.Cleanup(func() { cmd.Process.Kill() })
+	pid := cmd.Process.Pid
+
+	addr := deadAddr(t)
+	pinLoadingSplash(t, pid, addr, func() bool { return IsProcessAlive(pid) })
+
+	backend, err := identifyBackend(addr)
+	if err != nil || backend != "splash" {
+		t.Fatalf("identifyBackend = %q, %v; want splash", backend, err)
+	}
+
+	inst, err := StopInstance(addr, nil)
+
+	if err != nil {
+		t.Fatalf("StopInstance = %v, want success", err)
+	}
+	if inst.Backend != "splash" || inst.PID != pid {
+		t.Errorf("stopped %+v, want splash with PID %d", inst, pid)
+	}
+	if IsProcessAlive(pid) {
+		t.Errorf("PID %d still alive after the stop", pid)
+	}
+}

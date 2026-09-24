@@ -68,14 +68,13 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 
 	// A server spawned by an earlier start may still be coming up at the
 	// target address (llama-server answers /health with 503 while it loads
-	// its model, and a large model can outlive the health-wait window). A
-	// loading Splash has not bound its address yet, so this probe cannot
-	// see it.
-	// Spawning a second server there would only die with "address already
-	// in use", so the start is refused instead — the loading server is
-	// deliberately left alone.
+	// its model, and a large model can outlive the health-wait window; a
+	// loading Splash has not bound the address yet and is found through the
+	// process table instead, ADR-0015). Spawning a second server there would
+	// only collide with the first, so the start is refused instead — the
+	// loading server is deliberately left alone.
 	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
-	if sp, ok := mb.(StartupProber); ok && sp.StartingUp(addr) {
+	if startingUp(mb, addr) {
 		return nil, stillStartingUpErr(cfg, mb, addr)
 	}
 
@@ -222,9 +221,10 @@ func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) 
 // supplied backend name. Two passes, each in sorted-name order so the
 // answer is deterministic (map iteration is random): first the backends'
 // discriminating health checks, then the startup probes of backends that
-// implement StartupProber — a Starting instance fails its health check for
-// the whole model load but must still be identifiable so it can be stopped
-// (ADR-0010). Returns ErrNotRunning when nothing is reachable.
+// implement StartupProber or LoadingProcessFinder — a Starting instance
+// fails its health check for the whole model load but must still be
+// identifiable so it can be stopped (ADR-0010, ADR-0015). Returns
+// ErrNotRunning when neither pass identifies anything.
 func identifyBackend(addr string) (string, error) {
 	names := make([]string, 0, len(llmServers))
 	for name := range llmServers {
@@ -246,19 +246,85 @@ func identifyBackend(addr string) (string, error) {
 }
 
 // startingUp reports whether a still-starting (Starting, ADR-0010) server
-// of b's answers at addr. Only backends that can tell a loading server
-// apart from a dead address implement StartupProber; for all others this
-// is false.
+// of b's is at addr: either one that answers there but is still loading
+// (StartupProber), or one whose process is up but has not bound the address
+// yet (LoadingProcessFinder, ADR-0015). Backends implementing neither never
+// report Starting.
 func startingUp(b LLMServer, addr string) bool {
-	sp, ok := b.(StartupProber)
-	return ok && sp.StartingUp(addr)
+	if sp, ok := b.(StartupProber); ok && sp.StartingUp(addr) {
+		return true
+	}
+	return loadingPID(b, addr) > 0
+}
+
+// loadingPID returns the PID of a server of b's that is loading its model
+// for addr without having bound it yet, or 0 when there is none. It asks
+// only backends implementing LoadingProcessFinder, and only trusts the
+// answer while nothing listens at addr: once a process holds the address,
+// the HTTP probes and lsof identify it, and a listener that fails them is
+// never attributed to b by its command line (ADR-0015).
+func loadingPID(b LLMServer, addr string) int {
+	finder, ok := b.(LoadingProcessFinder)
+	if !ok {
+		return 0
+	}
+	pid := finder.LoadingPID(addr)
+	if pid <= 0 || addrHasListener(addr) {
+		return 0
+	}
+	return pid
+}
+
+// addrHasListener reports whether any process listens on addr's port, via
+// the same lsof lookup the stop path uses. A variable so tests can pin it.
+var addrHasListener = func(addr string) bool {
+	_, err := findListeningPIDs(addr)
+	return err == nil
+}
+
+// processEntry is one row of the process table: a PID, its process group,
+// and its command line split on whitespace.
+type processEntry struct {
+	PID  int
+	PGID int
+	Args []string
+}
+
+// processTable reads the machine's process table (listProcesses in the
+// per-platform process files). A variable so tests can substitute a fixed
+// table instead of the live one.
+var processTable = listProcesses
+
+// parseProcessTable parses `ps -o pid=,pgid=,command=` output, skipping rows
+// whose PID or PGID does not parse. The command line is split on whitespace,
+// so an argument containing spaces arrives as several fields.
+func parseProcessTable(out string) []processEntry {
+	var entries []processEntry
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 0 {
+			continue
+		}
+		pgid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		entries = append(entries, processEntry{PID: pid, PGID: pgid, Args: fields[2:]})
+	}
+	return entries
 }
 
 // stopServerAt runs both stop mechanisms against addr exactly once, in the
 // documented order (TDD §6.5): signal the listening PID first (with the
 // SIGTERM → SIGKILL → port-release escalation), then invoke the backend's
 // native stop hook. The hook is best-effort — its error surfaces only when
-// the address is still serving afterwards. Stopped means not healthy *and*
+// the address is still serving afterwards. A loading server that has not
+// bound addr yet has no listening PID; its PID comes from the backend's
+// LoadingProcessFinder instead (ADR-0015). Stopped means not healthy *and*
 // not still starting up: a survived Starting server also fails the health
 // check (llama-server answers /health with 503 for the whole model load),
 // so health alone would report it as stopped (ADR-0010). Returns
@@ -271,6 +337,11 @@ func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
 	}
 
 	pid, pidErr := findListeningPID(addr)
+	if pid <= 0 {
+		if loading := loadingPID(b, addr); loading > 0 {
+			pid, pidErr = loading, nil
+		}
+	}
 	if pid > 0 && IsProcessAlive(pid) {
 		terminatePID(pid, progress)
 	}
@@ -974,7 +1045,7 @@ func (e startupTimeout) Unwrap() []error { return []error{e.decorated, ErrStartu
 func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
 	pid, err := findListeningPID(addr)
 	if err != nil || pid <= 0 {
-		pid = 0
+		pid = loadingPID(b, addr)
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "a %s server at %s is still starting up", b.DisplayName(), addr)

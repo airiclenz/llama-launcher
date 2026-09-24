@@ -6,7 +6,10 @@
 // it skips otherwise. The profile is resolved through Config.ResolveProfile,
 // so the Hugging Face cache install check runs for real, and the server is
 // started through the managed StartServer path and stopped through the
-// launcher's normal Stop(addr) SIGTERM path.
+// launcher's normal Stop(addr) SIGTERM path. Splash binds its port only once
+// the model has loaded, so the Starting state is observed through the
+// process table (ADR-0015): TestSplashLifecycle requires it on the way to
+// healthy, and TestSplashStopWhileLoading stops a server mid-load.
 //
 // Liveness checks on the start PID and its group go through the process
 // seam (signalPID / signalGroup with signal 0), never syscall.Kill, so the
@@ -17,6 +20,7 @@ package launcher
 import (
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,8 +76,8 @@ func resolveSplashProfile(t *testing.T, logDir, model string) (*Config, *Resolve
 
 // waitForSplashHealthy polls until the Splash server at addr answers
 // healthy, failing when splashHealthyTimeout elapses first. It reports
-// whether the Starting state (/ready 503 with the Splash header) was seen
-// on the way; a model that loads between two polls may never show it.
+// whether the Starting state was seen on the way — for a Splash that has
+// not bound its port yet, through the process table (ADR-0015).
 func waitForSplashHealthy(t *testing.T, b LLMServer, addr string) bool {
 	t.Helper()
 	sawStarting := false
@@ -131,7 +135,7 @@ func TestSplashLifecycle(t *testing.T) {
 
 	if !t.Run("wait-for-healthy", func(st *testing.T) {
 		if !waitForSplashHealthy(st, b, addr) {
-			st.Log("model loaded before the Starting state could be observed")
+			st.Error("the loading server was never observed as Starting")
 		}
 	}) {
 		t.Fatal("server never became healthy; skipping the remaining steps")
@@ -184,4 +188,61 @@ func TestSplashLifecycle(t *testing.T) {
 			st.Errorf("closing the port-release probe listener: %v", err)
 		}
 	})
+}
+
+// TestSplashStopWhileLoading starts a real Splash server and, while it is
+// still loading its model and has not bound its port, checks that discovery
+// reports it as Starting, that a second start is refused instead of forking a
+// duplicate, and that Stop(addr) signals the started PID and takes its
+// process group down (ADR-0015).
+func TestSplashStopWhileLoading(t *testing.T) {
+	mustFindBinary(t, "splash")
+	model := integrationSplashModel(t)
+	b, err := GetLLMServer("splash")
+	if err != nil {
+		t.Fatalf("splash backend not registered: %v", err)
+	}
+	cfg, profile := resolveSplashProfile(t, t.TempDir(), model)
+
+	inst, err := StartServer(cfg, profile)
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	killServerOnCleanup(t, inst)
+	addr := inst.Addr()
+
+	if !startingUp(b, addr) {
+		if b.HealthCheck(addr) == nil {
+			t.Skip("model loaded before the Starting state could be observed")
+		}
+		t.Fatalf("a loading splash at %s is not reported as Starting", addr)
+	}
+
+	t.Run("discovery-reports-starting", func(st *testing.T) {
+		found := findInstance(DiscoverRunningInstances(cfg), addr)
+		if found == nil || !found.Starting || found.Backend != "splash" {
+			st.Errorf("discovery at %s = %+v, want a Starting splash", addr, found)
+		}
+	})
+
+	t.Run("second-start-refused", func(st *testing.T) {
+		_, err := StartServer(cfg, profile)
+		if err == nil || !strings.Contains(err.Error(), "still starting up") {
+			st.Errorf("second StartServer = %v, want the still-starting-up refusal", err)
+		}
+	})
+
+	if !t.Run("stop", func(st *testing.T) {
+		result, err := Stop(addr)
+		if err != nil {
+			st.Fatalf("Stop(%s): %v", addr, err)
+		}
+		if result.Instance == nil || result.Instance.PID != inst.PID {
+			st.Errorf("Stop reported instance %+v, want the started PID %d", result.Instance, inst.PID)
+		}
+	}) {
+		t.Fatal("stop failed; skipping the stop verification")
+	}
+
+	waitForProcessGone(t, inst.PID, splashStopTimeout)
 }

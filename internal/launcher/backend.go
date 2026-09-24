@@ -216,11 +216,21 @@ type LiveParamsQuerier interface {
 // 503 while it loads its model) apart from one that is not running at all.
 // Splash implements it by /ready 503 with its Server header, but Splash
 // binds its port only once the model has loaded, so a loading Splash is
-// unreachable and the probe does not see it. The managed start path uses it to refuse spawning a duplicate
-// server onto an address where an earlier start is still coming up
-// (TDD §6.2).
+// found through LoadingProcessFinder instead. The managed start path uses
+// it to refuse spawning a duplicate server onto an address where an earlier
+// start is still coming up (TDD §6.2).
 type StartupProber interface {
 	StartingUp(addr string) bool
+}
+
+// LoadingProcessFinder is implemented by LLM Servers whose process loads its
+// model before it binds its address (Splash), so no HTTP probe or lsof
+// lookup can see it while it loads. LoadingPID returns the PID of a server
+// process that is loading for addr — attributed by its command line, see
+// ADR-0015 — or 0 when there is none. Callers go through loadingPID, which
+// ignores the answer once anything listens at addr.
+type LoadingProcessFinder interface {
+	LoadingPID(addr string) int
 }
 
 // binaryInstallHinter is implemented by managed LLM Servers whose server

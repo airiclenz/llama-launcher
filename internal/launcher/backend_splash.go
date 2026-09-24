@@ -3,6 +3,7 @@ package launcher
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,8 +61,9 @@ func (b *Splash) HealthCheck(addr string) error {
 // StartingUp reports whether a Splash server is reachable at addr but still
 // loading its model: /ready answering 503 with the Splash Server header. The
 // Splash build tested binds its port only once the model has loaded, so a
-// loading Splash refuses the connection and this returns false. A connection
-// error, any other status, or a 503 from a foreign server all return false.
+// loading Splash refuses the connection and this returns false — LoadingPID
+// finds it instead. A connection error, any other status, or a 503 from a
+// foreign server all return false.
 func (b *Splash) StartingUp(addr string) bool {
 	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/ready", b.apiKey())
 	if err != nil {
@@ -69,6 +71,86 @@ func (b *Splash) StartingUp(addr string) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusServiceUnavailable && isSplashResponse(resp)
+}
+
+// LoadingPID returns the PID of a Splash server that is loading its model
+// for addr but has not bound it yet, or 0 when there is none. Splash loads
+// before it binds, so the only trace of a loading Splash is its process: a
+// session leader (the launcher forks every server into a session of its
+// own, so PGID == PID) whose command line is a Splash serve with the
+// address's host and port (ADR-0015). On a platform without a process table
+// (windows) it returns 0.
+func (b *Splash) LoadingPID(addr string) int {
+	procs, err := processTable()
+	if err != nil {
+		return 0
+	}
+	return splashLoadingPID(procs, addr, b.DefaultAddr())
+}
+
+// splashLoadingPID picks the first session leader in procs whose command
+// line is a Splash server bound for addr. A --host or --port absent from
+// the command line falls back to Splash's own default, taken from
+// defaultAddr.
+func splashLoadingPID(procs []processEntry, addr, defaultAddr string) int {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	defaultHost, defaultPort, err := net.SplitHostPort(defaultAddr)
+	if err != nil {
+		return 0
+	}
+	for _, p := range procs {
+		if p.PID <= 0 || p.PID != p.PGID || !isSplashServeCommand(p.Args) {
+			continue
+		}
+		if lastFlagValue(p.Args, "--host", defaultHost) == host &&
+			lastFlagValue(p.Args, "--port", defaultPort) == port {
+			return p.PID
+		}
+	}
+	return 0
+}
+
+// isSplashServeCommand reports whether args is the command line of a Splash
+// server in any of the forms one launch passes through, each exec'ing the
+// next in the same process: the `splash` command (a wrapper script shows up
+// as `/bin/sh …/splash serve`), the checkout's `splash` script, Python
+// running `install/launcher.py serve`, and finally Python running
+// `server/server.py … --binary …/splash`. Every form carries --model. A
+// command line that merely contains `serve` — another server's
+// `<name> serve --model …` — does not match: the word before `serve` must
+// be `splash` or `launcher.py`.
+func isSplashServeCommand(args []string) bool {
+	if lastFlagValue(args, "--model", "") == "" {
+		return false
+	}
+	for i, arg := range args {
+		if arg == "serve" && i > 0 {
+			if prev := filepath.Base(args[i-1]); prev == "splash" || prev == "launcher.py" {
+				return true
+			}
+		}
+	}
+	return filepath.Base(lastFlagValue(args, "--binary", "")) == "splash"
+}
+
+// lastFlagValue returns the value of the last occurrence of flag in args,
+// in either the `--flag value` or the `--flag=value` form, or fallback when
+// the flag is absent. The last occurrence wins because Splash's argument
+// parser keeps it, which is how an extra_args override takes effect.
+func lastFlagValue(args []string, flag, fallback string) string {
+	value := fallback
+	for i, arg := range args {
+		switch {
+		case arg == flag && i+1 < len(args):
+			value = args[i+1]
+		case strings.HasPrefix(arg, flag+"="):
+			value = strings.TrimPrefix(arg, flag+"=")
+		}
+	}
+	return value
 }
 
 // isSplashResponse reports whether resp carries Splash's Server header.

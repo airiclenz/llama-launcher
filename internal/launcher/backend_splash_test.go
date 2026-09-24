@@ -393,3 +393,145 @@ func TestSplashServerBinary(t *testing.T) {
 		t.Errorf("ServerBinary = %q, want splash", got)
 	}
 }
+
+// splashLoadingArgs is the command line of each form a launcher-started
+// Splash passes through while it loads, captured from a real Splash
+// (`splash serve` through the ~/.local/bin wrapper, a source checkout):
+// every form exec's the next in the same process, which binds the port
+// only once the model has loaded.
+var splashLoadingArgs = map[string][]string{
+	"wrapper script": strings.Fields("/bin/sh /Users/u/.local/bin/splash serve --model incoai/Qwen3.8-27B-Splash " +
+		"--host 127.0.0.1 --port 18731"),
+	"checkout script": strings.Fields("/bin/sh /Users/u/Repos/splash/splash serve --model incoai/Qwen3.8-27B-Splash " +
+		"--host 127.0.0.1 --port 18731"),
+	"launcher.py": strings.Fields("/opt/homebrew/bin/python3.14 -u /Users/u/Repos/splash/install/launcher.py serve " +
+		"--model incoai/Qwen3.8-27B-Splash --host 127.0.0.1 --port 18731"),
+	"server.py": strings.Fields("/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/" +
+		"Resources/Python.app/Contents/MacOS/Python -u /Users/u/Repos/splash/server/server.py " +
+		"/Users/u/Repos/splash/install/models/incoai/Qwen3.8-27B-Splash/target " +
+		"/Users/u/Repos/splash/install/models/incoai/Qwen3.8-27B-Splash/draft " +
+		"--tokenizer /Users/u/Repos/splash/install/models/incoai/Qwen3.8-27B-Splash/tokenizer " +
+		"--model incoai/Qwen3.8-27B-Splash --binary /Users/u/Repos/splash/build/splash " +
+		"--host 127.0.0.1 --port 18731 --max-memory auto --max-context auto"),
+}
+
+func TestSplashLoadingPID(t *testing.T) {
+	t.Parallel()
+
+	const addr = "127.0.0.1:18731"
+	leader := func(args string) []processEntry {
+		return []processEntry{{PID: 4242, PGID: 4242, Args: strings.Fields(args)}}
+	}
+
+	for name, args := range splashLoadingArgs {
+		t.Run("matches the "+name+" form", func(t *testing.T) {
+			t.Parallel()
+			procs := []processEntry{{PID: 4242, PGID: 4242, Args: args}}
+			if got := splashLoadingPID(procs, addr, "127.0.0.1:8000"); got != 4242 {
+				t.Errorf("splashLoadingPID = %d, want 4242", got)
+			}
+		})
+	}
+
+	tests := []struct {
+		name  string
+		procs []processEntry
+		addr  string
+		want  int
+	}{
+		{
+			name:  "a process that is not its session's leader is not the launcher's fork",
+			procs: []processEntry{{PID: 4243, PGID: 4242, Args: splashLoadingArgs["server.py"]}},
+			addr:  addr,
+		},
+		{
+			name: "the serve-native child of a loading Splash is not matched",
+			procs: []processEntry{{PID: 4243, PGID: 4243, Args: strings.Fields(
+				"/Users/u/Repos/splash/build/splash serve-native /m/target /m/draft auto auto")}},
+			addr: addr,
+		},
+		{
+			name:  "another port",
+			procs: []processEntry{{PID: 4242, PGID: 4242, Args: splashLoadingArgs["wrapper script"]}},
+			addr:  "127.0.0.1:18732",
+		},
+		{
+			name:  "another host",
+			procs: []processEntry{{PID: 4242, PGID: 4242, Args: splashLoadingArgs["wrapper script"]}},
+			addr:  "0.0.0.0:18731",
+		},
+		{
+			name:  "the last --port wins, as an extra_args override does",
+			procs: leader("splash serve --model o/r --host 127.0.0.1 --port 8000 --port 18731"),
+			addr:  addr,
+			want:  4242,
+		},
+		{
+			name:  "the --flag=value form",
+			procs: leader("splash serve --model=o/r --host=127.0.0.1 --port=18731"),
+			addr:  addr,
+			want:  4242,
+		},
+		{
+			name:  "absent --host and --port fall back to Splash's default address",
+			procs: leader("splash serve --model o/r"),
+			addr:  "127.0.0.1:8000",
+			want:  4242,
+		},
+		{
+			name:  "another server's serve subcommand is foreign",
+			procs: leader("/usr/local/bin/vllm serve --model o/r --host 127.0.0.1 --port 18731"),
+			addr:  addr,
+		},
+		{
+			name:  "a splash serve without --model is not a server launch",
+			procs: leader("splash serve --host 127.0.0.1 --port 18731"),
+			addr:  addr,
+		},
+		{
+			name: "the matching leader is picked among others",
+			procs: []processEntry{
+				{PID: 1, PGID: 1, Args: []string{"/sbin/launchd"}},
+				{PID: 4242, PGID: 4242, Args: splashLoadingArgs["server.py"]},
+			},
+			addr: addr,
+			want: 4242,
+		},
+		{
+			name:  "an unparseable address",
+			procs: leader("splash serve --model o/r --port 18731"),
+			addr:  "no-port",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := splashLoadingPID(tt.procs, tt.addr, "127.0.0.1:8000"); got != tt.want {
+				t.Errorf("splashLoadingPID = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseProcessTable(t *testing.T) {
+	t.Parallel()
+
+	out := "    1     1 /sbin/launchd\n" +
+		"85311 85311 /usr/bin/python3 -u /s/server/server.py --port 18731\n" +
+		"garbage line here\n" +
+		"  42\n" +
+		"\n"
+	got := parseProcessTable(out)
+	want := []processEntry{
+		{PID: 1, PGID: 1, Args: []string{"/sbin/launchd"}},
+		{PID: 85311, PGID: 85311, Args: []string{"/usr/bin/python3", "-u", "/s/server/server.py", "--port", "18731"}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parseProcessTable = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i].PID != want[i].PID || got[i].PGID != want[i].PGID || !slices.Equal(got[i].Args, want[i].Args) {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

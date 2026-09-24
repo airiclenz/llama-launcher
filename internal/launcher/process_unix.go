@@ -1,14 +1,17 @@
 //go:build unix
 
 // Process control on the platforms that have it. Every unix-only primitive
-// the launcher needs to fork and stop a server lives behind these four
+// the launcher needs to fork, find and stop a server lives behind these five
 // functions; process_windows.go answers the same signatures with the
 // unsupported sentinel so the package builds — and actuates over HTTP —
 // there too (ADR-0012).
 
 package launcher
 
-import "syscall"
+import (
+	"os/exec"
+	"syscall"
+)
 
 // detachedSysProcAttr returns the attributes that put a spawned server in a
 // session of its own, so it outlives the launcher process and can later be
@@ -34,4 +37,16 @@ func signalGroup(pid int, sig syscall.Signal) error {
 // expected to be able to stop again. Unix can, so the fork paths proceed.
 func requireProcessControl() error {
 	return nil
+}
+
+// listProcesses returns every process on the machine with its process group
+// and whitespace-split command line, read from ps. It backs the search for a
+// loading Splash, which holds no address yet and so cannot be found through
+// lsof (ADR-0015).
+func listProcesses() ([]processEntry, error) {
+	out, err := exec.Command("ps", "-A", "-ww", "-o", "pid=,pgid=,command=").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseProcessTable(string(out)), nil
 }
