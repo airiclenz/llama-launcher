@@ -80,7 +80,10 @@ NOTES (2026-09-24): no CHANGELOG entry — docs-only internal decision brief, no
 **Depends on:** item 2 (execute item 2 first — the brief cites its redaction module as prior art).
 **Regression guard.** Depends on item 2 — the brief cites item 2's redaction module as prior art, so it must exist first. The brief must not contradict ADR-0013: every design claim traces to a line in `docs/adr/0013-gateway-data-plane-sibling.md`; guard by re-reading the brief against the ADR before commit.
 
-## 4. Verify and commit the first-run documentation fixes
+## 4. Verify and commit the first-run documentation fixes — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): re-derived from the assumption that the three first-run fixes (README.md:43,47, TDD §4.1, TDD §11 row) sit uncommitted in the working tree — they were already committed in ae91efd ("docs: update README and TDD") and re-verified against internal/launcher/cli.go:50-63 (generate, reload, continue; exit 2 only on generate/reload failure); this item's remaining diff is only the regression guard's §3.3 exit-code-2 row, so the commit message differs from the planned one.
+NOTES (2026-09-24): §3.3 row reads "parse error, unknown profile, example config cannot be written; first-run missing file continues — §4.1" — adds the example-config write failure, which cli.go still maps to exit 2.
 
 **What:** The three approved first-run fixes already sit uncommitted in the working tree (verified against `internal/launcher/cli.go:37-58` during the 2026-09-03 refocus run): `README.md:43,47` (Quick start — first run reloads and opens the menu), `llama-launcher.TDD.md:194` (§4.1 — continues, not exits), `llama-launcher.TDD.md:808` (§11 error table — no exit). Verify each edited line still matches current code behaviour (re-read `internal/launcher/cli.go:37-58`), then commit exactly these two files and nothing else.
 

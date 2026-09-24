@@ -180,7 +180,7 @@ All subcommands except `logs --follow` exit immediately after completing their a
 |---|---|
 | 0 | Success |
 | 1 | Server not running (for `status`) or general expected condition |
-| 2 | Configuration error (missing file, parse error, unknown profile) |
+| 2 | Configuration error (parse error, unknown profile, example config cannot be written; first-run missing file continues — §4.1) |
 | 3 | Process management or API error (failed to start, failed to load, stale PID) |
 
 ## 4. Configuration
