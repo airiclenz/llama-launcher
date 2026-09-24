@@ -191,7 +191,7 @@ Default: `~/.config/llama-launcher/config.yaml`
 
 Override with `--config <path>` flag or `LLAMA_LAUNCHER_CONFIG` environment variable (flag takes precedence).
 
-On first run, if no config file exists, the launcher creates a documented example config and exits with a message pointing to it.
+On first run, if no config file exists, the launcher creates a documented example config, reloads it, and continues — into the interactive menu for a bare invocation, or into the requested subcommand.
 
 ### 4.2 Schema
 
@@ -805,7 +805,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 
 | Scenario | Behaviour |
 |---|---|
-| Config file missing (first run) | Generate example config, print path, exit 2. |
+| Config file missing (first run) | Generate example config, print path, reload it, and continue (no exit). |
 | Config file parse error | Print error with line number (from yaml.v3), exit 2. |
 | Profile missing `server:` with no defensible fallback | Print warning (deprecation notice) or error (if no fallback is defensible). See [§4.6](#46-llm-server-selection). |
 | Unknown Profile name | Print error, exit 2. |

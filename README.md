@@ -40,11 +40,11 @@ Installation is deliberately Homebrew-only; `make install` just points you there
 ## Quick start
 
 ```bash
-# First run generates an example config
+# First run generates an example config, reloads it and opens the profile menu
 llama-launcher
 # => Created example config at: ~/.config/llama-launcher/config.yaml
 
-# Edit the config with your model paths, then run again
+# Edit the config with your model paths; the menu picks changes up on its own
 llama-launcher
 ```
 
