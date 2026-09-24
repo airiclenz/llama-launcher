@@ -1036,3 +1036,61 @@ func TestCmdUnload_AuthFailedInstance(t *testing.T) {
 		})
 	}
 }
+
+// TestLogsClean_RefusesZeroDays: `--days 0` would mean "older than now" and
+// delete every non-active log, so it is refused like any other non-positive
+// value — `--all` stays the only delete-everything spelling. Not parallel:
+// captureStderr swaps os.Stderr.
+func TestLogsClean_RefusesZeroDays(t *testing.T) {
+	for _, value := range []string{"0", "00"} {
+		t.Run(value, func(t *testing.T) {
+			cfgPath := writeRunConfig(t)
+			logPath := filepath.Join(filepath.Dir(cfgPath), "llamacpp-20200101-000000.log")
+			if err := os.WriteFile(logPath, []byte("old\n"), 0o600); err != nil {
+				t.Fatalf("writing log: %v", err)
+			}
+
+			var code int
+			stderr := captureStderr(t, func() {
+				code = Run([]string{"--config", cfgPath, "logs", "clean", "--days", value})
+			})
+
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2", code)
+			}
+			if !strings.Contains(stderr, "--days value must be a positive integer") {
+				t.Errorf("stderr does not name the refusal:\n%s", stderr)
+			}
+			if _, err := os.Stat(logPath); err != nil {
+				t.Errorf("log file was not left in place: %v", err)
+			}
+		})
+	}
+}
+
+// TestLogsClean_AcceptsOneDay: the smallest positive threshold still parses
+// and cleans by age — the stale log goes, the fresh one stays. Not parallel:
+// runCLI swaps the standard streams.
+func TestLogsClean_AcceptsOneDay(t *testing.T) {
+	cfgPath := writeRunConfig(t)
+	dir := filepath.Dir(cfgPath)
+	stalePath := filepath.Join(dir, "llamacpp-20200101-000000.log")
+	freshPath := filepath.Join(dir, "ollama-"+time.Now().Format(logTimestampFormat)+".log")
+	for _, path := range []string{stalePath, freshPath} {
+		if err := os.WriteFile(path, []byte("log\n"), 0o600); err != nil {
+			t.Fatalf("writing log: %v", err)
+		}
+	}
+
+	out, code := runCLI(t, cfgPath, "logs", "clean", "--days", "1")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Errorf("stale log still present (stat err = %v)", err)
+	}
+	if _, err := os.Stat(freshPath); err != nil {
+		t.Errorf("fresh log was removed: %v", err)
+	}
+}

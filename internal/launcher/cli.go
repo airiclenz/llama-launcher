@@ -809,6 +809,12 @@ func cmdLogsClean(cfg *Config, args []string) int {
 				}
 				n = n*10 + int(c-'0')
 			}
+			// Zero (or an empty value) would mean "older than now" and delete
+			// every non-active log; --all is the only delete-everything spelling.
+			if n == 0 {
+				fmt.Fprintln(os.Stderr, "Error: --days value must be a positive integer")
+				return 2
+			}
 			days = n
 			daysSet = true
 			i++

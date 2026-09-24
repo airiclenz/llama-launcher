@@ -200,7 +200,10 @@ internal/launcher/backend_splash.go — LoadingPID, splashLoadingPID, isSplashSe
 - `go test ./internal/launcher/ -run 'TestParseProc|TestWithTrueArgv|TestSplashLoadingPID|TestParseProcessTable' -count=1`
 **Commit:** `fix(launcher): match a loading Splash by its true argv`
 
-## 9. `logs clean --days 0` is refused
+## 9. `logs clean --days 0` is refused — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by the new N ≥ 1 rule on `--days` (command table row and §log cleanup "Manual" line now state that `--days 0` is refused)
+NOTES (2026-09-24): the n == 0 check also refuses an empty value (`--days ""`), which the digit loop previously parsed as 0
 
 **What:** Fixes audit finding "`logs clean --days 0` deletes every non-active `.log` file".
 **Regression guard.** New tests carry the Acceptance filter's prefixes (none exists at base): `TestLogsClean_…`, not the `TestCmd…` form the filter skips. Assert the message through `captureStderr` (cli_test.go) — `runCLI` discards stderr.
