@@ -236,7 +236,11 @@ internal/launcher/discovery.go — findManagedLogFile; internal/launcher/discove
 - `go test ./internal/launcher/ -run 'TestCreateLogPath|TestParseLogTimestamp|TestCleanupLogs|TestFindManagedLogFile' -count=1`
 **Commit:** `fix(launcher): give every start its own log file`
 
-## 11. Legacy state cleanup deletes only files the launcher wrote
+## 11. Legacy state cleanup deletes only files the launcher wrote — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): `isLegacyStateFile` reads its candidate through `readLegacyStateCandidate`: it `Lstat`s the file (so a symlink is never followed), opens it, and uses `os.SameFile` to confirm the open file is the one it inspected. The read is capped at 64 KiB + 1. A `pid`/`port` given as a quoted string is refused, because the Goal says "number" and the launcher never wrote a string.
+NOTES (2026-09-24): the tests go beyond the plan's list: a backend mismatch, a missing, negative or quoted pid, a zero port, a JSON array, an oversized file, a symlink and a directory. The unix owner-uid refusal has no test, because making a file owned by another uid needs root.
+NOTES (2026-09-24): the TDD §12.2 test table gained a `TestCleanupLegacyStateFiles` / `TestIsLegacyStateFile` row, and the §2 file table gained rows for `legacy_state_unix.go` / `legacy_state_windows.go`. CONTEXT.md's line on "legacy state-*.json files written by pre-live-derivation versions" stays accurate and is unchanged.
 
 **What:** Fixes audit finding "Glob-matched delete of user files in the config directory".
 **Regression guard.** `pid` must be present as a number ≥ 0, not non-zero — external connects stored `"pid": 0` (git 17c5288 `connectExternalServer`, always for lmstudio). The owner-uid check lives in new `legacy_state_unix.go` / `legacy_state_windows.go` (`syscall.Stat_t` has no windows twin; windows skips it). Tests call a new unexported `cleanupLegacyStateFiles(dir string)` (no Once); the exported wrapper stays the Once + `DefaultConfigDir()` shim, already spent by `Run` in cli_test.go.

@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1229,24 +1232,117 @@ func unloadServerModel(ops activationOps, backend, addr string) (*StopResult, er
 	return &StopResult{Instance: inst, Steps: rec.steps}, unloadErr
 }
 
-// cleanupLegacyStateFiles deletes state-*.json files left over from earlier
-// versions of the launcher that persisted server state to disk. Runs once
-// per process. Silent on failure — these files are best-effort cleanup, not
-// load-bearing.
+// legacyStateFileMaxBytes caps the size of a file the legacy state cleanup
+// will read and judge. A launcher-written state file held one small JSON
+// object; anything larger is not one and stays.
+const legacyStateFileMaxBytes = 64 << 10
+
+// legacySharedStateFileName is the single state file the earliest launcher
+// versions wrote, before state was split per backend.
+const legacySharedStateFileName = "state.json"
+
+// legacyStateFileNamePattern matches the per-backend state file names earlier
+// launcher versions wrote: state-<backend>.json and state-<backend>-<suffix>.json.
+// The captured group is the backend the name claims.
+var legacyStateFileNamePattern = regexp.MustCompile(`^state-(llamacpp|ollama|lmstudio)(-.+)?\.json$`)
+
+// legacyStateBackends are the backend names a launcher-written state file
+// could carry; state.json, whose name claims none, must carry one of them.
+var legacyStateBackends = []string{"llamacpp", "ollama", "lmstudio"}
+
 var legacyStateCleanupOnce sync.Once
 
+// CleanupLegacyStateFiles deletes the state files earlier versions of the
+// launcher persisted server state to, from the default config directory. It
+// runs once per process. Silent on failure — these files are best-effort
+// cleanup, not load-bearing.
 func CleanupLegacyStateFiles() {
 	legacyStateCleanupOnce.Do(func() {
-		dir := DefaultConfigDir()
-		os.Remove(filepath.Join(dir, "state.json"))
-		matches, err := filepath.Glob(filepath.Join(dir, "state-*.json"))
-		if err != nil {
-			return
-		}
-		for _, path := range matches {
+		cleanupLegacyStateFiles(DefaultConfigDir())
+	})
+}
+
+// cleanupLegacyStateFiles removes every state.json and state-*.json file in dir
+// that isLegacyStateFile recognises as launcher-written. The config directory
+// is the user's, so a file that merely shares the name pattern stays. Removal
+// failures are ignored on purpose: nothing reads these files any more.
+func cleanupLegacyStateFiles(dir string) {
+	candidates := []string{filepath.Join(dir, legacySharedStateFileName)}
+	if matches, err := filepath.Glob(filepath.Join(dir, "state-*.json")); err == nil {
+		candidates = append(candidates, matches...)
+	}
+	for _, path := range candidates {
+		if isLegacyStateFile(path) {
 			os.Remove(path)
 		}
-	})
+	}
+}
+
+// isLegacyStateFile reports whether path is a state file an earlier launcher
+// version wrote: a legacy state file name, a regular file (never a symlink)
+// owned by the current user where the platform can tell, at most
+// legacyStateFileMaxBytes long, holding one JSON object whose backend matches
+// the name's, whose pid is a number ≥ 0 (external connects stored 0) and whose
+// port is a number > 0.
+func isLegacyStateFile(path string) bool {
+	nameBackend := ""
+	if name := filepath.Base(path); name != legacySharedStateFileName {
+		match := legacyStateFileNamePattern.FindStringSubmatch(name)
+		if match == nil {
+			return false
+		}
+		nameBackend = match[1]
+	}
+
+	data, ok := readLegacyStateCandidate(path)
+	if !ok {
+		return false
+	}
+
+	// Pointers tell an absent pid or port from a zero one; float64 refuses a
+	// quoted number, which the launcher never wrote.
+	var state struct {
+		Backend string   `json:"backend"`
+		PID     *float64 `json:"pid"`
+		Port    *float64 `json:"port"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return false
+	}
+	if state.PID == nil || *state.PID < 0 || state.Port == nil || *state.Port <= 0 {
+		return false
+	}
+	if nameBackend != "" {
+		return state.Backend == nameBackend
+	}
+	return slices.Contains(legacyStateBackends, state.Backend)
+}
+
+// readLegacyStateCandidate returns the contents of path when it is a regular
+// file owned by the current user and no larger than legacyStateFileMaxBytes.
+// The opened file is checked against the inspected one, so a file swapped in
+// between the two is never read.
+func readLegacyStateCandidate(path string) ([]byte, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > legacyStateFileMaxBytes || !ownedByCurrentUser(info) {
+		return nil, false
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer file.Close()
+
+	openedInfo, err := file.Stat()
+	if err != nil || !os.SameFile(info, openedInfo) {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(file, legacyStateFileMaxBytes+1))
+	if err != nil || len(data) > legacyStateFileMaxBytes {
+		return nil, false
+	}
+	return data, true
 }
 
 func IsProcessAlive(pid int) bool {

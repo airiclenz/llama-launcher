@@ -2613,3 +2613,112 @@ func TestCreateLogPath_CollisionRetriesWithoutTruncating(t *testing.T) {
 		}
 	}
 }
+
+// writeStateFixture writes content to name inside dir and returns its path.
+func writeStateFixture(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return path
+}
+
+func TestCleanupLegacyStateFiles(t *testing.T) {
+	const legacyOllama = `{"pid":4242,"backend":"ollama","host":"127.0.0.1","port":11434,"started_at":"2026-05-01T10:00:00Z"}`
+	removed := map[string]string{
+		"state-llamacpp.json":      `{"pid":1234,"backend":"llamacpp","host":"127.0.0.1","port":8080,"started_at":"2026-05-01T10:00:00Z","log_file":"/tmp/x.log"}`,
+		"state-ollama-11434.json":  legacyOllama,
+		"state-lmstudio-1234.json": `{"pid":0,"backend":"lmstudio","host":"127.0.0.1","port":1234,"started_at":"2026-05-01T10:00:00Z"}`,
+		legacySharedStateFileName:  `{"pid":99,"backend":"llamacpp","host":"127.0.0.1","port":8080,"started_at":"2026-05-01T10:00:00Z"}`,
+	}
+	kept := map[string]string{
+		"state-notes.json":              legacyOllama,
+		"state-ollama-backup-2024.json": `{"note":"my ollama backup","models":["llama3"]}`,
+		"state-llamacpp-broken.json":    `{"pid":1234,"backend":"llamacpp",`,
+		"state-ollama-mismatch.json":    `{"pid":1,"backend":"llamacpp","port":8080}`,
+		"state-ollama-nopid.json":       `{"backend":"ollama","port":11434}`,
+		"state-ollama-negpid.json":      `{"pid":-1,"backend":"ollama","port":11434}`,
+		"state-ollama-noport.json":      `{"pid":1,"backend":"ollama","port":0}`,
+		"state-ollama-strpid.json":      `{"pid":"1","backend":"ollama","port":11434}`,
+		"state-ollama-array.json":       `[{"pid":1,"backend":"ollama","port":11434}]`,
+	}
+
+	t.Run("launcher-written files go, everything else stays", func(t *testing.T) {
+		dir := t.TempDir()
+		for name, content := range removed {
+			writeStateFixture(t, dir, name, content)
+		}
+		for name, content := range kept {
+			writeStateFixture(t, dir, name, content)
+		}
+
+		cleanupLegacyStateFiles(dir)
+
+		for name := range removed {
+			if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+				t.Errorf("%s: want removed, stat err = %v", name, err)
+			}
+		}
+		for name := range kept {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Errorf("%s: want kept, stat err = %v", name, err)
+			}
+		}
+	})
+
+	t.Run("a non-state state.json stays", func(t *testing.T) {
+		dir := t.TempDir()
+		path := writeStateFixture(t, dir, legacySharedStateFileName, `{"theme":"dark","port":8080,"pid":1}`)
+
+		cleanupLegacyStateFiles(dir)
+
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("state.json without a known backend: want kept, stat err = %v", err)
+		}
+	})
+}
+
+func TestIsLegacyStateFile(t *testing.T) {
+	const legacyContent = `{"pid":7,"backend":"llamacpp","host":"127.0.0.1","port":8080}`
+
+	t.Run("oversized file", func(t *testing.T) {
+		dir := t.TempDir()
+		padding := strings.Repeat(" ", legacyStateFileMaxBytes)
+		path := writeStateFixture(t, dir, "state-llamacpp.json", legacyContent+padding)
+		if isLegacyStateFile(path) {
+			t.Error("a file over legacyStateFileMaxBytes must not be judged a legacy state file")
+		}
+	})
+
+	t.Run("symlink to a legacy file", func(t *testing.T) {
+		dir := t.TempDir()
+		target := writeStateFixture(t, dir, "elsewhere.json", legacyContent)
+		link := filepath.Join(dir, "state-llamacpp.json")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		if isLegacyStateFile(link) {
+			t.Error("a symlink must not be judged a legacy state file")
+		}
+	})
+
+	t.Run("directory with a legacy name", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "state-llamacpp.json")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if isLegacyStateFile(path) {
+			t.Error("a directory must not be judged a legacy state file")
+		}
+	})
+
+	t.Run("legacy file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := writeStateFixture(t, dir, "state-llamacpp.json", legacyContent)
+		if !isLegacyStateFile(path) {
+			t.Error("a launcher-written state file must be judged legacy")
+		}
+	})
+}
