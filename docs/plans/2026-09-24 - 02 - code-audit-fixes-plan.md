@@ -309,7 +309,12 @@ internal/launcher/integration_ollama_test.go — TryStart/LastStartedPID caller;
 - `go test ./internal/launcher/ -race -run 'TestOllama' -count=1`
 **Commit:** `fix(launcher): guard Ollama last-started fields with its mutex`
 
-## 15. The external start arm reports timeouts like the managed arm
+## 15. The external start arm reports timeouts like the managed arm — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): TryStart errors are wrapped with context (`<Server> not reachable at <addr> and could not be started: %w`), not returned bare as the assumed approach said; errors.Is/As and the TryStart text still reach the caller, and the address stays in the message.
+NOTES (2026-09-24): connectExternalServer takes the wait as a parameter (StartServer passes the new `externalStartWait` const, still 15 s) so tests can shorten it without mutating package state.
+NOTES (2026-09-24): the external timeout guidance is "Retry once it is healthy" with no `kill`/`logs`/`stop` command. Header line: "The server may still be starting — it was left running", plus " (PID n)" and "Log: <path>" only when they are set.
+NOTES (2026-09-24): bead llama-launcher-windows-err-unsupported-lost ("Propagate ErrUnsupported on the two Windows paths") is half done: the Ollama auto-start path now carries the sentinel, and the stop verbs are still open. The bead stays open and was not edited.
 
 **What:** Fixes audit finding "`ErrStartupTimeout` is not wrapped on the external arm; retries spawn orphan daemons". Depends on item 14 (same file).
 **Regression guard.** The external arm omits the PID line when PID is 0 and the Log line when LogFile is empty (LM Studio implements no `PIDTracker`), and its guidance names only commands that work on a not-yet-healthy external server (`logs`/`stop` answer "No server running." there); the managed `startupTimeoutErr` text stays byte-identical. It closes the gap docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md (Consequences) and the TDD ("Does not hold — auto-starting an external server") record; both are updated.

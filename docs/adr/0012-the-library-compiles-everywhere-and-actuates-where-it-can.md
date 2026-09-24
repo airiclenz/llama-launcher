@@ -26,17 +26,17 @@ the verb returns a clean sentinel instead of failing to build.**
   per-OS stub returns an error wrapping the new exported sentinel `ErrUnsupported`, but only
   the paths that hand that error straight back let a client match it, and the split is
   four-way: **starting a managed server** (`startManagedServer` asks `requireProcessControl()`
-  before it forks) and **the interactive menu** (`RunInteractiveMenu` asks
+  before it forks), **the interactive menu** (`RunInteractiveMenu` asks
   `requireInteractiveMenu()` — the menu never was supported on windows; the CLI now degrades
-  with a sentence rather than a build error) both return the wrapped sentinel unchanged, while
-  **auto-starting an external Ollama** loses it (`connectExternalServer` replaces every
-  `TryStart` failure with its own "not reachable … start it manually" advice) and **the stop
-  verbs** never produce one at all (`IsProcessAlive` is false on windows, so the escalation is
-  never entered, and `Stop`/`Unload` end at the generic "PID could not be determined" — except
-  for LM Studio, whose `lms server stop` hook genuinely stops the server). Carrying the
-  sentinel through those last two paths would be additive and would not change darwin
-  behaviour; it is a known gap in this decision's precision, left open only because there is
-  no windows host to prove it against, and tracked in `TODO.md`.
+  with a sentence rather than a build error) and **auto-starting an external Ollama**
+  (`connectExternalServer` wraps the `TryStart` error, whose `requireProcessControl()` refusal
+  carries the sentinel) all return it wrapped, while **the stop verbs** never produce one at
+  all (`IsProcessAlive` is false on windows, so the escalation is never entered, and
+  `Stop`/`Unload` end at the generic "PID could not be determined" — except for LM Studio,
+  whose `lms server stop` hook genuinely stops the server). Carrying the sentinel through that
+  last path would be additive and would not change darwin behaviour; it is a known gap in this
+  decision's precision, left open only because there is no windows host to prove it against,
+  and tracked in `TODO.md`.
 
 > **Amended 2026-07-29** (same day as ratification, during the v1.6.1 documentation pass — no
 > prior amendment convention existed in `docs/adr/`, so this is it). The windows bullet above
@@ -49,6 +49,15 @@ the verb returns a clean sentinel instead of failing to build.**
 > (compile everywhere, actuate where the mechanism exists, refuse cleanly instead of failing
 > to build) is unchanged; only its account of how each refusal surfaces is. TDD §16.6 states
 > the same split against the code.
+
+> **Amended 2026-09-24** (code-audit fixes). The windows bullet above said **auto-starting an
+> external Ollama** lost the sentinel: `connectExternalServer` replaced every `TryStart`
+> failure with its own "not reachable … start it manually" advice. It now wraps the `TryStart`
+> error, so `ErrUnsupported` survives there and only the stop verbs remain in the known gap.
+> The same change extends **`ErrStartupTimeout`** (below) to the external arm: an Ollama or
+> LM Studio server that `TryStart` launched but that misses its 15 s health window is left
+> running, and the error wraps the sentinel, naming the spawned PID and log path when the
+> backend tracks them (Ollama does, LM Studio does not).
 
 Two alternatives were rejected. **Client-side build tags** (each importer fences the launcher
 behind `//go:build darwin || linux` and stubs the rest) pushes one library's platform knowledge

@@ -28,12 +28,16 @@ const (
 	crashLogTailLines  = 10
 	defaultTailLines   = "50"
 	loopbackHost       = "127.0.0.1"
+	// externalStartWait bounds how long connectExternalServer waits for a
+	// server its TryStart just launched to report healthy.
+	externalStartWait = 15 * time.Second
 )
 
 var ErrNotRunning = errors.New("no server running")
 
-// ErrStartupTimeout reports that a managed server this launcher started did
-// not report healthy inside the activation wait window. It is not a failed
+// ErrStartupTimeout reports that a server this launcher started — a managed
+// fork, or an external server auto-started through TryStart — did not report
+// healthy inside its wait window. It is not a failed
 // start: the server is deliberately left running (see startupTimeoutErr), so
 // a slow model load can still finish and turn the address healthy later. The
 // decorated timeout errors wrap it; test for it with errors.Is.
@@ -57,7 +61,7 @@ func StartServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error
 	if mb, ok := b.(ManagedLLMServer); ok {
 		return startManagedServer(cfg, profile, mb)
 	}
-	return connectExternalServer(cfg, profile, b)
+	return connectExternalServer(cfg, profile, b, externalStartWait)
 }
 
 func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServer) (*RunningInstance, error) {
@@ -153,38 +157,38 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	return inst, nil
 }
 
-func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (*RunningInstance, error) {
+// connectExternalServer connects to an external server at the profile's
+// address, auto-starting it through TryStart when it is not reachable. A
+// TryStart failure (the binary missing from PATH, ErrUnsupported on windows)
+// is returned wrapped, so its own text and sentinel reach the caller. A
+// started server that misses the wait window is left running, exactly as on
+// the managed arm, and the error wraps ErrStartupTimeout.
+func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer, wait time.Duration) (*RunningInstance, error) {
 	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	inst := &RunningInstance{
+		Backend: profile.Backend,
+		Host:    *profile.Host,
+		Port:    *profile.Port,
+	}
 
-	launcherStarted := false
 	if err := b.HealthCheck(addr); err != nil {
-		if tryErr := b.TryStart(cfg, addr); tryErr == nil {
-			launcherStarted = true
-			if err := WaitForHealth(b, addr, 15*time.Second); err != nil {
-				return nil, fmt.Errorf("%s not reachable at %s after start attempt: %w", b.DisplayName(), addr, err)
+		if tryErr := b.TryStart(cfg, addr); tryErr != nil {
+			return nil, fmt.Errorf("%s not reachable at %s and could not be started: %w", b.DisplayName(), addr, tryErr)
+		}
+		if pt, ok := b.(PIDTracker); ok {
+			if pid := pt.LastStartedPID(); pid > 0 {
+				inst.PID = pid
+				inst.LogFile = pt.LastStartedLogFile()
 			}
-		} else {
-			return nil, fmt.Errorf("%s not reachable at %s — start it manually or check the endpoint in config", b.DisplayName(), addr)
+		}
+		if err := WaitForHealth(b, addr, wait); err != nil {
+			return nil, externalStartupTimeoutErr(
+				fmt.Errorf("%s not reachable at %s after start attempt: %w", b.DisplayName(), addr, err), inst)
 		}
 	}
 
-	var pid int
-	var logFile string
-	if launcherStarted {
-		if pt, ok := b.(PIDTracker); ok && pt.LastStartedPID() > 0 {
-			pid = pt.LastStartedPID()
-			logFile = pt.LastStartedLogFile()
-		}
-	}
-
-	return &RunningInstance{
-		PID:       pid,
-		Backend:   profile.Backend,
-		Host:      *profile.Host,
-		Port:      *profile.Port,
-		StartedAt: time.Now(),
-		LogFile:   logFile,
-	}, nil
+	inst.StartedAt = time.Now()
+	return inst, nil
 }
 
 // StopInstance stops whatever LLM-server instance is listening at addr. Stop
@@ -1101,6 +1105,25 @@ func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
 func startupTimeoutErr(err error, inst *RunningInstance) error {
 	return startupTimeout{fmt.Errorf("%w\nThe server may still be loading its model — it was left running (PID %d)\nLog: %s\nWatch it with `llama-launcher logs %s` and retry once it is healthy, or stop it with `llama-launcher stop %s`",
 		err, inst.PID, inst.LogFile, inst.Backend, inst.Backend)}
+}
+
+// externalStartupTimeoutErr decorates a health-wait timeout that follows an
+// external server's auto-start. Like startupTimeoutErr it leaves the server
+// running and wraps ErrStartupTimeout, but it names the PID and log path only
+// when the backend tracks them (LM Studio implements no PIDTracker), and its
+// guidance names no launcher verb: `logs` and `stop` find an external server
+// only once it answers its health check, so retrying then is the one step
+// that works.
+func externalStartupTimeoutErr(err error, inst *RunningInstance) error {
+	detail := "\nThe server may still be starting — it was left running"
+	if inst.PID > 0 {
+		detail += fmt.Sprintf(" (PID %d)", inst.PID)
+	}
+	if inst.LogFile != "" {
+		detail += "\nLog: " + inst.LogFile
+	}
+	detail += "\nRetry once it is healthy"
+	return startupTimeout{fmt.Errorf("%w%s", err, detail)}
 }
 
 // startupTimeout carries a decorated health-wait timeout unchanged and adds

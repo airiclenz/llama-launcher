@@ -553,6 +553,157 @@ func TestLoadProfile_StartupTimeoutIsErrStartupTimeout(t *testing.T) {
 	}
 }
 
+// TestStartupTimeoutErr_ManagedMessageUnchanged pins the managed arm's
+// timeout text byte for byte: the external arm gained its own decoration,
+// and the managed one must not drift with it.
+func TestStartupTimeoutErr_ManagedMessageUnchanged(t *testing.T) {
+	t.Parallel()
+
+	base := errors.New("server at 127.0.0.1:8080 did not become healthy within 30s")
+	inst := &RunningInstance{PID: 4242, Backend: "llamacpp", LogFile: "/logs/llamacpp.log"}
+
+	err := startupTimeoutErr(base, inst)
+
+	want := "server at 127.0.0.1:8080 did not become healthy within 30s\n" +
+		"The server may still be loading its model — it was left running (PID 4242)\n" +
+		"Log: /logs/llamacpp.log\n" +
+		"Watch it with `llama-launcher logs llamacpp` and retry once it is healthy, or stop it with `llama-launcher stop llamacpp`"
+	if err.Error() != want {
+		t.Errorf("message =\n%s\nwant\n%s", err, want)
+	}
+	if !errors.Is(err, ErrStartupTimeout) {
+		t.Error("managed timeout must wrap ErrStartupTimeout")
+	}
+}
+
+// TestConnectExternal_TimeoutIsErrStartupTimeout drives the external arm with
+// a backend whose TryStart succeeds and records a PID and log (Ollama's
+// shape) but whose health check never passes: the timeout must be
+// recognisable with errors.Is and name what was left running, and its
+// guidance must not point at `logs`/`stop`, which cannot find a not-yet-
+// healthy external server.
+func TestConnectExternal_TimeoutIsErrStartupTimeout(t *testing.T) {
+	t.Parallel()
+
+	b := &fakeTrackingExternalBackend{pid: 4242, logFile: "/logs/ollama-fake.log"}
+	profile := orchProfile("ollama", "chat", "llama3", "127.0.0.1", 11434)
+
+	inst, err := connectExternalServer(&Config{}, profile, b, 10*time.Millisecond)
+
+	if inst != nil {
+		t.Errorf("inst = %+v, want nil on timeout", inst)
+	}
+	if !errors.Is(err, ErrStartupTimeout) {
+		t.Fatalf("err = %v, want it to wrap ErrStartupTimeout", err)
+	}
+	for _, want := range []string{"did not become healthy", "left running", "(PID 4242)", "Log: /logs/ollama-fake.log"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	for _, reject := range []string{"llama-launcher logs", "llama-launcher stop"} {
+		if strings.Contains(err.Error(), reject) {
+			t.Errorf("error %q suggests %q, which answers \"No server running.\" for a not-yet-healthy external server", err, reject)
+		}
+	}
+}
+
+// TestConnectExternal_UntrackedTimeoutOmitsPIDAndLog covers an LM Studio-
+// shaped backend, which implements no PIDTracker: the timeout still wraps
+// ErrStartupTimeout, but prints neither a "PID 0" nor an empty "Log:" line.
+func TestConnectExternal_UntrackedTimeoutOmitsPIDAndLog(t *testing.T) {
+	t.Parallel()
+
+	b := &fakeExternalBackend{}
+	profile := orchProfile("lmstudio", "chat", "qwen", "127.0.0.1", 1234)
+
+	_, err := connectExternalServer(&Config{}, profile, b, 10*time.Millisecond)
+
+	if !errors.Is(err, ErrStartupTimeout) {
+		t.Fatalf("err = %v, want it to wrap ErrStartupTimeout", err)
+	}
+	if !strings.Contains(err.Error(), "left running") {
+		t.Errorf("error %q missing the left-running guidance", err)
+	}
+	for _, reject := range []string{"PID", "Log:"} {
+		if strings.Contains(err.Error(), reject) {
+			t.Errorf("error %q contains %q, want it omitted for a backend that tracks no PID", err, reject)
+		}
+	}
+}
+
+// TestConnectExternal_TryStartErrorSurfaces checks that a TryStart failure
+// reaches the caller as itself — its text and any sentinel it wraps — rather
+// than as the generic "start it manually" advice, and is not mistaken for a
+// startup timeout.
+func TestConnectExternal_TryStartErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		startErr error
+		wantText string
+		wantIs   error
+	}{
+		{"binary missing", errors.New("lms CLI not found in PATH"), "lms CLI not found in PATH", nil},
+		{"unsupported platform", fmt.Errorf("starting a server process: %w", ErrUnsupported), "starting a server process", ErrUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := &fakeExternalBackend{startErr: tc.startErr}
+			profile := orchProfile("lmstudio", "chat", "qwen", "127.0.0.1", 1234)
+
+			_, err := connectExternalServer(&Config{}, profile, b, 10*time.Millisecond)
+
+			if !errors.Is(err, tc.startErr) {
+				t.Fatalf("err = %v, want it to wrap the TryStart error", err)
+			}
+			if tc.wantIs != nil && !errors.Is(err, tc.wantIs) {
+				t.Errorf("err = %v, want it to wrap %v", err, tc.wantIs)
+			}
+			if !strings.Contains(err.Error(), tc.wantText) {
+				t.Errorf("error %q missing %q", err, tc.wantText)
+			}
+			if strings.Contains(err.Error(), "start it manually") {
+				t.Errorf("error %q still carries the generic not-reachable advice", err)
+			}
+			if errors.Is(err, ErrStartupTimeout) {
+				t.Error("a TryStart failure must not read as a startup timeout")
+			}
+		})
+	}
+}
+
+// fakeExternalBackend is a plain (non-managed) LLMServer whose health check
+// never passes and whose TryStart returns startErr. It tracks no PID, like
+// LM Studio.
+type fakeExternalBackend struct {
+	startErr error
+}
+
+func (f *fakeExternalBackend) Name() string                                 { return "fake" }
+func (f *fakeExternalBackend) DisplayName() string                          { return "Fake" }
+func (f *fakeExternalBackend) DefaultAddr() string                          { return "" }
+func (f *fakeExternalBackend) HealthCheck(string) error                     { return errors.New("unreachable") }
+func (f *fakeExternalBackend) ResolveModel(*Config, string) (string, error) { return "", nil }
+func (f *fakeExternalBackend) LoadModel(string, *ResolvedProfile) error     { return nil }
+func (f *fakeExternalBackend) UnloadModel(string, string) error             { return nil }
+func (f *fakeExternalBackend) TryStart(*Config, string) error               { return f.startErr }
+func (f *fakeExternalBackend) TryStop(string) error                         { return nil }
+func (f *fakeExternalBackend) ParamSpecs() []ProfileParamSpec               { return nil }
+
+// fakeTrackingExternalBackend adds PIDTracker to fakeExternalBackend, like
+// Ollama, reporting a fixed PID and log path for the "spawned" server.
+type fakeTrackingExternalBackend struct {
+	fakeExternalBackend
+	pid     int
+	logFile string
+}
+
+func (f *fakeTrackingExternalBackend) LastStartedPID() int        { return f.pid }
+func (f *fakeTrackingExternalBackend) LastStartedLogFile() string { return f.logFile }
+
 // realWaitOps is a fakeOps whose health wait is the production one: it runs
 // WaitForHealth against whatever is listening at addr, shortening the window
 // the activation asks for to keep the test quick. Every other operation stays

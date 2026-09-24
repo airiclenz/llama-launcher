@@ -41,7 +41,8 @@
 // When the activation wait expires LoadProfile returns an error wrapping
 // ErrStartupTimeout: the server was left running, so a later health success
 // still completes the load — observe it yourself rather than treating the
-// call as a failure.
+// call as a failure. The same holds for an Ollama or LM Studio server that
+// LoadProfile auto-started and that missed its shorter (~15 s) start wait.
 //
 // # Platforms
 //
@@ -57,13 +58,12 @@
 // calls.
 //
 // Match on the sentinel only where a windows refusal preserves it. Starting
-// a managed llama-server or Splash server refuses before it forks and
-// returns an error wrapping ErrUnsupported, so errors.Is finds it. Two
-// paths report in their own words instead: LoadProfile against a stopped
-// Ollama cannot start the daemon and reports the address as not reachable,
-// and a Stop — or an Unload that reduces to one on a managed backend — ends
-// with the server still reachable and its PID undetermined. Both are plain
-// errors, not wrapped sentinels.
+// a managed llama-server or Splash server refuses before it forks, and
+// LoadProfile against a stopped Ollama refuses to start the daemon; both
+// return an error wrapping ErrUnsupported, so errors.Is finds it. One path
+// reports in its own words instead: a Stop — or an Unload that reduces to
+// one on a managed backend — ends with the server still reachable and its
+// PID undetermined. That is a plain error, not a wrapped sentinel.
 //
 // # One Config per process
 //
