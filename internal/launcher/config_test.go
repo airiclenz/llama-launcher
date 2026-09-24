@@ -1427,6 +1427,76 @@ func TestLoadConfig_KeyCommandFailure(t *testing.T) {
 	}
 }
 
+// api_key_cmd runs any line in the file as the user, so on unix it runs only
+// from a config the user owns and only they can write. A file that fails the
+// gate is refused naming the path and the fix, with no command run; a file with
+// no command is never judged; a symlinked config is judged by its target.
+// Modes are set with os.Chmod because os.WriteFile filters them through umask.
+func TestLoadConfig_KeyCommandTrustGate(t *testing.T) {
+	requirePOSIXShell(t)
+
+	tests := []struct {
+		name         string
+		mode         os.FileMode
+		hasCommand   bool
+		viaSymlink   bool
+		shouldRefuse bool
+	}{
+		{name: "owned 0600 runs the command", mode: 0o600, hasCommand: true},
+		{name: "group-writable 0620 is refused", mode: 0o620, hasCommand: true, shouldRefuse: true},
+		{name: "world-writable 0602 is refused", mode: 0o602, hasCommand: true, shouldRefuse: true},
+		{name: "no api_key_cmd loads at 0666", mode: 0o666},
+		{name: "symlink to an owned 0600 config runs the command", mode: 0o600, hasCommand: true, viaSymlink: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "ran")
+			servers := "  llamacpp: true\n"
+			if tc.hasCommand {
+				servers = "  llamacpp:\n    api_key_cmd: \"touch '" + marker + "'; printf sk-test\"\n"
+			}
+			path := keySourceConfig(t, servers)
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatalf("chmod: %v", err)
+			}
+			loadPath := path
+			if tc.viaSymlink {
+				loadPath = filepath.Join(t.TempDir(), "link.yaml")
+				if err := os.Symlink(path, loadPath); err != nil {
+					t.Fatalf("symlink: %v", err)
+				}
+			}
+
+			cfg, err := LoadConfig(loadPath)
+
+			_, statErr := os.Stat(marker)
+			commandRan := statErr == nil
+			if tc.shouldRefuse {
+				if err == nil {
+					t.Fatal("expected the load to be refused")
+				}
+				if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "chmod 600 "+path) {
+					t.Errorf("error = %q, want it to name %s and the fix `chmod 600 %s`", err, path, path)
+				}
+				if commandRan {
+					t.Error("the command ran from a config that failed the trust gate")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if commandRan != tc.hasCommand {
+				t.Errorf("command ran = %v, want %v", commandRan, tc.hasCommand)
+			}
+			if tc.hasCommand && cfg.APIKeyFor("llamacpp") != "sk-test" {
+				t.Errorf("APIKeyFor = %q, want %q", cfg.APIKeyFor("llamacpp"), "sk-test")
+			}
+		})
+	}
+}
+
 // A disabled server is one the launcher never talks to, so asking its store for
 // a secret would be a dialog the user cannot connect to anything they did — and
 // a broken command on an entry nobody uses must not stop the launcher.

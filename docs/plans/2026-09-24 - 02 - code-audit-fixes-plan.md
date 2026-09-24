@@ -53,7 +53,10 @@
 - 21: guard folded (every doc sentence, keep the LoadConfig re-read line, stronger Acceptance)
 - 22: guard folded (errors and warnings separate, per-surface wording); item 1's trust gate stays out of it
 
-## 1. api_key_cmd runs only from a config the user owns
+## 1. api_key_cmd runs only from a config the user owns — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): the gate sits in resolveKeyCommands before the first runKeyCommand, and only when an enabled entry carries api_key_cmd. It judges c.ConfigPath (the tilde-expanded path parseConfig read). A not-owned file's refusal also says "make the file yours", because `chmod 600` alone cannot fix ownership.
+NOTES (2026-09-24): the not-owned branch has no test, because a test cannot chown a file to another uid without root. Only the mode branch and the symlink case are covered.
 
 **What:** Fixes audit finding "`api_key_cmd` executed whole via `sh -c` from the config file" under the ratified trust gate.
 **Regression guard.** `configTrusted` judges `os.Stat` of `c.ConfigPath` (the file `parseConfig` read; a symlinked config is judged by its target, never `os.Lstat`); the platform files carry `//go:build unix` / `//go:build windows` (`_unix` is no GOOS suffix). Tests `os.Chmod` each file to its exact mode after writing (`os.WriteFile` is umask-filtered: 0620 → 0600) and call `requirePOSIXShell`. `config validate` runs no command and does not report the gate (item 22); the TDD/README lines state that gap.

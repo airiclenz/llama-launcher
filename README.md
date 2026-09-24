@@ -128,7 +128,7 @@ servers:
     api_key_cmd: "security find-generic-password -s llama-launcher -a llamacpp -w"
 ```
 
-The command is handed whole to a shell (pipelines work) and runs once at startup for every enabled server. Set `api_key` or `api_key_cmd`, never both. If you *do* want a literal key to stay in the file, set `plaintext_key_ok: true` on the entry so nothing offers to move it into a secret store.
+The command is handed whole to a shell (pipelines work) and runs once at startup for every enabled server. Because any line there runs as you, on macOS and Linux the launcher runs it only from a config file you own that nobody else can write: a file owned by another account, or group- or world-writable, stops the launcher with an error naming the file and the fix (`chmod 600 <path>`), and nothing runs. `config validate` does not check this — the next load does. Set `api_key` or `api_key_cmd`, never both. If you *do* want a literal key to stay in the file, set `plaintext_key_ok: true` on the entry so nothing offers to move it into a secret store.
 
 While a literal key sits in the file without `plaintext_key_ok: true`, running `llama-launcher` with no arguments raises one offer before the menu — move the key(s) into your machine's secret store (the entry's `api_key` line becomes an `api_key_cmd` line, and only after the stored key has been read back through it), not now (asked again next launch), or never for these entries (records `plaintext_key_ok: true`). Subcommands never prompt, so they print a one-line warning naming the entries, the config file this run read, and the ways out by hand instead.
 

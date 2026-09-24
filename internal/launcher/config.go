@@ -542,20 +542,32 @@ const maxKeyErrorStderr = 240
 // launcher never talks to their server, so asking their store for a secret
 // would be a dialog the user cannot connect to anything they did.
 //
+// Before any command runs, the file they came from must pass configTrusted:
+// on unix, a config the current user does not own, or that its group or others
+// can write, is refused naming the file, and no command runs. A config with no
+// enabled api_key_cmd is never judged — it runs nothing.
+//
 // The first failure stops the load and is returned as-is — it already names the
 // entry and quotes the command.
 func (c *Config) resolveKeyCommands() error {
 	names := make([]string, 0, len(c.Servers))
-	for name := range c.Servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		sc := c.Servers[name]
+	for name, sc := range c.Servers {
 		if !sc.Enabled || strings.TrimSpace(sc.APIKeyCmd) == "" {
 			continue
 		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+
+	if err := configTrusted(c.ConfigPath); err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		sc := c.Servers[name]
 		key, err := runKeyCommand(name, sc.APIKeyCmd, keyCommandTimeout)
 		if err != nil {
 			return err
@@ -570,10 +582,11 @@ func (c *Config) resolveKeyCommands() error {
 // platform's shell, which splits it.
 //
 // A shell is the right call here and a wrong one elsewhere. This line is the
-// user's own, written into a file only they can write (mode 0600), and it is
-// routinely a pipeline — `pass show llamacpp | head -1`, `op read op://…` — so
-// splitting it in Go would force every such user into a wrapper script of their
-// own. It is also the exact line the migration offer persists and reads back,
+// user's own, written into a file only they can write (on unix
+// resolveKeyCommands enforces that premise through configTrusted before any
+// line runs, ADR-0016), and it is routinely a pipeline — `pass show llamacpp |
+// head -1`, `op read op://…` — so splitting it in Go would force every such
+// user into a wrapper script of their own. It is also the exact line the migration offer persists and reads back,
 // so both halves of that round trip must go through the same door.
 func keyCommandArgv(command string) []string {
 	if runtime.GOOS == "windows" {
