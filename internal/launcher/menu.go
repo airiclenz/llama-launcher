@@ -295,7 +295,7 @@ func runLoadedMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 		return doStopServer(cfg, inst)
 	case "Show log":
 		fmt.Print(escClear + escCursorShow)
-		return TailLog(inst.LogFile, true)
+		return showInstanceLog(cfg, inst, true)
 	case "Edit config":
 		return doEditConfig(cfg)
 	}
@@ -340,7 +340,7 @@ func runIdleMenu(cfg *Config, inst *RunningInstance, stateSig string) error {
 		return doStopServer(cfg, inst)
 	case "Show log":
 		fmt.Print(escClear + escCursorShow)
-		return TailLog(inst.LogFile, true)
+		return showInstanceLog(cfg, inst, true)
 	case "Edit config":
 		return doEditConfig(cfg)
 	}
@@ -1022,7 +1022,7 @@ func runLoadedMenuSimple(cfg *Config, inst *RunningInstance) error {
 	case stopIdx:
 		return doStopServer(cfg, inst)
 	case logIdx:
-		return TailLog(inst.LogFile, false)
+		return showInstanceLog(cfg, inst, false)
 	case editIdx:
 		return doEditConfig(cfg)
 	}
@@ -1085,6 +1085,13 @@ func doSwitchSimple(cfg *Config, available []string) error {
 		return fmt.Errorf("invalid selection: %s", choice)
 	}
 	return doLoadProfile(cfg, available[idx])
+}
+
+// showInstanceLog is the menus' Show log action: it tails inst's log with the
+// keys of inst's own backend masked. The menus offer Show log for any backend,
+// so the keys come from inst.Backend, never from a fixed backend name.
+func showInstanceLog(cfg *Config, inst *RunningInstance, follow bool) error {
+	return TailLog(inst.LogFile, follow, []string{cfg.APIKeyFor(inst.Backend)})
 }
 
 func readLine() string {

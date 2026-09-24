@@ -1,8 +1,10 @@
 package launcher
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -140,7 +142,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	// the wait goroutine stays parked to reap it whenever it does exit.
 	select {
 	case waitErr := <-waitResult:
-		tail := readLastLines(logPath, crashLogTailLines)
+		tail := readLastLines(logPath, crashLogTailLines, []string{cfg.APIKeyFor(profile.Backend)})
 		return nil, fmt.Errorf("server exited immediately after start (%v)\nLog tail:\n%s", waitErr, tail)
 	case <-time.After(startupGracePeriod):
 	}
@@ -1110,7 +1112,12 @@ func IsProcessAlive(pid int) bool {
 	return signalPID(pid, 0) == nil
 }
 
-func TailLog(logPath string, follow bool) error {
+// TailLog prints the last lines of logPath to stdout, following the file as it
+// grows when follow is set. Every line passes through RedactLogText first.
+//
+// redaction-required: callers must pass the profile's resolved keys
+// (cfg.APIKeyFor(inst.Backend)); redaction sits in RedactLogText.
+func TailLog(logPath string, follow bool, keys []string) error {
 	args := []string{"-n", defaultTailLines}
 	if follow {
 		args = append(args, "-f")
@@ -1119,9 +1126,43 @@ func TailLog(logPath string, follow bool) error {
 
 	cmd := exec.Command("tail", args...)
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("piping tail output: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting tail: %w", err)
+	}
+
+	// Line by line, so a key is never split across two redaction passes and
+	// a followed log still appears as each line lands.
+	copyErr := copyRedactedLines(os.Stdout, stdout, keys)
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		return waitErr
+	}
+	return copyErr
+}
+
+// copyRedactedLines copies src to dst one line at a time, masking each line
+// with RedactLogText. A final line without a trailing newline is copied too.
+func copyRedactedLines(dst io.Writer, src io.Reader, keys []string) error {
+	reader := bufio.NewReader(src)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			if _, err := io.WriteString(dst, RedactLogText(line, keys)); err != nil {
+				return fmt.Errorf("writing log output: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return fmt.Errorf("reading log output: %w", readErr)
+		}
+	}
 }
 
 func createLogPath(cfg *Config, name string) (string, error) {
@@ -1133,7 +1174,12 @@ func createLogPath(cfg *Config, name string) (string, error) {
 	return filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", name, ts)), nil
 }
 
-func readLastLines(path string, n int) string {
+// readLastLines returns the last n lines of the log at path, masked by
+// RedactLogText, or a placeholder when the file cannot be read.
+//
+// redaction-required: callers must pass the profile's resolved keys
+// (cfg.APIKeyFor(profile.Backend)); redaction sits in RedactLogText.
+func readLastLines(path string, n int, keys []string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "(could not read log)"
@@ -1142,5 +1188,5 @@ func readLastLines(path string, n int) string {
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	return strings.Join(lines, "\n")
+	return RedactLogText(strings.Join(lines, "\n"), keys)
 }

@@ -89,7 +89,7 @@ func TestReadLastLines(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := readLastLines(path, 3)
+		got := readLastLines(path, 3, nil)
 		want := "line3\nline4\nline5"
 		if got != want {
 			t.Errorf("readLastLines = %q, want %q", got, want)
@@ -105,7 +105,7 @@ func TestReadLastLines(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got := readLastLines(path, 10)
+		got := readLastLines(path, 10, nil)
 		want := "line1\nline2"
 		if got != want {
 			t.Errorf("readLastLines = %q, want %q", got, want)
@@ -114,11 +114,65 @@ func TestReadLastLines(t *testing.T) {
 
 	t.Run("nonexistent file", func(t *testing.T) {
 		t.Parallel()
-		got := readLastLines("/nonexistent/path", 5)
+		got := readLastLines("/nonexistent/path", 5, nil)
 		if got != "(could not read log)" {
 			t.Errorf("readLastLines = %q, want fallback message", got)
 		}
 	})
+}
+
+// crashingManagedServer is a managed backend whose "server" is a shell that
+// echoes the key it was given, both bare and as an --api-key argv pair, and
+// exits at once — the start-crash path that folds the log tail into an error.
+type crashingManagedServer struct {
+	startingStopServer
+}
+
+func (s *crashingManagedServer) ServerBinary(*Config) string { return "/bin/sh" }
+func (s *crashingManagedServer) BuildServerArgs(*Config, *ResolvedProfile) []string {
+	return []string{"-c", `echo "argv: --api-key $LAUNCHER_TEST_KEY --api-key extra-args-key"; echo "key $LAUNCHER_TEST_KEY"; exit 1`}
+}
+func (s *crashingManagedServer) BuildServerEnv(cfg *Config, profile *ResolvedProfile) []string {
+	return []string{"LAUNCHER_TEST_KEY=" + cfg.APIKeyFor(profile.Backend)}
+}
+
+// TestStartManagedServer_CrashTailRedactsKeys asserts the start-crash error —
+// readLastLines' one production caller — never carries the profile backend's
+// configured key or an --api-key argv value.
+func TestStartManagedServer_CrashTailRedactsKeys(t *testing.T) {
+	t.Parallel()
+
+	const sentinel = "sk-sentinel-crash-tail-91c2"
+	stub := &crashingManagedServer{startingStopServer{
+		name:     "crashtail",
+		starting: func(string) bool { return false },
+	}}
+	host, portText, err := net.SplitHostPort(deadAddr(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{
+		Servers: map[string]ServerConfig{stub.name: {Enabled: true, APIKey: sentinel}},
+		LogDir:  t.TempDir(),
+	}
+	profile := &ResolvedProfile{Backend: stub.name, ProfileParams: ProfileParams{Host: &host, Port: &port}}
+
+	inst, err := startManagedServer(cfg, profile, stub)
+
+	if err == nil {
+		t.Fatalf("startManagedServer = %+v, want the start-crash error", inst)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Log tail:") || !strings.Contains(msg, "[redacted]") {
+		t.Fatalf("error is not a redacted start-crash tail: %v", err)
+	}
+	if strings.Contains(msg, sentinel) || strings.Contains(msg, "extra-args-key") {
+		t.Errorf("start-crash error leaks a key: %v", err)
+	}
 }
 
 func TestShouldCrossServerUnload(t *testing.T) {

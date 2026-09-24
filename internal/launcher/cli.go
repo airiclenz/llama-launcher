@@ -708,7 +708,7 @@ func cmdLogs(cfg *Config, args []string) int {
 		return 1
 	}
 
-	if err := TailLog(inst.LogFile, follow); err != nil {
+	if err := TailLog(inst.LogFile, follow, []string{cfg.APIKeyFor(inst.Backend)}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}

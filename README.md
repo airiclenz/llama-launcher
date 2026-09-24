@@ -126,6 +126,8 @@ The launcher is not a proxy, so what the key does depends on the backend:
 
 In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). The config file is created with mode 0600. For `llamacpp`, an `extra_args` `--api-key` does not replace the configured key: llama-server appends it, so *both* keys are accepted (observed on llama.cpp b10851) — and that literal extra key *is* visible in `ps`. To change the key, change `api_key` rather than adding an override.
 
+Log text the launcher shows you — `llama-launcher logs`, the menu's *Show log*, the log tail printed when a server dies at start, and the MCP `tail_log` tool — has the configured key and any `--api-key` value replaced with `[redacted]`. The log files on disk are left as the server wrote them.
+
 ### Memory readout
 
 The TUI's status header shows a live memory + swap readout (macOS), fully customizable via `memory_status_format` — colored spans, 24-bit colors, and bar-graph gauges:
