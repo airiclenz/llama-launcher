@@ -39,7 +39,8 @@ func (b *LMStudio) HealthCheck(addr string) error {
 	}
 
 	// Exclude llamacpp: its /health returns {"status":"ok"}.
-	// LM Studio returns {"error":"..."} for the same path.
+	// LM Studio returns {"error":"..."} for the same path. Splash answers
+	// /health with the same {"status":"ok"} body, so this rejects it too.
 	r, err := authedGet(healthCheckTimeout, base+"/health", b.apiKey())
 	if err == nil {
 		healthBody, _ := io.ReadAll(boundedBody(r.Body))

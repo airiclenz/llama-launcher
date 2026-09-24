@@ -415,6 +415,24 @@ func TestLlamaCppHealthCheck(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects Splash-shaped /health", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Server", "Splash")
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer srv.Close()
+
+		err := b.HealthCheck(addrFromURL(t, srv.URL))
+		if err == nil {
+			t.Fatal("expected error for a Splash /health response")
+		}
+		if !strings.Contains(err.Error(), "not llamacpp") {
+			t.Errorf("error = %q, want it to contain 'not llamacpp'", err)
+		}
+	})
+
 	t.Run("unhealthy with non-200", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +518,33 @@ func TestLlamaCppStartingUp(t *testing.T) {
 
 		if b.StartingUp(addrFromURL(t, srv.URL)) {
 			t.Error("StartingUp = true for a healthy server, want false")
+		}
+	})
+
+	t.Run("healthy Splash server is not starting up", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Server", "Splash")
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer srv.Close()
+
+		if b.StartingUp(addrFromURL(t, srv.URL)) {
+			t.Error("StartingUp = true for a healthy Splash server, want false")
+		}
+	})
+
+	t.Run("loading Splash server is not starting up", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Server", "Splash")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+
+		if b.StartingUp(addrFromURL(t, srv.URL)) {
+			t.Error("StartingUp = true for a 503 carrying Server: Splash, want false")
 		}
 	})
 

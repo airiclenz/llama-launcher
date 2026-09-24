@@ -1295,6 +1295,58 @@ func TestIdentifyBackend(t *testing.T) {
 		}
 	})
 
+	t.Run("Splash server is identified as splash, not llamacpp", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Splash sends its Server header on every reply and answers
+			// /health with the same body llama-server does.
+			w.Header().Set("Server", "Splash")
+			switch r.URL.Path {
+			case "/health":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			case "/ready":
+				w.WriteHeader(http.StatusOK)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		backend, err := identifyBackend(addrFromURL(t, srv.URL))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if backend != "splash" {
+			t.Errorf("backend = %q, want %q", backend, "splash")
+		}
+	})
+
+	t.Run("loading Splash server is identified as splash, not llamacpp", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Server", "Splash")
+			switch r.URL.Path {
+			case "/health":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"status":"ok"}`))
+			case "/ready":
+				w.WriteHeader(http.StatusServiceUnavailable)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		backend, err := identifyBackend(addrFromURL(t, srv.URL))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if backend != "splash" {
+			t.Errorf("backend = %q, want %q", backend, "splash")
+		}
+	})
+
 	t.Run("dead address yields ErrNotRunning", func(t *testing.T) {
 		t.Parallel()
 		if _, err := identifyBackend(deadAddr(t)); !errors.Is(err, ErrNotRunning) {

@@ -33,6 +33,11 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}
+	// Splash answers /health with the same {"status":"ok"} body, even while
+	// its model loads, so its Server header rejects it before the body does.
+	if isSplashResponse(resp) {
+		return fmt.Errorf("not llamacpp: /health response carries Server: Splash header")
+	}
 	// llama-server returns {"status":"ok"}. LM Studio returns 200 for all
 	// paths but with {"error":"..."} — the missing "status" field rejects it.
 	var health struct {
@@ -48,14 +53,16 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 // starting up: llama-server answers /health with 503 Service Unavailable
 // while it loads its model, before turning healthy. A connection error
 // means nothing is running there, and any other status belongs to a
-// healthy or foreign server — both return false.
+// healthy or foreign server — both return false. A 503 carrying Splash's
+// Server header is a loading Splash server, not llama-server, and is false
+// too.
 func (b *LlamaCpp) StartingUp(addr string) bool {
 	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/health", b.apiKey())
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode == http.StatusServiceUnavailable
+	return resp.StatusCode == http.StatusServiceUnavailable && !isSplashResponse(resp)
 }
 
 // ParamSpecs lists, in display order, the parameters BuildServerArgs turns

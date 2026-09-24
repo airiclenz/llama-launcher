@@ -123,7 +123,10 @@ internal/launcher/backend_llamacpp.go — ResolveModel; internal/launcher/backen
 **Acceptance:** `go test ./internal/launcher/ -run 'Splash' -count=1`
 **Commit:** `feat(launcher): refuse Splash models that are not installed`
 
-## 3. Keep llamacpp from claiming a Splash server
+## 3. Keep llamacpp from claiming a Splash server — ✅ DONE (2026-09-24)
+NOTES (2026-09-24): re-derived from the assumption that `isSplashResponse` still had to be added to `backend_splash.go` — item 1 already landed it there, so that file is unchanged and llamacpp reuses the existing helper.
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: the identification paragraph's "bare 503 on /health" wording (StartingUp second pass) made incomplete by the new Splash-header exclusion in `LlamaCpp.StartingUp`.
+NOTES (2026-09-24): ADR-0010's "bare 503 on /health" sentence left as a historical decision record; the plan's at-base site list did not name it.
 
 **What:** Depends on item 1. Splash answers `/health` with `{"status":"ok"}` even while loading. `LlamaCpp.HealthCheck` accepts that, so `identifyBackend` (alphabetical, llamacpp first) and the `auto_stop_server` sweep would treat a Splash server as llamacpp, and could stop it on re-activation, which breaks ADR-0007.
 **Goal:** `LlamaCpp.HealthCheck` and `LlamaCpp.StartingUp` both return not-llamacpp for any response carrying `Server: Splash`, and a real llama-server `/health` response is still accepted.

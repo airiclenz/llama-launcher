@@ -567,7 +567,7 @@ All backends may share the same address so that a single client configuration wo
 
 | Backend | Primary Endpoint | Discrimination |
 |---|---|---|
-| `llamacpp` | `GET /health` → 200 | Body must parse as JSON with a non-empty `"status"` field (e.g. `{"status":"ok"}`). LM Studio returns 200 for all paths but with `{"error":"..."}` — the missing `"status"` field rejects it. |
+| `llamacpp` | `GET /health` → 200 | Body must parse as JSON with a non-empty `"status"` field (e.g. `{"status":"ok"}`). LM Studio returns 200 for all paths but with `{"error":"..."}` — the missing `"status"` field rejects it. Splash returns the same `{"status":"ok"}` body, even while loading, so a response carrying the `Server: Splash` header is rejected first; the `StartingUp` probe likewise ignores a 503 carrying that header. |
 | `lmstudio` | `GET /v1/models` → 200 | Excludes llamacpp (rejects if `/health` body has a `"status"` field) and Ollama (rejects if `/api/tags` body parses as JSON with a `"models"` field). LM Studio returns `{"error":"..."}` for both paths. |
 | `ollama` | `GET /` → 200 | Body must contain "Ollama" (positive identification). |
 
@@ -672,7 +672,7 @@ The `auto_unload` flag governs whether an unload is *implicit* during a Profile 
 
 `stop [target]` is unconditional ([ADR-0001](docs/adr/0001-stop-is-unconditional.md)) — the launcher does not distinguish servers it started from servers that were already running.
 
-Before anything is signalled, the occupant of the address is identified (`identifyBackend`) — the launcher never signals a process it cannot attribute to a known backend ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). Identification runs two passes, each over the registered backends in sorted-name order for determinism: first the discriminating health checks, then the `StartingUp` probes of backends implementing `StartupProber` — a Starting instance fails its health check for the whole Model load but must still be identifiable so it can be stopped ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)). The second pass accepts a weaker discrimination signal (a bare 503 on `/health`, versus the `{"status":"ok"}` body the healthy check requires) — consciously accepted, confined to addresses the config already assigns to the launcher. An address where neither pass identifies anything still refuses with `ErrNotRunning`: the foreign-occupant protection survives.
+Before anything is signalled, the occupant of the address is identified (`identifyBackend`) — the launcher never signals a process it cannot attribute to a known backend ([ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). Identification runs two passes, each over the registered backends in sorted-name order for determinism: first the discriminating health checks, then the `StartingUp` probes of backends implementing `StartupProber` — a Starting instance fails its health check for the whole Model load but must still be identifiable so it can be stopped ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)). The second pass accepts a weaker discrimination signal (a bare 503 on `/health` without the `Server: Splash` header, versus the `{"status":"ok"}` body the healthy check requires) — consciously accepted, confined to addresses the config already assigns to the launcher. An address where neither pass identifies anything still refuses with `ErrNotRunning`: the foreign-occupant protection survives.
 
 The launcher then attempts both available mechanisms, each exactly once, in order (a single routine behind `StopInstance` runs both — there is no second pass):
 
@@ -851,7 +851,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 
 | Test | What it covers |
 |---|---|
-| `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; non-200 → error; unreachable → error. |
+| `TestLlamaCppHealthCheck` | 200 on `/health` with `{"status":"ok"}` body → success; non-llamacpp body (missing `status` field) → rejects; Splash-shaped `{"status":"ok"}` with `Server: Splash` → rejects; non-200 → error; unreachable → error. |
 | `TestOllamaHealthCheck` | 200 with "Ollama" body → success; empty body → error; non-Ollama body → error; non-200 → error. |
 | `TestLMStudioHealthCheck` | 200 on `/v1/models` → success when `/health` body lacks `status` field; healthy when LM Studio returns `{"error":"..."}` for `/health` and `/api/tags`; detects llamacpp via `/health` body containing `{"status":"ok"}`; detects Ollama via `/api/tags` body containing `{"models":[...]}`; non-200 → error; unreachable → error. |
 | `TestLMStudioLoadModel` | Success, context_length inclusion, param mapping (`batch_size`→`eval_batch_size`, `flash_attn`→`flash_attention`, `parallel`; unsupported params like `gpu_layers` never enter the payload), error with message, error without message. |
