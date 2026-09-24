@@ -1,6 +1,8 @@
 package launcher
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -150,6 +152,12 @@ func TestAuthFailedErr(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "api_key") {
 			t.Errorf("authFailedErr(%d) = %q, want mention of api_key", code, err)
+		}
+		if !errors.Is(err, ErrAuthFailed) {
+			t.Errorf("authFailedErr(%d) = %v, want it to wrap ErrAuthFailed", code, err)
+		}
+		if want := fmt.Sprintf("authentication failed (status %d) — check api_key in the servers section", code); err.Error() != want {
+			t.Errorf("authFailedErr(%d) = %q, want %q", code, err, want)
 		}
 	}
 	for _, code := range []int{http.StatusOK, http.StatusNotFound, http.StatusInternalServerError} {

@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -611,6 +612,35 @@ func TestLlamaCppAuthFailure(t *testing.T) {
 	_, err := b.ListRunningModels(addrFromURL(t, srv.URL))
 	if err == nil || !strings.Contains(err.Error(), "api_key") {
 		t.Errorf("error = %v, want actionable api_key message", err)
+	}
+}
+
+func TestLlamaCppHealthCheckAuthFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			b := &LlamaCpp{}
+			b.setAPIKey("wrong")
+			addr := addrFromURL(t, srv.URL)
+
+			err := b.HealthCheck(addr)
+			if !errors.Is(err, ErrAuthFailed) {
+				t.Errorf("HealthCheck error = %v, want ErrAuthFailed", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "check api_key") {
+				t.Errorf("HealthCheck error = %v, want actionable check api_key message", err)
+			}
+			if b.StartingUp(addr) {
+				t.Errorf("StartingUp = true on status %d, want false", code)
+			}
+		})
 	}
 }
 

@@ -121,7 +121,9 @@ cmd/llama-launcher-mcp/integration_test.go — startAdapter, callText; cmd/llama
 - `go test ./cmd/llama-launcher-mcp/ -race -count=1`
 **Commit:** `fix(mcp): bound in-flight tool subprocesses`
 
-## 5. llama.cpp health checks report auth failures like its siblings
+## 5. llama.cpp health checks report auth failures like its siblings — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — llama-launcher.TDD.md: made necessary by the new `ErrAuthFailed` sentinel and the llamacpp/Ollama HealthCheck auth mapping (backend_http.go row and the llamacpp/ollama test rows)
 
 **What:** Fixes the llamacpp message gap of audit finding "A server that refuses auth becomes invisible…".
 **Regression guard.** `StartingUp` keeps its `bool` signature (`StartupProber`, backend.go) and stays false on 401/403, as today; only `HealthCheck` returns the error. `Ollama.HealthCheck` (today `unhealthy: status 401`) routes through `authFailedErr` too.

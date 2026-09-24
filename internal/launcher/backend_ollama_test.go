@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -67,6 +68,22 @@ func TestOllamaHealthCheck(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "unhealthy") {
 			t.Errorf("error = %q, want it to contain 'unhealthy'", err)
+		}
+	})
+
+	t.Run("maps 401 to ErrAuthFailed", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		err := b.HealthCheck(addrFromURL(t, srv.URL))
+		if !errors.Is(err, ErrAuthFailed) {
+			t.Errorf("error = %v, want ErrAuthFailed", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "check api_key") {
+			t.Errorf("error = %v, want actionable check api_key message", err)
 		}
 	})
 

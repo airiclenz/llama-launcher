@@ -32,6 +32,9 @@ func (b *Ollama) HealthCheck(addr string) error {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(boundedBody(resp.Body))
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}

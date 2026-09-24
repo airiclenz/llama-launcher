@@ -30,6 +30,9 @@ func (b *LlamaCpp) HealthCheck(addr string) error {
 	}
 	body, _ := io.ReadAll(boundedBody(resp.Body))
 	resp.Body.Close()
+	if err := authFailedErr(resp.StatusCode); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unhealthy: status %d", resp.StatusCode)
 	}

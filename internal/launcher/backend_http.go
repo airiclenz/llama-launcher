@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -79,11 +80,16 @@ func sanitizeServerString(s string) string {
 	}, s)
 }
 
-// authFailedErr returns an actionable error when an HTTP status indicates an
-// authentication failure, or nil for any other status.
+// ErrAuthFailed is the sentinel every backend's 401/403 error wraps, so a
+// caller can tell a server that refuses the configured api_key from one that
+// is down or foreign with errors.Is instead of matching message text.
+var ErrAuthFailed = errors.New("authentication failed")
+
+// authFailedErr returns an actionable error wrapping ErrAuthFailed when an HTTP
+// status indicates an authentication failure, or nil for any other status.
 func authFailedErr(statusCode int) error {
 	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		return fmt.Errorf("authentication failed (status %d) — check api_key in the servers section", statusCode)
+		return fmt.Errorf("%w (status %d) — check api_key in the servers section", ErrAuthFailed, statusCode)
 	}
 	return nil
 }
