@@ -71,7 +71,11 @@ internal/launcher/cli.go — cmdConfigValidate; internal/launcher/process_unix.g
 - `go test ./internal/launcher/ -run 'TestLoadConfig|TestResolveKeyCommands|TestKeyCommand' -count=1`
 **Commit:** `fix(config): run api_key_cmd only from a config the user owns`
 
-## 2. Keychain write refuses values `security -i` could reparse
+## 2. Keychain write refuses values `security -i` could reparse — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — internal/keystore/run.go: made necessary by redactKey dropping its escaped-spelling pass. trimCappedKeyTail's comment said it checked both spellings "for the reason redactKey checks both". The comment is rewritten. The code still checks the quoted spelling, so the opening quote is trimmed together with a cut fragment.
+NOTES (2026-09-24): redactKey now replaces only the bare key. securityWord no longer escapes and Write refuses `"` and `\` on the keychain, so the quoted spelling always contains the key literally. The second replacement could never match, so it was removed. Its doc comment is rewritten.
+NOTES (2026-09-24): Write's error text is the message the user sees, because migrateKey returns Write's error unchanged. keymigrate.go needed no edit.
 
 **What:** Recast at the regression check (2026-09-24). Fixes audit finding "Keychain write pipes a shell-parsed command line into `security -i`".
 **Regression guard.** (user decision) A keychain key or entry containing `"`, `\` or any control character (newline included) is refused; every other value is written inside double quotes, so base64 keys (`=`, `+`, `/`) and spaced entries like "work laptop" keep migrating. The new refusal applies only when `s.kind == kindKeychain` — the existing `\r\n` refusal stays for both stores, and a secret-tool key holding `"`, `\` or a tab still migrates (secret on stdin; ReadCmd single-quotes via `shellWord`). `writeCommand` keeps its signature (`padToCutInsideTheKey` untouched). `securityWord`'s doc comment ("an ordinary word is left bare…") is superseded and rewritten.

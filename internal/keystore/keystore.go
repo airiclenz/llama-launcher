@@ -35,6 +35,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 // service is the store item's service field. Every item llama-launcher writes is filed under this
@@ -167,6 +168,13 @@ func (s Store) Write(entry, key string) error {
 		// something went wrong.
 		return fmt.Errorf("llama-launcher: server %q: a key or entry name spanning lines cannot be stored in %s "+
 			"and read back unchanged", entry, s.Name())
+	case s.kind == kindKeychain && (strings.ContainsFunc(entry, reparsable) || strings.ContainsFunc(key, reparsable)):
+		// `security -i` parses the line it reads with its own quote-and-escape grammar, so a value
+		// carrying one of those characters could close the quoted word early and hand the tool words
+		// llama-launcher never wrote. Refusing before any process starts keeps the parser out of the
+		// question; the key is left where it was, and the message never quotes it.
+		return fmt.Errorf("llama-launcher: server %q: a key or entry name containing a double quote, a backslash "+
+			"or a control character cannot be written to %s safely — the key stays where it is", entry, s.Name())
 	}
 
 	argv, stdin := s.writeCommand(entry, key)
@@ -228,20 +236,16 @@ func (s Store) writeCommand(entry, key string) ([]string, string) {
 // get the key out of. Redacting rather than dropping the text keeps the diagnostic: the tool's own
 // sentence is almost always the part that names the fix.
 //
-// Both spellings are replaced, because the key travels quoted: `security -i` parses the line
-// llama-launcher wrote, so what it echoes is the escaped word, in which the secret may not appear
-// literally.
+// The bare key is the only spelling to replace: `security -i` is handed it inside double quotes but
+// never escaped (Write refuses the characters that would need escaping), so the secret appears
+// literally in whatever either tool echoes.
 func redactKey(text, key string) string {
 	const mark = "[redacted]"
 
 	if key == "" {
 		return text
 	}
-	text = strings.ReplaceAll(text, key, mark)
-	if quoted := securityWord(key); quoted != key {
-		text = strings.ReplaceAll(text, quoted, mark)
-	}
-	return text
+	return strings.ReplaceAll(text, key, mark)
 }
 
 // ReadCmd is the `api_key_cmd:` line that reads this entry's key back out of the store — the exact
@@ -276,17 +280,22 @@ func shellWord(word string) string {
 }
 
 // securityWord renders one word for the command line `security -i` reads on its standard input. The
-// tool parses that line itself, honouring double quotes and backslash escapes, so a secret or an
-// entry name carrying a space survives the trip; an ordinary word is left bare to keep the line the
-// same one a person would type. Migration's read-back verification is the backstop: if this quoting
-// and the tool's parser ever disagree, the key that comes back out is not the key that went in, and
-// the migration aborts with the config untouched rather than persisting a line that reads garbage.
+// tool parses that line itself, honouring double quotes and backslash escapes, so every word is
+// written inside double quotes: a base64 key (`=`, `+`, `/`) and an entry name carrying a space
+// survive the trip as one word. Nothing is escaped, because nothing needs to be — Write refuses a
+// keychain value holding a double quote, a backslash or a control character before this is reached
+// (see reparsable), so the quoted word is the value verbatim. Migration's read-back verification is
+// the backstop: if this quoting and the tool's parser ever disagree, the key that comes back out is
+// not the key that went in, and the migration aborts with the config untouched.
 func securityWord(word string) string {
-	if isPlainWord(word) {
-		return word
-	}
-	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(word)
-	return `"` + escaped + `"`
+	return `"` + word + `"`
+}
+
+// reparsable reports whether r is a character `security -i` would not take literally inside a
+// double-quoted word: the quote that ends it, the backslash that escapes, and any control character
+// (a line break ends the command line itself; the rest have no business in a key or a name).
+func reparsable(r rune) bool {
+	return r == '"' || r == '\\' || unicode.IsControl(r)
 }
 
 // isPlainWord reports whether a word can stand unquoted on any of these command lines: a non-empty

@@ -135,8 +135,8 @@ func said(text string) string {
 //
 // So when, and only when, the buffer filled to the cap — the one condition under which the text may
 // have been cut mid-word — the longest tail that spells the beginning of the key is dropped. Both
-// spellings are checked for the reason redactKey checks both: on macOS the key travels quoted, so
-// what the cut leaves behind is the beginning of the quoted word. A tail that is the WHOLE key is
+// spellings are checked: on macOS the key travels inside double quotes, so what the cut leaves behind
+// is the beginning of the quoted word, opening quote included. A tail that is the WHOLE key is
 // left to redactKey, which marks its place — that reads better than a sentence ending nowhere.
 func trimCappedKeyTail(text, key string) string {
 	if key == "" || len(text) < maxToolStderr {

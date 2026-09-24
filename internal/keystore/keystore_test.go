@@ -684,25 +684,34 @@ func TestReadCmdReadsBackWhatWriteStored(t *testing.T) {
 		name  string
 		goos  string
 		entry string
+		key   string
 	}{
-		{name: "macOS keychain", goos: "darwin", entry: "prod"},
-		{name: "macOS keychain, entry name with a space", goos: "darwin", entry: "work laptop"},
-		{name: "secret service", goos: "linux", entry: "prod"},
-		{name: "secret service, entry name with a space", goos: "linux", entry: "work laptop"},
+		{name: "macOS keychain", goos: "darwin", entry: "prod", key: secret},
+		{name: "macOS keychain, entry name with a space", goos: "darwin", entry: "work laptop", key: secret},
+		{name: "secret service", goos: "linux", entry: "prod", key: secret},
+		{name: "secret service, entry name with a space", goos: "linux", entry: "work laptop", key: secret},
+		{
+			// The keychain refuses these characters; secret-tool is handed the key on stdin, where no
+			// parser reads it, so it keeps storing them.
+			name:  "secret service, key with a double quote and a backslash",
+			goos:  "linux",
+			entry: "prod",
+			key:   `sk-"round"\trip-7f3c`,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			useFakeTools(t)
 			store := probedStore(t, tc.goos)
-			if err := store.Write(tc.entry, secret); err != nil {
+			if err := store.Write(tc.entry, tc.key); err != nil {
 				t.Fatalf("Write() = %v, want the key stored", err)
 			}
 
 			readCmd := store.ReadCmd(tc.entry)
 
-			if got := readKeyThroughShell(t, readCmd); got != secret {
-				t.Errorf("%q printed %q, want the stored key", readCmd, got)
+			if got := readKeyThroughShell(t, readCmd); got != tc.key {
+				t.Errorf("%q printed %q, want the stored key %q", readCmd, got, tc.key)
 			}
 		})
 	}
@@ -752,6 +761,7 @@ func TestWriteRedactsTheSecretFromWhatTheStoreSaid(t *testing.T) {
 		key      string
 		fragment string // a distinctive run of the key that must survive in no spelling
 		code     int
+		refused  bool // the keychain refuses the key before any tool runs, so nothing is echoed
 	}{
 		{
 			name:     "the keychain tool echoes the line it could not run",
@@ -768,11 +778,12 @@ func TestWriteRedactsTheSecretFromWhatTheStoreSaid(t *testing.T) {
 			code:     0,
 		},
 		{
-			name:     "a key that had to be quoted is redacted in the spelling that went over the wire",
+			name:     "a key security -i could reparse is refused before the tool can echo it",
 			goos:     "darwin",
 			key:      `sk live "3f9c2b7a"`,
 			fragment: "3f9c2b7a",
 			code:     1,
+			refused:  true,
 		},
 		{
 			name:     "the secret service tool echoes the stdin it was handed",
@@ -794,6 +805,10 @@ func TestWriteRedactsTheSecretFromWhatTheStoreSaid(t *testing.T) {
 			if err == nil {
 				t.Fatal("Write() = nil, want the refusal surfaced")
 			}
+			if tc.refused {
+				assertRefusedUnquoted(t, tools, err, tc.key, tc.fragment)
+				return
+			}
 			assertRedacted(t, err, tc.key, tc.fragment)
 		})
 	}
@@ -810,20 +825,22 @@ func TestWriteRedactsASecretTheStderrCapCutInHalf(t *testing.T) {
 	const plainKey = "sk-live-3f9c2b7a"
 
 	tests := []struct {
-		name string
-		goos string
-		key  string
-		keep int // bytes of the key's spelling left on this side of the cut
+		name    string
+		goos    string
+		key     string
+		keep    int  // bytes of the key's spelling left on this side of the cut
+		refused bool // the keychain refuses the key before any tool runs, so nothing is cut
 	}{
 		{name: "the cut leaves a single byte of the key", goos: "linux", key: plainKey, keep: 1},
 		{name: "the cut leaves the first eight bytes", goos: "linux", key: plainKey, keep: 8},
 		{name: "the cut leaves all but the last byte", goos: "linux", key: plainKey, keep: len(plainKey) - 1},
 		{name: "the keychain line is cut inside the key", goos: "darwin", key: plainKey, keep: 8},
 		{
-			name: "a quoted key is cut inside the spelling that went over the wire",
-			goos: "darwin",
-			key:  `sk live "3f9c2b7a"`,
-			keep: 8,
+			name:    "a key security -i could reparse is refused before the tool can echo it",
+			goos:    "darwin",
+			key:     `sk live "3f9c2b7a"`,
+			keep:    8,
+			refused: true,
 		},
 	}
 
@@ -837,6 +854,10 @@ func TestWriteRedactsASecretTheStderrCapCutInHalf(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("Write() = nil, want the refusal surfaced")
+			}
+			if tc.refused {
+				assertRefusedUnquoted(t, tools, err, tc.key, "3f9c2b7a")
+				return
 			}
 			assertNoCutKeyTail(t, err.Error(), tc.key)
 			if !strings.Contains(err.Error(), "User interaction") {
@@ -907,6 +928,20 @@ func assertRedacted(t *testing.T, err error, key, fragment string) {
 	}
 }
 
+// assertRefusedUnquoted is the whole claim about a keychain value `security -i` could reparse: no
+// tool ran, and the refusal neither quotes the secret nor any distinctive run of it.
+func assertRefusedUnquoted(t *testing.T, tools fakeTools, err error, key, fragment string) {
+	t.Helper()
+
+	if runs := tools.invocations(t); len(runs) != 0 {
+		t.Errorf("a refused write ran %d store tool(s), want none", len(runs))
+	}
+	message := err.Error()
+	if strings.Contains(message, key) || strings.Contains(message, fragment) {
+		t.Errorf("Write() = %v, want the refusal to leave the secret out", message)
+	}
+}
+
 // padToCutInsideTheKey is the complaint a fake tool has to print for the maxToolStderr cut to land
 // inside the key it echoes, leaving exactly keep bytes of the key's spelling in the buffer. The fake
 // prints its complaint, one space, then the standard input it was handed — so the padding is measured
@@ -954,8 +989,9 @@ func assertNoCutKeyTail(t *testing.T, message, key string) {
 }
 
 // The arguments are checked before anything is run: a store llama-launcher does not have, an entry
-// with no name to file the item under, and an empty key — which is a broken key source, not a secret
-// worth storing — are all refused without spawning a tool.
+// with no name to file the item under, an empty key — which is a broken key source, not a secret
+// worth storing — and, for the keychain, a key or entry `security -i` could reparse are all refused
+// without spawning a tool. The quoting that refusal protects still carries every other value.
 func TestWriteRefusesWhatItCannotStore(t *testing.T) {
 	tools := useFakeTools(t)
 	keychain := probedStore(t, "darwin")
@@ -970,6 +1006,10 @@ func TestWriteRefusesWhatItCannotStore(t *testing.T) {
 		{name: "an entry with no name", store: keychain, entry: "   ", key: "sk-live-1"},
 		{name: "an empty key", store: keychain, entry: "prod", key: ""},
 		{name: "a key spanning lines", store: keychain, entry: "prod", key: "sk-live\n-1"},
+		{name: "a keychain key that closes its quotes", store: keychain, entry: "prod", key: `x" ; touch /tmp/pwn ; "`},
+		{name: "a keychain key with a backslash", store: keychain, entry: "prod", key: `sk-live\1`},
+		{name: "a keychain entry with a control character", store: keychain, entry: "work\tlaptop", key: "sk-live-1"},
+		{name: "a keychain entry with a double quote", store: keychain, entry: `work "laptop"`, key: "sk-live-1"},
 	}
 
 	for _, tc := range tests {
@@ -982,5 +1022,15 @@ func TestWriteRefusesWhatItCannotStore(t *testing.T) {
 
 	if runs := tools.invocations(t); len(runs) != 0 {
 		t.Errorf("a refused write ran %d store tool(s), want none", len(runs))
+	}
+
+	// Everything else still moves: a base64 key (`=`, `+`, `/`) under a spaced entry name is written
+	// quoted and lands in the store unchanged.
+	const base64Key = "c2stbGl2ZS0z+ZjljMmI3/YQ=="
+	if err := keychain.Write("work laptop", base64Key); err != nil {
+		t.Fatalf("Write(%q, %q) = %v, want the key stored", "work laptop", base64Key, err)
+	}
+	if got, found := tools.secret(t, "work laptop"); !found || got != base64Key {
+		t.Errorf("the store holds %q (found = %v), want %q", got, found, base64Key)
 	}
 }
