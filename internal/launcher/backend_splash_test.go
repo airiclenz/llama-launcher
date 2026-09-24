@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -219,32 +220,101 @@ func TestSplashStartingUp(t *testing.T) {
 	}
 }
 
-func TestSplashBuildServerArgs(t *testing.T) {
-	t.Parallel()
+// pinHostname makes the package's hostname lookup return name and err until
+// the test ends. Not for parallel tests: it rewrites a package seam that
+// BuildServerArgs reads.
+func pinHostname(t *testing.T, name string, err error) {
+	t.Helper()
+	previous := hostname
+	hostname = func() (string, error) { return name, err }
+	t.Cleanup(func() { hostname = previous })
+}
 
+// TestSplashBuildServerArgs is not parallel: its cases pin the package's
+// hostname lookup, and a parallel subtest would resume after the pin is
+// restored.
+func TestSplashBuildServerArgs(t *testing.T) {
 	intPtr := func(v int) *int { return &v }
 	strPtr := func(v string) *string { return &v }
 
+	const lanHostname = "Apollo-II.local"
 	tests := []struct {
-		name    string
-		profile ResolvedProfile
-		want    []string
+		name        string
+		hostname    string
+		hostnameErr error
+		profile     ResolvedProfile
+		want        []string
 	}{
 		{
-			name:    "model only",
-			profile: ResolvedProfile{ModelPath: "owner/repo"},
-			want:    []string{"serve", "--model", "owner/repo"},
+			name:     "model only",
+			hostname: lanHostname,
+			profile:  ResolvedProfile{ModelPath: "owner/repo"},
+			want:     []string{"serve", "--model", "owner/repo"},
 		},
 		{
-			name: "host, port and context",
+			name:     "host, port and context",
+			hostname: lanHostname,
 			profile: ResolvedProfile{
 				ModelPath:     "owner/repo",
 				ProfileParams: ProfileParams{Host: strPtr("0.0.0.0"), Port: intPtr(8000), ContextSize: intPtr(32768)},
 			},
-			want: []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0", "--port", "8000", "--max-context", "32768"},
+			want: []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0", "--port", "8000", "--max-context", "32768",
+				"--allowed-host", "Apollo-II.local", "--allowed-host", "Apollo-II"},
 		},
 		{
-			name: "extra_args come last",
+			name:     "the IPv6 wildcard allows the hostname and its first label",
+			hostname: lanHostname,
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("::")}},
+			want: []string{"serve", "--model", "owner/repo", "--host", "::",
+				"--allowed-host", "Apollo-II.local", "--allowed-host", "Apollo-II"},
+		},
+		{
+			name:     "a LAN address with a dotless hostname allows one name",
+			hostname: "apollo",
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("192.168.1.5")}},
+			want:     []string{"serve", "--model", "owner/repo", "--host", "192.168.1.5", "--allowed-host", "apollo"},
+		},
+		{
+			name:     "a trailing dot is dropped from the hostname",
+			hostname: "Apollo-II.local.",
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("0.0.0.0")}},
+			want: []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0",
+				"--allowed-host", "Apollo-II.local", "--allowed-host", "Apollo-II"},
+		},
+		{
+			name:     "a loopback IP allows no names",
+			hostname: lanHostname,
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("127.0.0.1")}},
+			want:     []string{"serve", "--model", "owner/repo", "--host", "127.0.0.1"},
+		},
+		{
+			name:     "localhost allows no names",
+			hostname: lanHostname,
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("LocalHost")}},
+			want:     []string{"serve", "--model", "owner/repo", "--host", "LocalHost"},
+		},
+		{
+			name:        "a failed hostname lookup allows no names",
+			hostname:    lanHostname,
+			hostnameErr: errors.New("no hostname"),
+			profile:     ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("0.0.0.0")}},
+			want:        []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0"},
+		},
+		{
+			name:     "an empty hostname allows no names",
+			hostname: "",
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("0.0.0.0")}},
+			want:     []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0"},
+		},
+		{
+			name:     "a localhost hostname allows no names",
+			hostname: "localhost",
+			profile:  ResolvedProfile{ModelPath: "owner/repo", ProfileParams: ProfileParams{Host: strPtr("0.0.0.0")}},
+			want:     []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0"},
+		},
+		{
+			name:     "extra_args come last",
+			hostname: lanHostname,
 			profile: ResolvedProfile{
 				ModelPath:     "owner/repo",
 				ExtraArgs:     []string{"--reasoning-effort", "high", "--allowed-host", "box.lan"},
@@ -254,7 +324,19 @@ func TestSplashBuildServerArgs(t *testing.T) {
 				"--reasoning-effort", "high", "--allowed-host", "box.lan"},
 		},
 		{
-			name: "sampling params are ignored",
+			name:     "an extra_args allowed host follows the launcher's names",
+			hostname: lanHostname,
+			profile: ResolvedProfile{
+				ModelPath:     "owner/repo",
+				ExtraArgs:     []string{"--allowed-host", "proxy.local"},
+				ProfileParams: ProfileParams{Host: strPtr("0.0.0.0"), ContextSize: intPtr(4096)},
+			},
+			want: []string{"serve", "--model", "owner/repo", "--host", "0.0.0.0", "--max-context", "4096",
+				"--allowed-host", "Apollo-II.local", "--allowed-host", "Apollo-II", "--allowed-host", "proxy.local"},
+		},
+		{
+			name:     "sampling params are ignored",
+			hostname: lanHostname,
 			profile: ResolvedProfile{
 				ModelPath:     "owner/repo",
 				ProfileParams: ProfileParams{TopK: intPtr(40), GPULayers: intPtr(99)},
@@ -265,12 +347,39 @@ func TestSplashBuildServerArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			pinHostname(t, tt.hostname, tt.hostnameErr)
+
 			got := (&Splash{}).BuildServerArgs(&Config{}, &tt.profile)
+
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("BuildServerArgs = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSplashLoadingPIDMatchesBuiltArgs checks that a launcher-built command
+// line carrying --allowed-host is still recognised as a loading Splash and
+// matched by its --host and --port (ADR-0015). Not parallel: it pins the
+// package's hostname lookup.
+func TestSplashLoadingPIDMatchesBuiltArgs(t *testing.T) {
+	pinHostname(t, "Apollo-II.local", nil)
+	host, port := "192.168.1.5", 18731
+	profile := ResolvedProfile{
+		ModelPath:     "owner/repo",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+	built := (&Splash{}).BuildServerArgs(&Config{}, &profile)
+	if !slices.Contains(built, splashAllowedHostFlag) {
+		t.Fatalf("BuildServerArgs = %q, want it to carry %s", built, splashAllowedHostFlag)
+	}
+	args := append([]string{"/usr/local/bin/splash"}, built...)
+	procs := []processEntry{{PID: 4242, PGID: 4242, Args: args}}
+
+	got := splashLoadingPID(procs, net.JoinHostPort(host, strconv.Itoa(port)), "127.0.0.1:8000")
+
+	if got != 4242 {
+		t.Errorf("splashLoadingPID(%q) = %d, want 4242", args, got)
 	}
 }
 

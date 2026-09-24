@@ -323,10 +323,23 @@ func isSplashRepoIDPart(part string) bool {
 	return true
 }
 
+// hostname reports the machine's hostname. It is a package variable so tests
+// can pin it.
+var hostname = os.Hostname
+
+// splashAllowedHostFlag names the Splash flag that adds a Host header value
+// the server accepts. Splash appends every occurrence to its allow-list.
+const splashAllowedHostFlag = "--allowed-host"
+
 // BuildServerArgs builds `serve --model <ref> [--host H] [--port P]
-// [--max-context N] <extra_args...>`. extra_args come last so a user-supplied
-// flag (reasoning effort, kv format, max memory, allowed host) can extend or
-// override the launcher's own.
+// [--max-context N] [--allowed-host NAME...] <extra_args...>`. The launcher
+// adds --allowed-host for the machine's hostname, and for its first label
+// when the name has a dot, whenever the host is not loopback (an unset host
+// is Splash's loopback default): Splash answers 403 to a request naming a
+// host outside its allow-list, and a LAN client names the machine.
+// extra_args come last so a user-supplied flag (reasoning effort, kv format,
+// max memory, another allowed host) can extend or override the launcher's
+// own.
 func (b *Splash) BuildServerArgs(_ *Config, profile *ResolvedProfile) []string {
 	args := []string{"serve"}
 	params := &profile.ProfileParams
@@ -343,6 +356,45 @@ func (b *Splash) BuildServerArgs(_ *Config, profile *ResolvedProfile) []string {
 	if params.ContextSize != nil {
 		args = append(args, "--max-context", strconv.Itoa(*params.ContextSize))
 	}
+	if params.Host != nil && !isLoopbackHost(*params.Host) {
+		for _, name := range machineHostNames() {
+			args = append(args, splashAllowedHostFlag, name)
+		}
+	}
 
 	return append(args, profile.ExtraArgs...)
+}
+
+// isLoopbackHost reports whether host names the loopback interface: the name
+// localhost in any case, or a loopback IP. A wildcard or LAN address is not
+// loopback.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// machineHostNames returns the names a LAN client may use for this machine:
+// its hostname without a trailing dot, then the hostname's first label when
+// the name has a dot (Apollo-II.local and Apollo-II). It returns nil when the
+// lookup fails or yields no usable name — the launcher then adds no names
+// and Splash keeps its own allow-list — and never returns localhost, which
+// Splash already accepts.
+func machineHostNames() []string {
+	name, err := hostname()
+	if err != nil {
+		return nil
+	}
+	name = strings.TrimSuffix(name, ".")
+	if name == "" || strings.EqualFold(name, "localhost") {
+		return nil
+	}
+	names := []string{name}
+	label, _, hasDot := strings.Cut(name, ".")
+	if hasDot && label != "" && !strings.EqualFold(label, "localhost") {
+		names = append(names, label)
+	}
+	return names
 }

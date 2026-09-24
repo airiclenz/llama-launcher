@@ -64,7 +64,12 @@ internal/launcher/discovery.go — probeInstance; internal/launcher/backend_spla
 - `go test ./internal/launcher/ -run 'TestProbeAddr|TestSplash|TestIdentifyBackend|TestDiscoverRunningInstances_WildcardSplash' -count=1`
 **Commit:** `fix(launcher): probe a wildcard-bound Splash over loopback`
 
-## 2. Splash accepts the machine's hostname on a non-loopback bind
+## 2. Splash accepts the machine's hostname on a non-loopback bind — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): no CHANGELOG entry in this sidecar — item 4 owns the docs for items 1–3, including the CHANGELOG entry amending the Unreleased Splash bullet (same precedent as item 1).
+NOTES (2026-09-24): `TestSplashBuildServerArgs` and all its subtests are now non-parallel; each case pins `hostname` through a new `pinHostname` helper (a `t.Cleanup` per subtest is safe because no subtest is parallel). Beyond the listed cases it also covers a trailing-dot hostname, an empty hostname and a `localhost` hostname; the loopback-`localhost` case uses `LocalHost` to exercise the case-insensitive match.
+NOTES (2026-09-24): the `splashLoadingPID` regression test is a separate non-parallel top-level test, `TestSplashLoadingPIDMatchesBuiltArgs` (binary `/usr/local/bin/splash` prepended, host `192.168.1.5`, probed at `192.168.1.5:18731`), rather than a row in the parallel `TestSplashLoadingPID`, because it reads the pinned `hostname` seam.
+NOTES (2026-09-24): a failed `os.Hostname` lookup is skipped without logging — `BuildServerArgs` has no error return and the package has no logger; the doc comment on `machineHostNames` records the behaviour. The `--allowed-host` flag name is the new constant `splashAllowedHostFlag`.
 
 **What:** Resolves the bead's related LAN case: a client that names the machine (`Apollo-II.local`) gets a 403 unless it is listed in `--allowed-host`. Depends on item 1 (same files).
 **Regression guard.** Pin `hostname` in a non-parallel scope that outlives every subtest reading it (the parent `TestSplashBuildServerArgs` without `t.Parallel`, or a separate non-parallel top-level test) — a per-subtest `t.Cleanup` restores it before paused parallel subtests resume. The existing case "host, port and context" (host `0.0.0.0`) moves under the pin and then expects both `--allowed-host` names after `--max-context`. The `splashLoadingPID` test prepends a binary path (e.g. `/usr/local/bin/splash`) to the `BuildServerArgs` argv, because `isSplashServeCommand` needs `splash`/`launcher.py` before `serve`; it uses a non-loopback host so the flags are present and probes `<that host>:<port>`. Update the `BuildServerArgs` doc comment to show `[--allowed-host NAME...]` after `--max-context` and say when the launcher adds it.
