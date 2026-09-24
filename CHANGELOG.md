@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Splash LLM Server.** `splash` joins `llamacpp`, `ollama` and `lmstudio` as a managed LLM Server (default address `127.0.0.1:8000`). The launcher starts `splash serve --model <owner/repo>` per profile, like llama.cpp: `context_size` becomes `--max-context`, `host`/`port` become `--host`/`--port`, the `api_key` reaches Splash through `SPLASH_API_KEY`, and anything else (reasoning effort, KV format, max memory, allowed host) goes through `extra_args`. Sampling parameters are not passed to Splash. Health is read from `/ready` together with the `Server: Splash` response header. Splash binds its port only once the model has loaded, so a Splash server that is still loading does not show up in `status` and cannot be stopped by address until it is ready. A model ref must be a Hugging Face `owner/repo` id. When the `splash` command is missing from PATH, the error explains how to put it there.
+- A Splash profile whose model is not installed in the Hugging Face cache (no pinned `refs/splash` snapshot with a `manifest.json`) is now refused with the one-time install command, `splash serve --model <owner/repo>`, to run in a terminal. The launcher never starts the long model download itself. The check reads only the cache (`$HF_HUB_CACHE`, `$HF_HOME/hub`, `$XDG_CACHE_HOME/huggingface/hub`, or `~/.cache/huggingface/hub`) and does not need `splash` on PATH. Like a llama.cpp profile with a missing `.gguf`, such a profile shows up as a config warning and discovery skips it.
+- The llama.cpp health check and startup probe now ignore any response carrying the `Server: Splash` header, so a Splash server is identified as Splash and never stopped as a llama.cpp server.
+- The generated example config now covers Splash: a `splash: false` server entry, the supported-servers header, the default ports comment (8000), the `SPLASH_API_KEY` api-key note, a `splash` column in the parameter matrix (only `context_size` and host/port apply; sampling parameters are ignored), `extra_args` noted as llamacpp and splash, and a commented `splash-qwen` example profile that uses `incoai/Qwen3.8-27B-Splash` with `--default-reasoning-effort` in `extra_args`.
+- **MCP adapter accepts `splash` targets.** `llama-launcher-mcp` now takes `target: "splash"`; its invalid-target error names Splash beside llamacpp, lmstudio and ollama, and the `start_server` description lists it with llamacpp as a managed server that needs a profile.
+- ADR-0014 records why the launcher refuses a Splash model that is not installed and never downloads one. CONTEXT.md, the manage-llm-server skill, AGENTS.md and the `launcher` package doc now list Splash as a supported LLM Server.
+- **Docs:** README and the TDD cover Splash — the backend table, a Splash setup section (a wrapper script on `PATH` rather than a symlink, the launchd / MCP-adapter `PATH`, the one-time `splash serve --model …` install and the Hugging Face cache check), the `SPLASH_API_KEY` key handling, the `--max-context` / `extra_args` mapping, the `/ready` + `Server: Splash` health check, and the `INTEGRATION_MODEL_SPLASH` integration test.
+
+### Security
+
+- **Corrected: an `extra_args` `--api-key` for llamacpp does not replace the configured `api_key` — both keys are accepted.** The 1.7.0 notes said an override would win; the new integration test (`TestLlamaServerAPIKey`, `make test-integration`) found the flag's key appended to the environment key on llama.cpp b10851, so both authenticate. To change the key, change `api_key` rather than adding an override. The same test found neither key echoed into llama-server's own log file. README and TDD now say so.
+- **Log output masks API keys** — llama-launcher logs, the menu's *Show log*, the start-crash log tail, and the MCP `tail_log` tool now replace the backend's configured key and any `--api-key` value with `[redacted]`. Unconditional defense in depth: no tested llama-server build echoes its keys, but a future build or wrapper script that does can no longer leak them through a log view. Log files on disk are unchanged.
+
 ## 1.7.0
 
 ### Added
