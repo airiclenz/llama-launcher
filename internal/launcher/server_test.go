@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -705,17 +706,151 @@ func (f *fakeTrackingExternalBackend) LastStartedPID() int        { return f.pid
 func (f *fakeTrackingExternalBackend) LastStartedLogFile() string { return f.logFile }
 
 // realWaitOps is a fakeOps whose health wait is the production one: it runs
-// WaitForHealth against whatever is listening at addr, shortening the window
-// the activation asks for to keep the test quick. Every other operation stays
-// in memory, so nothing is forked or signalled.
+// waitForHealth — the loop behind WaitForHealth, with the spawned server's
+// exit as its liveness probe — against whatever is listening at addr,
+// shortening the window the activation asks for to keep the test quick.
+// Every other operation stays in memory, so nothing is forked or signalled.
 type realWaitOps struct {
 	*fakeOps
 	window time.Duration
 }
 
-func (o realWaitOps) waitHealthy(b LLMServer, addr string, timeout time.Duration) error {
+func (o realWaitOps) waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
 	o.waited = append(o.waited, addr)
-	return WaitForHealth(b, addr, o.window)
+	return waitForHealth(b, addr, o.window, exited)
+}
+
+// exitingStartOps is a realWaitOps whose start forks a real `sh -c script`
+// child in place of a server and attaches its reaped exit to the returned
+// instance, exactly as startManagedServer does. The script stands in for a
+// loading server that ends mid-wait — stopped by a signal, trapping SIGTERM
+// and exiting 0, or crashing — while the health wait and the classification
+// of that exit are the production ones.
+type exitingStartOps struct {
+	realWaitOps
+	script  string
+	logFile string
+}
+
+func (o exitingStartOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
+	o.started = append(o.started, profile.Name)
+	cmd := exec.Command("sh", "-c", o.script)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &RunningInstance{
+		Backend: profile.Backend,
+		Host:    *profile.Host,
+		Port:    *profile.Port,
+		PID:     cmd.Process.Pid,
+		LogFile: o.logFile,
+		exit:    watchExit(cmd),
+	}, nil
+}
+
+// TestLoadProfile_ServerExitMidWaitEndsTheLoad drives the managed activation
+// against a stand-in that answers 503 forever while the spawned child exits
+// after one health poll. The load must return long before the wait window
+// runs out: a stop — a signal, a clean exit 0 (Splash traps SIGTERM), a
+// relayed 128+SIGTERM — is ErrLoadCanceled; a non-zero exit code is a crash
+// carrying the redacted log tail. Neither is ErrStartupTimeout, and neither
+// asks for a stop: the server is already gone.
+func TestLoadProfile_ServerExitMidWaitEndsTheLoad(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("forks sh; no managed server is spawned on windows (ADR-0012)")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	host, port := hostPort(t, srv.URL)
+
+	const apiKey = "sk-test-exit-secret"
+	const window = 10 * time.Second
+
+	tests := []struct {
+		name         string
+		script       string
+		wantCanceled bool
+	}{
+		{"stopped by a signal", `sleep 0.6; kill -TERM $$`, true},
+		{"exit status 0", `sleep 0.6; exit 0`, true},
+		{"relayed SIGTERM exit code", `sleep 0.6; exit 143`, true},
+		{"crash exit code", `sleep 0.6; exit 1`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logFile := filepath.Join(t.TempDir(), "server.log")
+			if err := os.WriteFile(logFile, []byte("loading model\nfatal: bad tensor, key "+apiKey+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeOps{}
+			ops := exitingStartOps{realWaitOps: realWaitOps{fakeOps: f, window: window}, script: tc.script, logFile: logFile}
+			cfg := &Config{Servers: map[string]ServerConfig{"llamacpp": {APIKey: apiKey}}}
+			profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", host, port)
+
+			begin := time.Now()
+			_, started, err := loadProfile(ops, cfg, profile, false, nil, nil)
+			elapsed := time.Since(begin)
+
+			if err == nil || started {
+				t.Fatalf("loadProfile = started %v, err %v; want a failed load", started, err)
+			}
+			if elapsed > 3*time.Second {
+				t.Errorf("load returned after %s, want well under the %s window", elapsed, window)
+			}
+			if errors.Is(err, ErrStartupTimeout) {
+				t.Errorf("err = %v wraps ErrStartupTimeout; the server exited, it was not left running", err)
+			}
+			if got := errors.Is(err, ErrLoadCanceled); got != tc.wantCanceled {
+				t.Errorf("errors.Is(err, ErrLoadCanceled) = %v, want %v (err: %v)", got, tc.wantCanceled, err)
+			}
+			if !tc.wantCanceled {
+				if !strings.Contains(err.Error(), "exit status 1") || !strings.Contains(err.Error(), "fatal: bad tensor") {
+					t.Errorf("crash error %q, want the exit status and the log tail", err)
+				}
+				if strings.Contains(err.Error(), apiKey) {
+					t.Errorf("crash error %q leaks the api key; the tail must be redacted", err)
+				}
+			}
+			if len(f.stopped) != 0 {
+				t.Errorf("stopped = %v, want none", f.stopped)
+			}
+		})
+	}
+}
+
+// TestLoadCanceled_ExitClassification pins serverExitErr's rule at its seam,
+// including the cases no forked script produces: a nil Wait result (exit
+// status 0) and a status that cannot be read are both a canceled load.
+func TestLoadCanceled_ExitClassification(t *testing.T) {
+	t.Parallel()
+
+	inst := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, LogFile: filepath.Join(t.TempDir(), "missing.log")}
+	tests := []struct {
+		name    string
+		waitErr error
+	}{
+		{"exit status 0", nil},
+		{"unreadable status", errors.New("wait: no child processes")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := serverExitErr(&Config{}, inst, tc.waitErr)
+			if !errors.Is(err, ErrLoadCanceled) {
+				t.Errorf("err = %v, want it to wrap ErrLoadCanceled", err)
+			}
+			if errors.Is(err, ErrStartupTimeout) {
+				t.Errorf("err = %v wraps ErrStartupTimeout", err)
+			}
+		})
+	}
 }
 
 // TestLoadProfile_RefusesDoubleSpawnWhileStartingUp drives the real
@@ -866,7 +1001,7 @@ func (f *fakeOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance
 	}, nil
 }
 
-func (f *fakeOps) waitHealthy(b LLMServer, addr string, timeout time.Duration) error {
+func (f *fakeOps) waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
 	f.waited = append(f.waited, addr)
 	return f.waitErr
 }

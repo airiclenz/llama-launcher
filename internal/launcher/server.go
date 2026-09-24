@@ -43,6 +43,20 @@ var ErrNotRunning = errors.New("no server running")
 // decorated timeout errors wrap it; test for it with errors.Is.
 var ErrStartupTimeout = errors.New("server startup timed out")
 
+// ErrLoadCanceled reports that the managed server a load spawned ended
+// without crashing before it reported healthy — the way a Stop of the
+// still-loading instance ends it (a signal, or a clean exit from a server
+// that traps SIGTERM, as Splash does). The load returns it promptly instead
+// of waiting out the health window; the server is gone, so there is nothing
+// left to observe. A non-zero exit code is a crash instead and is reported
+// with the log tail. Test for it with errors.Is.
+var ErrLoadCanceled = errors.New("model load canceled")
+
+// errServerExited is waitForHealth's report that the spawned process it was
+// watching exited before the address turned healthy; loadProfileManaged
+// turns it into ErrLoadCanceled or a crash error (serverExitErr).
+var errServerExited = errors.New("server process exited during the health wait")
+
 // ErrUnsupported reports an operation the platform this binary was built for
 // cannot perform. Windows has neither a session to detach a spawned server
 // into nor a process group to signal, so the process-control paths return it
@@ -128,11 +142,12 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	// zombie still satisfies kill(pid, 0), so without reaping the liveness
 	// check would report an already-dead child as alive and the start-crash
 	// detection below would never fire. cmd.Wait runs in its own goroutine and
-	// reports the exit through waitResult; if the launcher exits before the
+	// reports the exit through a processExit, which the instance carries so
+	// the activation's health wait can notice a server stopped mid-load
+	// (ErrLoadCanceled); if the launcher exits before the
 	// child does, the detached (Setsid) child is reparented to init and reaped
 	// there instead.
-	waitResult := make(chan error, 1)
-	go func() { waitResult <- cmd.Wait() }()
+	exit := watchExit(cmd)
 
 	inst := &RunningInstance{
 		PID:       cmd.Process.Pid,
@@ -141,6 +156,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 		Port:      *profile.Port,
 		StartedAt: time.Now(),
 		LogFile:   logPath,
+		exit:      exit,
 	}
 
 	// If the child exits within the startup grace period the start failed
@@ -148,13 +164,32 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	// a server that has already died. Otherwise the child is still running and
 	// the wait goroutine stays parked to reap it whenever it does exit.
 	select {
-	case waitErr := <-waitResult:
+	case <-exit.done:
 		tail := readLastLines(logPath, crashLogTailLines, []string{cfg.APIKeyFor(profile.Backend)})
-		return nil, fmt.Errorf("server exited immediately after start (%v)\nLog tail:\n%s", waitErr, tail)
+		return nil, fmt.Errorf("server exited immediately after start (%v)\nLog tail:\n%s", exit.err, tail)
 	case <-time.After(startupGracePeriod):
 	}
 
 	return inst, nil
+}
+
+// processExit carries the exit of a server process this launcher forked.
+// done is closed once the reaping goroutine's cmd.Wait has returned; err is
+// that result (nil for exit status 0) and is read only after done is closed.
+type processExit struct {
+	done chan struct{}
+	err  error
+}
+
+// watchExit reaps cmd in its own goroutine and reports its exit through the
+// returned processExit.
+func watchExit(cmd *exec.Cmd) *processExit {
+	exit := &processExit{done: make(chan struct{})}
+	go func() {
+		exit.err = cmd.Wait()
+		close(exit.done)
+	}()
+	return exit
 }
 
 // connectExternalServer connects to an external server at the profile's
@@ -638,7 +673,9 @@ type activationOps interface {
 	// start launches a managed server or connects an external one.
 	start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error)
 	// waitHealthy polls b's health check at addr until success or timeout.
-	waitHealthy(b LLMServer, addr string, timeout time.Duration) error
+	// A non-nil exited channel is the spawned server's exit: its closing
+	// ends the wait early with errServerExited. A nil one never fires.
+	waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error
 	// stop stops whatever instance is listening at addr (ADR-0001).
 	stop(addr string, progress ProgressFunc) (*RunningInstance, error)
 	// unloadInstance unloads the active model of the instance at addr
@@ -674,8 +711,8 @@ func (realOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, e
 	return StartServer(cfg, profile)
 }
 
-func (realOps) waitHealthy(b LLMServer, addr string, timeout time.Duration) error {
-	return WaitForHealth(b, addr, timeout)
+func (realOps) waitHealthy(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
+	return waitForHealth(b, addr, timeout, exited)
 }
 
 func (realOps) stop(addr string, progress ProgressFunc) (*RunningInstance, error) {
@@ -1034,7 +1071,10 @@ func loadProfileManaged(ops activationOps, cfg *Config, profile *ResolvedProfile
 	}
 
 	reportStep(progress, "Waiting for server")
-	if err := ops.waitHealthy(b, inst.Addr(), 30*time.Second); err != nil {
+	if err := ops.waitHealthy(b, inst.Addr(), 30*time.Second, inst.exited()); err != nil {
+		if errors.Is(err, errServerExited) {
+			return nil, false, serverExitErr(cfg, inst, inst.exit.err)
+		}
 		return nil, false, startupTimeoutErr(err, inst)
 	}
 
@@ -1082,14 +1122,55 @@ func loadProfileExternal(ops activationOps, cfg *Config, profile *ResolvedProfil
 
 // WaitForHealth polls the backend's health check until it succeeds or times out.
 func WaitForHealth(b LLMServer, addr string, timeout time.Duration) error {
+	return waitForHealth(b, addr, timeout, nil)
+}
+
+// waitForHealth is WaitForHealth with a liveness probe: when exited closes —
+// the spawned server has exited — the wait returns errServerExited at the
+// next poll gap instead of running out the window. A nil exited never fires,
+// so the wait runs exactly as WaitForHealth.
+func waitForHealth(b LLMServer, addr string, timeout time.Duration, exited <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if b.HealthCheck(addr) == nil {
 			return nil
 		}
-		time.Sleep(healthPollInterval)
+		select {
+		case <-exited:
+			return errServerExited
+		case <-time.After(healthPollInterval):
+		}
 	}
 	return fmt.Errorf("server at %s did not become healthy within %s", addr, timeout)
+}
+
+// serverExitErr classifies the exit of a managed server that ended during
+// its activation health wait. Only a non-zero exit code is a crash, reported
+// with the redacted log tail. Everything else — exit status 0 (Splash traps
+// SIGTERM and exits cleanly), death by signal, 128+SIGTERM or 128+SIGINT
+// from a shell that relays the signal, or a status that cannot be read — is
+// the server being stopped, and wraps ErrLoadCanceled.
+func serverExitErr(cfg *Config, inst *RunningInstance, waitErr error) error {
+	if code, crashed := crashExitCode(waitErr); crashed {
+		tail := readLastLines(inst.LogFile, crashLogTailLines, []string{cfg.APIKeyFor(inst.Backend)})
+		return fmt.Errorf("server exited while loading its model (exit status %d)\nLog tail:\n%s", code, tail)
+	}
+	return fmt.Errorf("%w: the server at %s was stopped before it reported healthy", ErrLoadCanceled, inst.Addr())
+}
+
+// crashExitCode returns the exit code of a server that crashed: cmd.Wait
+// reported an exit code that is non-zero and not a relayed SIGTERM or
+// SIGINT. ExitCode is -1 for a process a signal ended.
+func crashExitCode(waitErr error) (int, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		return 0, false
+	}
+	code := exitErr.ExitCode()
+	if code <= 0 || code == 128+int(syscall.SIGTERM) || code == 128+int(syscall.SIGINT) {
+		return 0, false
+	}
+	return code, true
 }
 
 // startupTimeoutErr decorates a health-wait timeout that follows a

@@ -38,6 +38,19 @@ type RunningInstance struct {
 	// signals its listener, while load and unload refuse with the auth
 	// error and the auto_stop_server sweep leaves it alone.
 	AuthFailed bool
+
+	// exit is the reaped exit of a server this launcher process forked
+	// (startManagedServer); nil for every discovered or connected instance.
+	exit *processExit
+}
+
+// exited returns the channel that closes when the instance's forked server
+// exits, or nil — which never fires — when this process did not fork it.
+func (r *RunningInstance) exited() <-chan struct{} {
+	if r.exit == nil {
+		return nil
+	}
+	return r.exit.done
 }
 
 func (r *RunningInstance) Addr() string {

@@ -329,7 +329,12 @@ internal/launcher/backend_ollama.go — LastStartedPID; launcher/doc.go — ErrS
 - `go test ./internal/launcher/ ./launcher/ -run 'TestConnectExternal|TestStartupTimeout|TestLoadProfile' -count=1`
 **Commit:** `fix(launcher): wrap ErrStartupTimeout on the external start arm`
 
-## 16. Stop cancels an in-flight managed load promptly
+## 16. Stop cancels an in-flight managed load promptly — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): consequential edit — internal/launcher/discovery.go: made necessary by carrying the reaped exit on the instance (the plan's "carried on the instance" option) — `RunningInstance` is declared there, so it gains the unexported `exit *processExit` field and the `exited()` accessor.
+NOTES (2026-09-24): the liveness probe is the channel `watchExit` closes on the spawned child's reaped exit (it replaces startManagedServer's `waitResult` channel); `activationOps.waitHealthy` gained an `exited <-chan struct{}` parameter, nil for every instance this process did not fork, so fakeOps.start's PID 4242 keeps the wait unchanged. Exported `WaitForHealth` keeps its signature and delegates to the new `waitForHealth`.
+NOTES (2026-09-24): `EnsureServer` (the CLI `start` verb) keeps plain `WaitForHealth` — the item's goal names the managed `LoadProfile` only; a stop during `start`'s 15 s wait still ends in the timeout error there.
+NOTES (2026-09-24): launcher/launcher.go's LoadProfile doc ("Serialize concurrent lifecycle calls…") gained the carve-out too — the plan's `grep 'serializ'` misses its capitalised "Serialize".
 
 **What:** Fixes audit finding "The documented \"cancel with Stop\" is exactly the forbidden concurrent call". Depends on item 15 (both edit startupTimeoutErr and launcher/doc.go's ErrStartupTimeout paragraph).
 **Regression guard.** Only a non-zero exit code is a crash; status 0 (Splash traps SIGTERM and exits 0), signal death, 128+SIGTERM/SIGINT or an unreadable status is `ErrLoadCanceled`. Liveness comes only from the `Wait` result `startManagedServer` owns (carried on the instance or returned from start); with no probe attached the wait runs as today — no `IsProcessAlive` fallback (fakeOps.start's PID 4242 would flip `TestLoadProfile_StartupTimeoutIsErrStartupTimeout`). Every sentence requiring per-address serialization of lifecycle calls gains the Stop-cancels-a-load carve-out (`grep -rn 'serializ' launcher/ README.md llama-launcher.TDD.md docs/adr/`), amending docs/adr/0011-public-library-facade.md's serialization line. The `ErrLoadCanceled` identity row goes in launcher_internal_test.go's `TestNewSentinels_AliasTheCoreValues`.

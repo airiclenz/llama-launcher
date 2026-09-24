@@ -13,11 +13,13 @@ import (
 )
 
 // TestNewSentinels_AliasTheCoreValues pins the re-export-by-value discipline
-// for the two sentinels ADR-0012 adds. Neither is reachable through a facade
-// verb in a test — ErrStartupTimeout needs a managed server to be forked and
-// then miss its health window (driven against the real wait loop in
-// internal/launcher's TestLoadProfile_StartupTimeoutIsErrStartupTimeout), and
-// ErrUnsupported only ever comes back from a windows build — so the boundary
+// for the two sentinels ADR-0012 adds and for ErrLoadCanceled. None is
+// reachable through a facade verb in a test — ErrStartupTimeout needs a
+// managed server to be forked and then miss its health window (driven against
+// the real wait loop in internal/launcher's
+// TestLoadProfile_StartupTimeoutIsErrStartupTimeout), ErrLoadCanceled needs
+// one to be stopped mid-load (TestLoadProfile_ServerExitMidWaitEndsTheLoad),
+// and ErrUnsupported only ever comes back from a windows build — so the boundary
 // proof is identity: aliasing the core value is what lets errors.Is find the
 // sentinel through an error the core wrapped. A sentinel re-declared here
 // with errors.New would read the same in godoc and match nothing.
@@ -30,6 +32,7 @@ func TestNewSentinels_AliasTheCoreValues(t *testing.T) {
 		want   error
 	}{
 		{"ErrStartupTimeout", ErrStartupTimeout, core.ErrStartupTimeout},
+		{"ErrLoadCanceled", ErrLoadCanceled, core.ErrLoadCanceled},
 		{"ErrUnsupported", ErrUnsupported, core.ErrUnsupported},
 	}
 	for _, tc := range tests {

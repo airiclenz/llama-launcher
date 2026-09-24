@@ -34,9 +34,13 @@
 // escalation (up to ~20 s more). Call them from a goroutine if the caller
 // has a UI to keep responsive.
 //
-// To cancel an in-flight load, call Stop on the target address: an instance
-// that is still coming up is discoverable and stoppable (ADR-0010), which
-// is why the API does not duplicate that with Go-level cancellation.
+// To cancel an in-flight load, call Stop on the target address from another
+// goroutine: an instance that is still coming up is discoverable and
+// stoppable (ADR-0010), which is why the API does not duplicate that with
+// Go-level cancellation. The LoadProfile that spawned the server notices it
+// exit and returns promptly with an error wrapping ErrLoadCanceled; a server
+// that crashes mid-load instead (a non-zero exit code) comes back as a plain
+// error carrying its log tail.
 //
 // When the activation wait expires LoadProfile returns an error wrapping
 // ErrStartupTimeout: the server was left running, so a later health success
@@ -76,7 +80,9 @@
 // DiscoverRunningInstances and the Config accessors — are safe to call
 // concurrently. The lifecycle verbs — LoadProfile, Stop, Unload — must be
 // serialized per address by the caller; concurrent lifecycle calls against
-// the same host:port race each other.
+// the same host:port race each other. The one exception is cancellation: a
+// Stop issued while a LoadProfile on the same address is still waiting for
+// its server is the supported way to cancel that load.
 //
 // # Scope
 //

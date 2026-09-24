@@ -68,6 +68,14 @@ var ErrNotRunning = core.ErrNotRunning
 // errors.Is.
 var ErrStartupTimeout = core.ErrStartupTimeout
 
+// ErrLoadCanceled reports that the server LoadProfile started ended before
+// it became healthy without crashing — the outcome of a Stop on the
+// still-loading address. LoadProfile returns it promptly rather than waiting
+// out the activation window; the server is gone. A server that crashes
+// instead (a non-zero exit code) is reported as a plain error carrying its
+// log tail. LoadProfile wraps it, so test for it with errors.Is.
+var ErrLoadCanceled = core.ErrLoadCanceled
+
 // ErrUnsupported reports an operation the platform this program was built
 // for cannot perform — on windows, everything that needs unix process
 // control; see the package documentation. The affected verbs wrap it, so
@@ -117,7 +125,8 @@ func DiscoverRunningInstances(cfg *Config) []*RunningInstance {
 // The call blocks: up to ~30 s waiting for the new server to report
 // healthy, plus the stop escalation when a restart displaces an occupant.
 // Call it from a goroutine, and cancel an in-flight load with Stop on the
-// same address (ADR-0010). Serialize concurrent lifecycle calls against
+// same address (ADR-0010); the load then returns an error wrapping
+// ErrLoadCanceled. Serialize every other concurrent lifecycle call against
 // one address yourself.
 func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc, notice NoticeFunc) (*RunningInstance, bool, error) {
 	return core.LoadProfileNotify(cfg, profile, restart, progress, notice)

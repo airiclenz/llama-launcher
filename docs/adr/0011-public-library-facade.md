@@ -32,11 +32,23 @@ Four contract decisions shape the facade:
    `LoadConfig` pushes per-server API keys onto them (`applyAPIKeys`); the last load wins. The
    facade documents this instead of pretending instance scoping it does not have. Read verbs
    are safe to call concurrently; lifecycle verbs against the same address must be serialized
-   by the caller.
+   by the caller — except that a `Stop` while a `LoadProfile` on the same address is still
+   waiting for its server is the supported cancellation (amended 2026-09-24, below).
 4. **The documented surface is the contract.** A type alias unavoidably exposes every exported
    method of the aliased type (e.g. `Config`'s TUI-oriented accessors). The compatibility
    promise covers the symbols this ADR and the package documentation name; alias-reachable
    extras are not part of the contract.
+
+> **Amended 2026-09-24** (code-audit fixes). Decisions 2 and 3 contradicted each other: the
+> documented cancellation — `Stop(addr)` on the Starting instance — is exactly a concurrent
+> lifecycle call against the same address, which decision 3 forbade, and the cancelled
+> `LoadProfile` did not notice it: it waited out its ~30 s health window and returned
+> `ErrStartupTimeout`, claiming a server was left running that no longer existed. The
+> managed activation's health wait now watches the server it spawned, so a `Stop` ends the
+> load within a health-poll interval with the new exported sentinel **`ErrLoadCanceled`**
+> (a crash — a non-zero exit code — is a plain error carrying the log tail instead), and
+> decision 3's serialization rule carries that one carve-out. "Cancellation is `Stop`"
+> stands unchanged.
 
 The facade ships as a normal minor release (`v1.6.0`, tagged and pushed so a client's `go.mod`
 can require it; the Homebrew formula bumps as on every release).
