@@ -17,6 +17,7 @@ var knownBackends = map[string]bool{
 	"llamacpp": true,
 	"lmstudio": true,
 	"ollama":   true,
+	"splash":   true,
 }
 
 // targetCharset is the only shape an untrusted positional argument may take
@@ -56,7 +57,7 @@ func validateTarget(target string) error {
 			}
 		}
 	}
-	return fmt.Errorf("invalid target %q: must be a backend name (llamacpp, lmstudio, ollama) or host:port", target)
+	return fmt.Errorf("invalid target %q: must be a backend name (llamacpp, lmstudio, ollama, splash) or host:port", target)
 }
 
 // validateProfile vets an untrusted profile name before it is forwarded to

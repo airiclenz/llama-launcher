@@ -160,7 +160,7 @@ NOTES (2026-09-24): the sampling-defaults comment in the defaults block now read
 **Acceptance:** `go test ./internal/launcher/ -run 'Config|Example' -count=1`
 **Commit:** `docs(config): add Splash to the example config`
 
-## 5. MCP adapter accepts `splash` targets
+## 5. MCP adapter accepts `splash` targets — ✅ DONE (2026-09-24)
 
 **What:**
 **Goal:** `llama-launcher-mcp` accepts `target: "splash"`. Its validation error and its `start_server` description list the four server names.

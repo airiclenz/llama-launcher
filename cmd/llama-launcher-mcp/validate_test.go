@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ func TestValidateTarget(t *testing.T) {
 		{"backend llamacpp", "llamacpp", true},
 		{"backend lmstudio", "lmstudio", true},
 		{"backend ollama", "ollama", true},
+		{"backend splash", "splash", true},
 		{"ipv4 host:port", "127.0.0.1:8080", true},
 		{"hostname:port", "localhost:1234", true},
 		{"dotted hostname:port", "my-host.local:11434", true},
@@ -51,6 +53,19 @@ func TestValidateTarget(t *testing.T) {
 				t.Errorf("validateTarget(%q) = nil, want error", tc.target)
 			}
 		})
+	}
+}
+
+func TestValidateTargetUnknownNameListsBackends(t *testing.T) {
+	t.Parallel()
+	err := validateTarget("vllm")
+	if err == nil {
+		t.Fatal("validateTarget(\"vllm\") = nil, want error")
+	}
+	for _, name := range []string{"llamacpp", "lmstudio", "ollama", "splash"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("validateTarget error %q does not list backend %q", err, name)
+		}
 	}
 }
 
