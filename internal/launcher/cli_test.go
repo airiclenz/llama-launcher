@@ -3,13 +3,16 @@ package launcher
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // statusJSONEntry mirrors the fields of cmdStatusJSON's output that the
@@ -446,6 +449,112 @@ func TestCmdStop_StopsStartingInstance(t *testing.T) {
 	}
 	if !strings.Contains(out, "Stopped") {
 		t.Errorf("output does not report the stop:\n%s", out)
+	}
+}
+
+// authHelperAddrEnv names the environment variable that turns this test
+// binary into an auth-refusing server child (TestAuthRefusingHelperProcess).
+const authHelperAddrEnv = "LLAMA_LAUNCHER_TEST_AUTH_HELPER_ADDR"
+
+// TestAuthRefusingHelperProcess is not a test of its own: re-executed as a
+// child process with authHelperAddrEnv set, it serves 401 to every request
+// at that address until signalled — a real listener the stop path can find
+// by lsof and signal without touching the test process.
+func TestAuthRefusingHelperProcess(t *testing.T) {
+	addr := os.Getenv(authHelperAddrEnv)
+	if addr == "" {
+		t.Skip("runs only as the child of TestCmdStop_StopsAuthFailedServer")
+	}
+	refuse := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	if err := http.ListenAndServe(addr, refuse); err != nil {
+		t.Fatalf("serving %s: %v", addr, err)
+	}
+}
+
+// startAuthRefusingChild starts TestAuthRefusingHelperProcess as a detached
+// child listening at a fresh loopback address and returns that address and
+// the child. It returns once the child is the address's listener.
+func startAuthRefusingChild(t *testing.T) (string, *exec.Cmd) {
+	t.Helper()
+
+	addr := deadAddr(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAuthRefusingHelperProcess$")
+	cmd.Env = append(os.Environ(), authHelperAddrEnv+"="+addr)
+	// Its own session, so the stop's process-group signal cannot reach the
+	// test process.
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the auth-refusing child: %v", err)
+	}
+	// Reap the child as soon as it exits: a zombie still counts as alive
+	// for IsProcessAlive, which would stall terminatePID's wait loop.
+	go cmd.Wait()
+	t.Cleanup(func() { cmd.Process.Kill() })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if pid, err := findListeningPID(addr); err == nil && pid == cmd.Process.Pid {
+			return addr, cmd
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the auth-refusing child (PID %d) never listened on %s", cmd.Process.Pid, addr)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestCmdStop_StopsAuthFailedServer drives the full CLI stop path against a
+// server that answers every backend with 401: discovery surfaces it as the
+// single AuthFailed target, the stop signals its listener, and the report
+// names no backend — no backend identified it. Not parallel: captureStdout
+// swaps os.Stdout.
+func TestCmdStop_StopsAuthFailedServer(t *testing.T) {
+	addr, child := startAuthRefusingChild(t)
+	cfg := startingCfg(t, "llamacpp", addr)
+
+	var code int
+	out := captureStdout(t, func() { code = cmdStop(cfg, nil) })
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+	}
+	want := fmt.Sprintf("Stopped server at %s (PID %d)", addr, child.Process.Pid)
+	if !strings.Contains(out, want) {
+		t.Errorf("output does not contain %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "Disconnecting") {
+		t.Errorf("output reports the native stop hook, want the signal alone:\n%s", out)
+	}
+	if IsProcessAlive(child.Process.Pid) {
+		t.Errorf("PID %d still alive after stop", child.Process.Pid)
+	}
+}
+
+// TestCmdLogs_NoTargetSkipsAuthFailed: a bare `logs` picks among identified
+// instances only — an AuthFailed row names no backend and so no log — so a
+// Starting llamacpp beside one is the single pick. Not parallel:
+// captureStdout swaps os.Stdout.
+func TestCmdLogs_NoTargetSkipsAuthFailed(t *testing.T) {
+	starting := newFakeStartingLlamaCppServer(t)
+	refusingHost, refusingPort := authRefusingServer(t, http.StatusUnauthorized)
+	cfg := startingCfg(t, "llamacpp", addrFromURL(t, starting.URL))
+	cfg.Profiles["refusing"] = Profile{ProfileParams: ProfileParams{Host: &refusingHost, Port: &refusingPort}}
+	logLine := "llamacpp log line"
+	logPath := filepath.Join(cfg.LogDir, "llamacpp-20260924-120000.log")
+	if err := os.WriteFile(logPath, []byte(logLine+"\n"), 0o600); err != nil {
+		t.Fatalf("writing log: %v", err)
+	}
+
+	var code int
+	out := captureStdout(t, func() { code = cmdLogs(cfg, nil) })
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (the Starting llamacpp is the single pick); output:\n%s", code, out)
+	}
+	if !strings.Contains(out, logLine) {
+		t.Errorf("output does not show the llamacpp log:\n%s", out)
 	}
 }
 

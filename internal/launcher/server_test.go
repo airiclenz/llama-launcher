@@ -309,6 +309,62 @@ func TestLoadProfile_StopsForeignBackendAtSharedAddr(t *testing.T) {
 	}
 }
 
+// TestLoadProfile_StopsHealthySplashAnswering403 pins the refusal rule's
+// boundary: a healthy Splash on the wildcard answers llamacpp's probe of
+// 0.0.0.0 with 403, yet it is a foreign occupant to auto-stop — never an
+// auth-refusing server — because Splash's own probe finds it healthy.
+func TestLoadProfile_StopsHealthySplashAnswering403(t *testing.T) {
+	// Not parallel: rewrites PATH.
+	port := splashHostCheckingServer(t, http.StatusOK)
+	host := "0.0.0.0"
+	cfg := sharedAddrCfg(t, host, port, "llamacpp", "splash")
+	profile := &ResolvedProfile{
+		Name:          "test",
+		ModelPath:     "/models/test.gguf",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+	var stopped []string
+	// Empty PATH so the managed start fails at the binary lookup instead of
+	// forking a real llama-server.
+	t.Setenv("PATH", t.TempDir())
+
+	_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil, nil)
+
+	if errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("err = %v, want no auth refusal while Splash is healthy there", err)
+	}
+	if want := fmt.Sprintf("%s:%d", host, port); len(stopped) != 1 || stopped[0] != want {
+		t.Errorf("stopped addresses = %v, want exactly [%s]", stopped, want)
+	}
+}
+
+// TestLoadProfile_RefusesAuthFailedServer: with the real probes, a target
+// answering every backend with 401 is refused with the authFailedErr
+// message and nothing is stopped.
+func TestLoadProfile_RefusesAuthFailedServer(t *testing.T) {
+	// Not parallel: rewrites PATH.
+	host, port := authRefusingServer(t, http.StatusUnauthorized)
+	cfg := sharedAddrCfg(t, host, port, "llamacpp", "ollama")
+	profile := &ResolvedProfile{
+		Name:          "test",
+		ModelPath:     "/models/test.gguf",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+	var stopped []string
+	t.Setenv("PATH", t.TempDir())
+
+	_, _, err := loadProfile(stopRecordingOps{stopped: &stopped}, cfg, profile, false, nil, nil)
+
+	if !errors.Is(err, ErrAuthFailed) || !strings.Contains(err.Error(), "check api_key") {
+		t.Fatalf("err = %v, want the authFailedErr message", err)
+	}
+	if len(stopped) != 0 {
+		t.Errorf("stopped addresses = %v, want none", stopped)
+	}
+}
+
 // TestLoadProfile_SameBackendSameModelIsNoOp guards ADR-0007: reloading the
 // profile a server at the target address is already serving must not stop or
 // restart anything.
@@ -596,6 +652,7 @@ func TestLoadProfile_RefusesDoubleSpawnWhileStartingUp(t *testing.T) {
 type fakeOps struct {
 	healthyAddrs  map[string]bool   // addr → backend's own server answers there
 	startingAddrs map[string]bool   // addr → still-starting server answers there (ADR-0010)
+	authAddrs     map[string]bool   // addr → the server there answers only 401/403
 	models        map[string]string // addr → currently loaded model
 	drift         []string          // liveDrift result for any addr
 	instances     []*RunningInstance
@@ -623,6 +680,26 @@ func (f *fakeOps) liveDrift(b LLMServer, addr string, fresh ProfileParams) []str
 }
 
 func (f *fakeOps) discover(cfg *Config) []*RunningInstance { return f.instances }
+
+func (f *fakeOps) authRefusal(cfg *Config, addr string) error {
+	if f.authAddrs[addr] {
+		return fakeAuthErr(addr)
+	}
+	return nil
+}
+
+func (f *fakeOps) identify(addr string) (string, error) {
+	if f.authAddrs[addr] {
+		return "llamacpp", fakeAuthErr(addr)
+	}
+	return "", ErrNotRunning
+}
+
+// fakeAuthErr is the error identifyBackend and authRefusalAt report for a
+// server at addr that answers only 401/403.
+func fakeAuthErr(addr string) error {
+	return fmt.Errorf("server at %s: %w", addr, authFailedErr(http.StatusUnauthorized))
+}
 
 func (f *fakeOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
 	f.started = append(f.started, profile.Name)
@@ -840,6 +917,24 @@ func TestLoadProfile_Orchestration_AutoStop(t *testing.T) {
 		}
 	})
 
+	t.Run("an AuthFailed row is skipped while a healthy foreign occupant is still stopped", func(t *testing.T) {
+		t.Parallel()
+		f, profile := newFake()
+		f.instances = []*RunningInstance{
+			{Host: "127.0.0.1", Port: 9000, AuthFailed: true},
+			orchInstance("ollama", "127.0.0.1", 8080, "llama3.1:8b"), // healthy foreign occupant of the target
+		}
+
+		_, _, err := loadProfile(f, &Config{}, profile, false, nil, nil)
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if want := []string{"127.0.0.1:8080"}; !slices.Equal(f.stopped, want) {
+			t.Errorf("stopped = %v, want only the foreign occupant %v", f.stopped, want)
+		}
+	})
+
 	t.Run("a failing stop aborts the activation", func(t *testing.T) {
 		t.Parallel()
 		f, profile := newFake()
@@ -850,6 +945,50 @@ func TestLoadProfile_Orchestration_AutoStop(t *testing.T) {
 		}
 		if len(f.started) != 0 {
 			t.Errorf("started profiles = %v, want none after a failed stop", f.started)
+		}
+	})
+}
+
+// TestLoadProfile_Orchestration_AuthFailed: a target address whose server
+// refuses the api_key (discovery's rule, through the authRefusal hook) is
+// refused with the auth error before anything is stopped, started or
+// loaded; a healthy or Starting profile backend there never consults it.
+func TestLoadProfile_Orchestration_AuthFailed(t *testing.T) {
+	t.Parallel()
+
+	for _, backend := range []string{"llamacpp", "ollama"} {
+		t.Run(backend+": refused with the auth error", func(t *testing.T) {
+			t.Parallel()
+			profile := orchProfile(backend, "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+			f := &fakeOps{
+				authAddrs: map[string]bool{"127.0.0.1:8080": true},
+				instances: []*RunningInstance{orchInstance("ollama", "127.0.0.1", 11434, "llama3.1:8b")},
+			}
+
+			_, started, err := loadProfile(f, &Config{}, profile, false, nil, nil)
+
+			if !errors.Is(err, ErrAuthFailed) || !strings.Contains(err.Error(), "check api_key") {
+				t.Fatalf("err = %v, want the authFailedErr message", err)
+			}
+			if started {
+				t.Error("started = true on a refusal")
+			}
+			if len(f.stopped) != 0 || len(f.started) != 0 || len(f.loadedModels) != 0 {
+				t.Errorf("stopped=%v started=%v loaded=%v, want no effects", f.stopped, f.started, f.loadedModels)
+			}
+		})
+	}
+
+	t.Run("a healthy profile backend is never refused", func(t *testing.T) {
+		t.Parallel()
+		profile := orchProfile("llamacpp", "chat", "/models/test-7b.gguf", "127.0.0.1", 8080)
+		f := &fakeOps{
+			healthyAddrs: map[string]bool{"127.0.0.1:8080": true},
+			authAddrs:    map[string]bool{"127.0.0.1:8080": true},
+		}
+
+		if _, _, err := loadProfile(f, &Config{}, profile, false, nil, nil); err != nil {
+			t.Errorf("err = %v, want the activation to proceed", err)
 		}
 	})
 }
@@ -1192,6 +1331,26 @@ func TestUnload_Orchestration(t *testing.T) {
 		}
 	})
 
+	for _, backend := range []string{"llamacpp", "ollama"} {
+		t.Run(backend+": an auth-refusing server is refused before any mechanics", func(t *testing.T) {
+			t.Parallel()
+			addr := "127.0.0.1:8080"
+			f := &fakeOps{authAddrs: map[string]bool{addr: true}}
+
+			res, err := unloadServerModel(steppedOps{f}, backend, addr)
+
+			if !errors.Is(err, ErrAuthFailed) || !strings.Contains(err.Error(), "check api_key") {
+				t.Fatalf("err = %v, want the authFailedErr message", err)
+			}
+			if res == nil {
+				t.Fatal("result must be non-nil on error")
+			}
+			if len(f.stopped) != 0 || len(f.unloadedInstances) != 0 {
+				t.Errorf("stopped=%v unloaded=%v, want nothing stopped or unloaded", f.stopped, f.unloadedInstances)
+			}
+		})
+	}
+
 	t.Run("unknown backend fails with a non-nil result", func(t *testing.T) {
 		t.Parallel()
 		f := &fakeOps{}
@@ -1248,7 +1407,8 @@ func TestStop_Orchestration(t *testing.T) {
 // TestIdentifyBackend covers the stop path's backend identification: a
 // llamacpp-shaped /health response claims the address for llamacpp, a
 // still-loading llama-server is claimed via the StartupProber second pass
-// (ADR-0010), and an address nothing answers on yields ErrNotRunning.
+// (ADR-0010), a server answering only 401/403 is the third pass's with the
+// auth error, and an address nothing answers on yields ErrNotRunning.
 func TestIdentifyBackend(t *testing.T) {
 	t.Parallel()
 
@@ -1359,6 +1519,40 @@ func TestIdentifyBackend(t *testing.T) {
 		}
 		if backend != "splash" {
 			t.Errorf("backend = %q, want %q", backend, "splash")
+		}
+	})
+
+	t.Run("a server answering only 401 is the third pass's, with the auth error", func(t *testing.T) {
+		t.Parallel()
+		host, port := authRefusingServer(t, http.StatusUnauthorized)
+
+		backend, err := identifyBackend(fmt.Sprintf("%s:%d", host, port))
+
+		if !errors.Is(err, ErrAuthFailed) || !strings.Contains(err.Error(), "check api_key") {
+			t.Fatalf("err = %v, want the authFailedErr message wrapping ErrAuthFailed", err)
+		}
+		// The sort-first backend that answered 401 carries the stop
+		// verification; it does not identify the server.
+		if backend != "llamacpp" {
+			t.Errorf("backend = %q, want the sort-first refusing backend llamacpp", backend)
+		}
+	})
+
+	t.Run("a Starting server outranks a 401 from another backend's path", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		backend, err := identifyBackend(addrFromURL(t, srv.URL))
+
+		if err != nil || backend != "llamacpp" {
+			t.Errorf("identifyBackend = %q, %v; want llamacpp from the startup pass", backend, err)
 		}
 	})
 
@@ -1655,7 +1849,7 @@ func TestStopServerAt_TryStopFlipsHealthCheck(t *testing.T) {
 	RegisterLLMServer(stub)
 	t.Cleanup(func() { delete(llmServers, stub.name) })
 
-	_, err := stopServerAt(stub.name, "127.0.0.1:1", nil)
+	_, err := stopServerAt(stub.name, "127.0.0.1:1", true, nil)
 
 	if err != nil {
 		t.Fatalf("stopServerAt = %v, want nil once TryStop makes the health check fail", err)
@@ -1749,7 +1943,7 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 		RegisterLLMServer(stub)
 		t.Cleanup(func() { delete(llmServers, stub.name) })
 
-		pid, err := stopServerAt(stub.name, addr, nil)
+		pid, err := stopServerAt(stub.name, addr, true, nil)
 
 		if err != nil {
 			t.Fatalf("stopServerAt = %v, want success once the listener is gone", err)
@@ -1770,7 +1964,7 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 		RegisterLLMServer(stub)
 		t.Cleanup(func() { delete(llmServers, stub.name) })
 
-		pid, err := stopServerAt(stub.name, deadAddr(t), nil)
+		pid, err := stopServerAt(stub.name, deadAddr(t), true, nil)
 
 		if err == nil || !strings.Contains(err.Error(), "still reachable") {
 			t.Fatalf("stopServerAt = %v, want the still-reachable error for a survived Starting server", err)
@@ -1780,6 +1974,125 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 		}
 		if len(stub.tryStops) != 1 {
 			t.Errorf("TryStop calls = %v, want exactly one before the verification", stub.tryStops)
+		}
+	})
+}
+
+// TestUnloadInstanceModel_AuthFailed: a server answering only 401 has no
+// readable model list, so unloading it is refused with the auth error
+// instead of reporting "nothing loaded" as success.
+func TestUnloadInstanceModel_AuthFailed(t *testing.T) {
+	t.Parallel()
+	host, port := authRefusingServer(t, http.StatusUnauthorized)
+
+	inst, err := UnloadInstanceModel(fmt.Sprintf("%s:%d", host, port), nil)
+
+	if !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("err = %v, want ErrAuthFailed", err)
+	}
+	if inst != nil {
+		t.Errorf("instance = %+v, want nil on a refusal", inst)
+	}
+}
+
+// authRefusingStopServer is a registry stub for a server that refuses the
+// api_key: its health check answers ErrAuthFailed while refuses reports the
+// server there, and a connection error otherwise. TryStop is recorded.
+type authRefusingStopServer struct {
+	hookStopServer
+	refuses func(addr string) bool
+}
+
+func (s *authRefusingStopServer) HealthCheck(addr string) error {
+	if !s.refuses(addr) {
+		return errors.New("connection refused")
+	}
+	return authFailedErr(http.StatusUnauthorized)
+}
+
+// acceptsConnection reports whether anything accepts a TCP connection at
+// addr.
+func acceptsConnection(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// TestStopServerAt_AuthFailedListener pins the stop of a server no backend
+// identified because it answers 401/403: the listening PID is signalled,
+// the native hook never runs, and a 401/403 answer after the signal counts
+// as still reachable. Not parallel: the subtests mutate the global
+// llmServers registry.
+func TestStopServerAt_AuthFailedListener(t *testing.T) {
+	t.Run("the listener is signalled and no native hook runs", func(t *testing.T) {
+		if _, err := exec.LookPath("nc"); err != nil {
+			t.Skip("nc not available")
+		}
+		addr := deadAddr(t)
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			t.Fatalf("splitting %q: %v", addr, err)
+		}
+		cmd := exec.Command("nc", "-l", host, port)
+		cmd.SysProcAttr = detachedSysProcAttr()
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("starting nc: %v", err)
+		}
+		go cmd.Wait()
+		t.Cleanup(func() { cmd.Process.Kill() })
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if pid, err := findListeningPID(addr); err == nil && pid == cmd.Process.Pid {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("nc (PID %d) never showed up listening on %s", cmd.Process.Pid, addr)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		stub := &authRefusingStopServer{
+			hookStopServer: hookStopServer{name: "authstop"},
+			refuses:        acceptsConnection,
+		}
+		RegisterLLMServer(stub)
+		t.Cleanup(func() { delete(llmServers, stub.name) })
+
+		pid, err := stopServerAt(stub.name, addr, false, nil)
+
+		if err != nil {
+			t.Fatalf("stopServerAt = %v, want success once the listener is gone", err)
+		}
+		if pid != cmd.Process.Pid {
+			t.Errorf("reported PID = %d, want the listener's PID %d", pid, cmd.Process.Pid)
+		}
+		if IsProcessAlive(cmd.Process.Pid) {
+			t.Errorf("PID %d still alive after stopServerAt", cmd.Process.Pid)
+		}
+		if len(stub.tryStops) != 0 {
+			t.Errorf("TryStop calls = %v, want none for an auth-refusing server", stub.tryStops)
+		}
+	})
+
+	t.Run("a surviving 401 answer is not reported stopped", func(t *testing.T) {
+		// A dead address, so nothing is signalled, while the stub keeps
+		// answering 401 — a server that survived the stop.
+		stub := &authRefusingStopServer{
+			hookStopServer: hookStopServer{name: "authsurvive"},
+			refuses:        func(string) bool { return true },
+		}
+		RegisterLLMServer(stub)
+		t.Cleanup(func() { delete(llmServers, stub.name) })
+
+		_, err := stopServerAt(stub.name, deadAddr(t), false, nil)
+
+		if err == nil || !strings.Contains(err.Error(), "still reachable") {
+			t.Fatalf("stopServerAt = %v, want the still-reachable error", err)
+		}
+		if len(stub.tryStops) != 0 {
+			t.Errorf("TryStop calls = %v, want none for an auth-refusing server", stub.tryStops)
 		}
 	})
 }

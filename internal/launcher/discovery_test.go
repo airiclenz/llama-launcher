@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -399,6 +400,8 @@ func TestInstancesSignature(t *testing.T) {
 	starting := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, Starting: true}}
 	loaded := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "/models/x.gguf"}}
 	loadedAgain := []*RunningInstance{{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "/models/x.gguf"}}
+	authFailed := []*RunningInstance{{Host: "127.0.0.1", Port: 8080, AuthFailed: true}}
+	unidentified := []*RunningInstance{{Host: "127.0.0.1", Port: 8080}}
 
 	if got := instancesSignature(nil); got != "" {
 		t.Errorf("signature of no instances = %q, want empty", got)
@@ -411,6 +414,12 @@ func TestInstancesSignature(t *testing.T) {
 	}
 	if instancesSignature(starting) == instancesSignature(idle) {
 		t.Error("the Starting→healthy transition must change the signature (ADR-0010)")
+	}
+	if instancesSignature(authFailed) == instancesSignature(unidentified) {
+		t.Error("the AuthFailed flag must be part of the signature")
+	}
+	if instancesSignature(authFailed) == instancesSignature(idle) {
+		t.Error("an auth-failed server turning healthy must change the signature")
 	}
 	if instancesSignature(loaded) != instancesSignature(loadedAgain) {
 		t.Error("identical state must produce identical signatures")
@@ -468,4 +477,151 @@ func writeEmpty(path string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// sharedAddrCfg builds a config whose enabled backends all resolve to
+// host:port, the shared-port layout (ADR-0006) under which one server is
+// probed by several backends.
+func sharedAddrCfg(t *testing.T, host string, port int, backends ...string) *Config {
+	t.Helper()
+
+	servers := make(map[string]ServerConfig, len(backends))
+	for _, backend := range backends {
+		servers[backend] = ServerConfig{Enabled: true}
+	}
+	cfg := &Config{
+		Servers:  servers,
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal(backends[0]),
+		Host:   &host,
+		Port:   &port,
+	}
+	return cfg
+}
+
+// authRefusingServer starts a server answering every request with status,
+// as a server enforcing an api_key the config does not carry does.
+func authRefusingServer(t *testing.T, status int) (string, int) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return hostPort(t, srv.URL)
+}
+
+// TestDiscoverRunningInstances_AuthFailed pins the auth-refusing server's
+// row: an address where every probing backend answers 401/403 is one
+// AuthFailed row with no backend, model or profile — not an absent server —
+// while any backend finding a healthy or Starting server there suppresses
+// it.
+func TestDiscoverRunningInstances_AuthFailed(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(fmt.Sprintf("status %d on a shared address is one row", status), func(t *testing.T) {
+			t.Parallel()
+			host, port := authRefusingServer(t, status)
+			cfg := sharedAddrCfg(t, host, port, "llamacpp", "ollama", "lmstudio")
+
+			instances := DiscoverRunningInstances(cfg)
+
+			if len(instances) != 1 {
+				t.Fatalf("got %d instances, want exactly one AuthFailed row: %+v", len(instances), instances)
+			}
+			inst := instances[0]
+			if !inst.AuthFailed {
+				t.Error("AuthFailed = false, want true")
+			}
+			if inst.Backend != "" || inst.ActiveModel != "" || inst.ActiveProfile != "" || inst.Starting {
+				t.Errorf("row = %+v, want Backend, model and profile empty and not Starting", inst)
+			}
+			if want := fmt.Sprintf("%s:%d", host, port); inst.Addr() != want {
+				t.Errorf("Addr() = %q, want %q", inst.Addr(), want)
+			}
+		})
+	}
+
+	t.Run("a Starting backend at the address suppresses the row", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/health" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+		host, port := hostPort(t, srv.URL)
+		cfg := sharedAddrCfg(t, host, port, "llamacpp", "ollama")
+
+		instances := DiscoverRunningInstances(cfg)
+
+		if len(instances) != 1 || instances[0].Backend != "llamacpp" || !instances[0].Starting {
+			t.Fatalf("instances = %+v, want only the Starting llamacpp row", instances)
+		}
+		if instances[0].AuthFailed {
+			t.Error("AuthFailed = true on the identified row")
+		}
+	})
+
+	t.Run("a healthy backend at the address suppresses the row", func(t *testing.T) {
+		t.Parallel()
+		// Splash 403s a Host naming the wildcard, so llamacpp's probe of
+		// 0.0.0.0 reads 403 while Splash's loopback probe finds it healthy.
+		port := splashHostCheckingServer(t, http.StatusOK)
+		cfg := sharedAddrCfg(t, "0.0.0.0", port, "llamacpp", "splash")
+
+		instances := DiscoverRunningInstances(cfg)
+
+		if len(instances) != 1 || instances[0].Backend != "splash" || instances[0].AuthFailed {
+			t.Fatalf("instances = %+v, want only the healthy splash row", instances)
+		}
+	})
+}
+
+// TestDiscoverAuthRefusalAt pins the load path's refusal rule, which is discovery's
+// AuthFailed rule: the auth error when every backend configured at the
+// address answers 401/403, nil when any finds its own server there or none
+// is configured there.
+func TestDiscoverAuthRefusalAt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every backend refused: the authFailedErr message", func(t *testing.T) {
+		t.Parallel()
+		host, port := authRefusingServer(t, http.StatusUnauthorized)
+		cfg := sharedAddrCfg(t, host, port, "llamacpp", "ollama")
+
+		err := authRefusalAt(cfg, fmt.Sprintf("%s:%d", host, port))
+
+		if !errors.Is(err, ErrAuthFailed) {
+			t.Fatalf("err = %v, want ErrAuthFailed", err)
+		}
+		if !strings.Contains(err.Error(), "check api_key") {
+			t.Errorf("err = %q, want the authFailedErr guidance", err)
+		}
+	})
+
+	t.Run("a healthy Splash answering 403 to the wildcard host is no refusal", func(t *testing.T) {
+		t.Parallel()
+		port := splashHostCheckingServer(t, http.StatusOK)
+		cfg := sharedAddrCfg(t, "0.0.0.0", port, "llamacpp", "splash")
+
+		if err := authRefusalAt(cfg, fmt.Sprintf("0.0.0.0:%d", port)); err != nil {
+			t.Errorf("err = %v, want nil while Splash is healthy there", err)
+		}
+	})
+
+	t.Run("an address no backend is configured at is no refusal", func(t *testing.T) {
+		t.Parallel()
+		host, port := authRefusingServer(t, http.StatusUnauthorized)
+		cfg := sharedAddrCfg(t, host, port, "llamacpp")
+
+		if err := authRefusalAt(cfg, deadAddr(t)); err != nil {
+			t.Errorf("err = %v, want nil", err)
+		}
+	})
 }

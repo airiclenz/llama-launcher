@@ -193,20 +193,29 @@ func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer) (
 // started from servers that were already running. Both stop mechanisms run
 // exactly once, in the documented order (TDD §6.5): the listening PID is
 // discovered via lsof and signalled (SIGTERM → SIGKILL → port-release wait),
-// then the backend's native stop hook runs best-effort. Returns ErrNotRunning
-// when no known backend answers at addr.
+// then the backend's native stop hook runs best-effort. A server that
+// answers only with 401/403 (identifyBackend's third pass) is stopped by
+// the signal alone — no native hook runs against a server that refuses the
+// api_key — and the returned instance carries Backend "", since no backend
+// identified it. Returns ErrNotRunning when no known backend answers at addr.
 func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) {
 	host, port, ok := splitHostPort(addr)
 	if !ok {
 		return nil, fmt.Errorf("invalid address: %s", addr)
 	}
 	backend, err := identifyBackend(addr)
+	authFailed := errors.Is(err, ErrAuthFailed)
+	if err != nil && !authFailed {
+		return nil, err
+	}
+	pid, err := stopServerAt(backend, addr, !authFailed, progress)
 	if err != nil {
 		return nil, err
 	}
-	pid, err := stopServerAt(backend, addr, progress)
-	if err != nil {
-		return nil, err
+	if authFailed {
+		// The probing backend's name only drove the stop verification; it
+		// does not identify the server, so it is not reported.
+		backend = ""
 	}
 	return &RunningInstance{
 		Backend: backend,
@@ -217,14 +226,19 @@ func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) 
 }
 
 // identifyBackend asks each registered backend whether it owns the server
-// reachable at addr. Used by stop paths that have an address but no caller-
-// supplied backend name. Two passes, each in sorted-name order so the
-// answer is deterministic (map iteration is random): first the backends'
-// discriminating health checks, then the startup probes of backends that
-// implement StartupProber or LoadingProcessFinder — a Starting instance
-// fails its health check for the whole model load but must still be
-// identifiable so it can be stopped (ADR-0010, ADR-0015). Returns
-// ErrNotRunning when neither pass identifies anything.
+// reachable at addr. Used by stop and unload paths that have an address but
+// no caller-supplied backend name. Three passes, each in sorted-name order
+// so the answer is deterministic (map iteration is random): first the
+// backends' discriminating health checks, then the startup probes of
+// backends that implement StartupProber or LoadingProcessFinder — a
+// Starting instance fails its health check for the whole model load but
+// must still be identifiable so it can be stopped (ADR-0010, ADR-0015) —
+// and last a health check that answered 401/403: a server refusing the
+// configured api_key, which only an explicit stop may act on. That third
+// pass returns the first such backend's name together with an error
+// wrapping ErrAuthFailed (the authFailedErr message); a caller that acts on
+// an identified server treats it as a refusal, while stop proceeds with the
+// name. Returns ErrNotRunning when no pass identifies anything.
 func identifyBackend(addr string) (string, error) {
 	names := make([]string, 0, len(llmServers))
 	for name := range llmServers {
@@ -232,15 +246,23 @@ func identifyBackend(addr string) (string, error) {
 	}
 	sort.Strings(names)
 
+	authName, authErr := "", error(nil)
 	for _, name := range names {
-		if llmServers[name].HealthCheck(addr) == nil {
+		healthErr := llmServers[name].HealthCheck(addr)
+		if healthErr == nil {
 			return name, nil
+		}
+		if authErr == nil && errors.Is(healthErr, ErrAuthFailed) {
+			authName, authErr = name, healthErr
 		}
 	}
 	for _, name := range names {
 		if startingUp(llmServers[name], addr) {
 			return name, nil
 		}
+	}
+	if authErr != nil {
+		return authName, fmt.Errorf("server at %s: %w", addr, authErr)
 	}
 	return "", ErrNotRunning
 }
@@ -324,20 +346,23 @@ func parseProcessTable(out string) []processEntry {
 // native stop hook. The hook is best-effort — its error surfaces only when
 // the address is still serving afterwards. A loading server that has not
 // bound addr yet has no listening PID; its PID comes from the backend's
-// LoadingProcessFinder instead (ADR-0015). Stopped means not healthy *and*
-// not still starting up: a survived Starting server also fails the health
-// check (llama-server answers /health with 503 for the whole model load),
-// so health alone would report it as stopped (ADR-0010). Returns
-// the signalled PID (0 when none was found) and an error when the server
-// survived both mechanisms.
-func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
+// LoadingProcessFinder instead (ADR-0015). With nativeHook false — a server
+// that refuses the api_key, which no backend identified — only the listening
+// PID is signalled: no loading-process lookup, no native hook. Stopped means
+// not healthy, not refusing auth *and* not still starting up: a survived
+// Starting server also fails the health check (llama-server answers /health
+// with 503 for the whole model load), and a survived auth-refusing one
+// answers 401/403, so health alone would report either as stopped
+// (ADR-0010). Returns the signalled PID (0 when none was found) and an error
+// when the server survived the mechanisms run.
+func stopServerAt(backend, addr string, nativeHook bool, progress ProgressFunc) (int, error) {
 	b, err := GetLLMServer(backend)
 	if err != nil {
 		return 0, err
 	}
 
 	pid, pidErr := findListeningPID(addr)
-	if pid <= 0 {
+	if pid <= 0 && nativeHook {
 		if loading := loadingPID(b, addr); loading > 0 {
 			pid, pidErr = loading, nil
 		}
@@ -346,10 +371,14 @@ func stopServerAt(backend, addr string, progress ProgressFunc) (int, error) {
 		terminatePID(pid, progress)
 	}
 
-	reportStep(progress, "Disconnecting")
-	stopErr := b.TryStop(addr)
+	var stopErr error
+	if nativeHook {
+		reportStep(progress, "Disconnecting")
+		stopErr = b.TryStop(addr)
+	}
 
-	if b.HealthCheck(addr) != nil && !startingUp(b, addr) {
+	healthErr := b.HealthCheck(addr)
+	if healthErr != nil && !errors.Is(healthErr, ErrAuthFailed) && !startingUp(b, addr) {
 		return pid, nil
 	}
 	if stopErr != nil {
@@ -573,6 +602,15 @@ type activationOps interface {
 	liveDrift(b LLMServer, addr string, fresh ProfileParams) []string
 	// discover returns the running instances derivable from cfg.
 	discover(cfg *Config) []*RunningInstance
+	// authRefusal returns the authFailedErr-wrapping error when the server
+	// at addr refuses the configured api_key by discovery's rule (every
+	// backend the config points there answers 401/403, none is healthy or
+	// Starting), else nil.
+	authRefusal(cfg *Config, addr string) error
+	// identify names the backend serving at addr (identifyBackend): an
+	// error wrapping ErrAuthFailed when only a 401/403 answered there,
+	// ErrNotRunning when nothing did.
+	identify(addr string) (string, error)
 	// start launches a managed server or connects an external one.
 	start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error)
 	// waitHealthy polls b's health check at addr until success or timeout.
@@ -603,6 +641,10 @@ func (realOps) liveDrift(b LLMServer, addr string, fresh ProfileParams) []string
 }
 
 func (realOps) discover(cfg *Config) []*RunningInstance { return DiscoverRunningInstances(cfg) }
+
+func (realOps) authRefusal(cfg *Config, addr string) error { return authRefusalAt(cfg, addr) }
+
+func (realOps) identify(addr string) (string, error) { return identifyBackend(addr) }
 
 func (realOps) start(cfg *Config, profile *ResolvedProfile) (*RunningInstance, error) {
 	return StartServer(cfg, profile)
@@ -666,6 +708,17 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 	healthy := ops.healthy(b, targetAddr)
 	starting := ops.starting(b, targetAddr)
 
+	// A server refusing the configured api_key can be neither loaded into
+	// nor safely replaced: refuse with the auth error. The profile backend's
+	// own health error never decides this — a healthy Splash answers 403 to
+	// a probe naming a wildcard host, and it must still be auto-stopped —
+	// only discovery's every-backend rule does.
+	if !healthy && !starting {
+		if err := ops.authRefusal(cfg, targetAddr); err != nil {
+			return nil, false, err
+		}
+	}
+
 	if !restart && healthy {
 		liveModel := ops.loadedModel(b, targetAddr)
 		if liveModel != "" && profile.ModelPath != "" && modelNamesMatch(profile.ModelPath, liveModel) {
@@ -686,6 +739,11 @@ func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, resta
 
 	if cfg.ShouldAutoStopServer() {
 		for _, inst := range ops.discover(cfg) {
+			// A server refusing the api_key is never swept: no backend
+			// identified it, so only an explicit stop signals it.
+			if inst.AuthFailed {
+				continue
+			}
 			// Skip only a same-backend instance at the target address —
 			// that is the instance being (re)activated. A *different*
 			// backend occupying the shared target address (backends may
@@ -1061,7 +1119,9 @@ func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
 }
 
 // UnloadInstanceModel unloads the active model for the instance at the given
-// address without stopping the server.
+// address without stopping the server. A server that answers only with
+// 401/403 is refused with the auth error: its model list cannot be read, so
+// "nothing loaded" would be a false success.
 func UnloadInstanceModel(addr string, progress ProgressFunc) (*RunningInstance, error) {
 	host, port, ok := splitHostPort(addr)
 	if !ok {
@@ -1150,6 +1210,13 @@ func unloadServerModel(ops activationOps, backend, addr string) (*StopResult, er
 	b, err := GetLLMServer(backend)
 	if err != nil {
 		return &StopResult{}, err
+	}
+
+	// Refused before the managed/external split: a managed unload is a stop,
+	// and a server that refuses the api_key is stopped only on an explicit
+	// stop. Any other identification outcome is left to the mechanics below.
+	if _, identifyErr := ops.identify(addr); errors.Is(identifyErr, ErrAuthFailed) {
+		return &StopResult{}, identifyErr
 	}
 
 	rec := &stepRecorder{}

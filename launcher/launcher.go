@@ -30,7 +30,11 @@ type ResolvedProfile = core.ResolvedProfile
 // runtime. It is never persisted — every discovery rebuilds it from live
 // probes. Addr reports its host:port, Uptime how long it has been up, and
 // the Starting flag marks an instance whose address is bound but whose
-// health check does not pass yet (ADR-0010).
+// health check does not pass yet (ADR-0010). The AuthFailed flag marks an
+// address whose server answers every configured backend with 401/403 — it
+// refuses the configured api_key: such a row has Backend "", no model or
+// profile, and appears at most once per address. Stop signals its
+// listener; LoadProfile and Unload against it return the auth error.
 type RunningInstance = core.RunningInstance
 
 // StopResult reports what a Stop or Unload call did: the instance it acted
@@ -106,7 +110,9 @@ func DiscoverRunningInstances(cfg *Config) []*RunningInstance {
 // (ADR-0007): matching parameters do nothing, drifted ones deliver a
 // single drift notice to notice and leave the server alone — pass
 // restart=true to force re-activation instead. Progress steps go to
-// progress; both callbacks may be nil.
+// progress; both callbacks may be nil. A target address whose server
+// refuses the configured api_key (an AuthFailed instance) is refused with
+// the auth error, and the auto_stop_server sweep leaves such servers alone.
 //
 // The call blocks: up to ~30 s waiting for the new server to report
 // healthy, plus the stop escalation when a restart displaces an occupant.
@@ -119,7 +125,9 @@ func LoadProfile(cfg *Config, profile *ResolvedProfile, restart bool, progress P
 
 // Stop stops whatever LLM-server instance is listening at addr, whether or
 // not this launcher started it (ADR-0001), and returns the steps taken. It
-// returns ErrNotRunning when nothing is reachable there. The call blocks
+// returns ErrNotRunning when nothing is reachable there. A server that
+// refuses the configured api_key is stopped by signalling its listener
+// alone, and the result's instance then carries Backend "". The call blocks
 // for the SIGTERM → SIGKILL → port-release escalation, up to ~20 s.
 func Stop(addr string) (*StopResult, error) {
 	return core.Stop(addr)
@@ -130,8 +138,9 @@ func Stop(addr string) (*StopResult, error) {
 // arguments, unloading means stopping the server (ADR-0003, ADR-0004); an
 // external backend gets an API unload and keeps running. StopResult's
 // ServerStopped field distinguishes the two outcomes. It returns
-// ErrNotRunning when nothing is reachable at addr, and blocks for the same
-// worst case as Stop.
+// ErrNotRunning when nothing is reachable at addr, the auth error when the
+// server there refuses the configured api_key (nothing is stopped or
+// unloaded then), and blocks for the same worst case as Stop.
 func Unload(backend, addr string) (*StopResult, error) {
 	return core.Unload(backend, addr)
 }

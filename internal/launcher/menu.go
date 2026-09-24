@@ -195,10 +195,15 @@ func showKeyMigrationResult(lines []string, err error) {
 // primaryInstance selects the instance the menu renders details for
 // (model label, "Show log", "Show model config"): the first instance with an
 // active model, so the loaded-state menu points at a server that actually has
-// a model; otherwise the sort-first instance; nil when nothing is running.
+// a model; otherwise the sort-first identified instance. An AuthFailed row —
+// which sorts first but names no backend, model or log — is picked only when
+// nothing else runs. Nil when nothing is running.
 func primaryInstance(instances []*RunningInstance) *RunningInstance {
 	var firstWithModel, firstAny *RunningInstance
 	for _, inst := range instances {
+		if inst.AuthFailed {
+			continue
+		}
 		if firstAny == nil {
 			firstAny = inst
 		}
@@ -208,6 +213,9 @@ func primaryInstance(instances []*RunningInstance) *RunningInstance {
 	}
 	if firstWithModel != nil {
 		return firstWithModel
+	}
+	if firstAny == nil && len(instances) > 0 {
+		return instances[0]
 	}
 	return firstAny
 }
@@ -434,19 +442,19 @@ func doStopServer(cfg *Config, _ *RunningInstance) error {
 	}
 
 	res, err := Stop(target.Addr())
-	renderStopSteps(fmt.Sprintf("Stopping %s", backendDisplayName(target.Backend)), res.Steps)
+	renderStopSteps(fmt.Sprintf("Stopping %s", serverLabel(target.Backend)), res.Steps)
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
-			fmt.Printf("  Stopped %s at %s\n", backendDisplayName(target.Backend), target.Addr())
+			fmt.Printf("  Stopped %s at %s\n", serverLabel(target.Backend), target.Addr())
 			return nil
 		}
 		return err
 	}
 	stopped := res.Instance
 	if stopped.PID > 0 {
-		fmt.Printf("  Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
+		fmt.Printf("  Stopped %s at %s (PID %d)\n", serverLabel(stopped.Backend), stopped.Addr(), stopped.PID)
 	} else {
-		fmt.Printf("  Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
+		fmt.Printf("  Stopped %s at %s\n", serverLabel(stopped.Backend), stopped.Addr())
 	}
 	return nil
 }
@@ -841,6 +849,16 @@ func backendDisplayName(backendName string) string {
 		return backendName
 	}
 	return b.DisplayName()
+}
+
+// serverLabel names the server a stop acted on: its backend's display name,
+// or "server" when no backend identified it (a server refusing the api_key,
+// which Stop reports with Backend "").
+func serverLabel(backendName string) string {
+	if backendName == "" {
+		return "server"
+	}
+	return backendDisplayName(backendName)
 }
 
 // statusTickInterval is how often the open menu re-renders its header so the

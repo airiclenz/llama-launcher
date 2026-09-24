@@ -379,6 +379,8 @@ func TestPrimaryInstance(t *testing.T) {
 	idleSecond := &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 11434}
 	loaded := &RunningInstance{Backend: "ollama", Host: "127.0.0.1", Port: 11434, ActiveModel: "llama3"}
 	loadedSecond := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, ActiveModel: "qwen3"}
+	authFailed := &RunningInstance{Host: "127.0.0.1", Port: 9000, AuthFailed: true}
+	startingLlamaCpp := &RunningInstance{Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, Starting: true}
 
 	tests := []struct {
 		name      string
@@ -390,6 +392,8 @@ func TestPrimaryInstance(t *testing.T) {
 		{"two loaded, first wins", []*RunningInstance{loaded, loadedSecond}, loaded},
 		{"all idle, sort-first wins", []*RunningInstance{idleFirst, idleSecond}, idleFirst},
 		{"single idle", []*RunningInstance{idleFirst}, idleFirst},
+		{"auth-failed row sorts first, Starting llamacpp wins", []*RunningInstance{authFailed, startingLlamaCpp}, startingLlamaCpp},
+		{"auth-failed row alone", []*RunningInstance{authFailed}, authFailed},
 		{"empty", nil, nil},
 	}
 

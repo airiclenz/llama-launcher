@@ -372,9 +372,9 @@ func cmdStop(cfg *Config, args []string) int {
 	}
 	stopped := res.Instance
 	if stopped.PID > 0 {
-		fmt.Printf("Stopped %s at %s (PID %d)\n", backendDisplayName(stopped.Backend), stopped.Addr(), stopped.PID)
+		fmt.Printf("Stopped %s at %s (PID %d)\n", serverLabel(stopped.Backend), stopped.Addr(), stopped.PID)
 	} else {
-		fmt.Printf("Stopped %s at %s\n", backendDisplayName(stopped.Backend), stopped.Addr())
+		fmt.Printf("Stopped %s at %s\n", serverLabel(stopped.Backend), stopped.Addr())
 	}
 	return 0
 }
@@ -684,7 +684,7 @@ func cmdLogs(cfg *Config, args []string) int {
 		}
 		inst = t
 	} else {
-		instances := DiscoverRunningInstances(cfg)
+		instances := logCandidates(DiscoverRunningInstances(cfg))
 		if len(instances) == 1 {
 			inst = instances[0]
 		} else if len(instances) > 1 {
@@ -713,6 +713,19 @@ func cmdLogs(cfg *Config, args []string) int {
 		return 3
 	}
 	return 0
+}
+
+// logCandidates drops the AuthFailed rows from a discovery result: no
+// backend identified those servers, so no launcher-managed log can be named
+// for them, and a bare `logs` picks among the identified instances only.
+func logCandidates(instances []*RunningInstance) []*RunningInstance {
+	candidates := make([]*RunningInstance, 0, len(instances))
+	for _, inst := range instances {
+		if !inst.AuthFailed {
+			candidates = append(candidates, inst)
+		}
+	}
+	return candidates
 }
 
 func cmdLogsClean(cfg *Config, args []string) int {

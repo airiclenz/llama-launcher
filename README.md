@@ -242,6 +242,8 @@ llama-launcher version                      # Print version
 
 A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)). Splash binds its port only once the model has loaded, so the launcher finds a loading Splash server by its process instead (a Splash launch for that host and port with nothing listening yet) and treats it the same way ([ADR-0015](docs/adr/0015-a-loading-splash-is-found-by-its-process.md)). Windows is the exception: the launcher cannot read the process table there, so a loading Splash stays hidden until it is ready.
 
+A server that rejects the configured `api_key` (it answers every backend probing its address with 401 or 403) does not vanish either: `stop` still stops it by signalling whatever listens there, and reports `Stopped server at <host:port>` because no backend could identify it. `load` and `unload` against it fail with the "check api_key" error, and `auto_stop_server` leaves it alone. Only an explicit `stop` touches it.
+
 ### When the port is already taken
 
 Starting a llama.cpp server checks the target port first, and refuses before forking if another process is listening there:

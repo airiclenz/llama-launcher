@@ -1,11 +1,13 @@
 package launcher
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +31,13 @@ type RunningInstance struct {
 	// address yet and is found by its command line instead. See ADR-0010
 	// and ADR-0015.
 	Starting bool
+	// AuthFailed marks an address whose server answers every configured
+	// backend's health check with 401/403 — it refuses the configured
+	// api_key, so no backend can identify it. Such a row has Backend "", no
+	// model or profile, and is at most one per address; an explicit stop
+	// signals its listener, while load and unload refuse with the auth
+	// error and the auto_stop_server sweep leaves it alone.
+	AuthFailed bool
 }
 
 func (r *RunningInstance) Addr() string {
@@ -48,21 +57,79 @@ func (r *RunningInstance) Uptime() time.Duration {
 //   - the backend's configured address (cfg.ConfiguredBackendAddr)
 //   - every distinct host:port a profile for that backend would resolve to
 //
-// Probes run in parallel. Backends that fail to register or fail their
-// health check are silently omitted.
+// Probes run in parallel. A backend whose probe finds neither a healthy nor
+// a Starting server of its own contributes no row, with one exception: an
+// address where every probing backend's health check answered 401/403 is a
+// server refusing the configured api_key, and it yields exactly one row with
+// AuthFailed set, Backend "" and no model or profile. That row sorts first
+// (Backend "" precedes every name).
 func DiscoverRunningInstances(cfg *Config) []*RunningInstance {
-	type target struct {
-		backend string
-		host    string
-		port    int
-	}
+	results := probeTargets(cfg, discoveryTargets(cfg))
 
-	seen := make(map[string]target)
+	var instances []*RunningInstance
+	for _, r := range results {
+		if r.instance != nil {
+			instances = append(instances, r.instance)
+		}
+	}
+	instances = append(instances, authFailedRows(results)...)
+
+	sort.Slice(instances, func(i, j int) bool {
+		if instances[i].Backend != instances[j].Backend {
+			return instances[i].Backend < instances[j].Backend
+		}
+		return instances[i].Addr() < instances[j].Addr()
+	})
+	return instances
+}
+
+// authRefusalAt reports whether the server at addr refuses the configured
+// api_key, by the same rule discovery applies to its AuthFailed rows: every
+// backend the config points at addr answers its health check with 401/403.
+// It returns that probe's error (the authFailedErr message, wrapping
+// ErrAuthFailed) prefixed with the address, or nil — also when any backend
+// finds a healthy or Starting server of its own there, or when the config
+// points no backend at addr.
+func authRefusalAt(cfg *Config, addr string) error {
+	var targets []discoveryTarget
+	for _, t := range discoveryTargets(cfg) {
+		if t.addr() == addr {
+			targets = append(targets, t)
+		}
+	}
+	results := probeTargets(cfg, targets)
+	if len(results) == 0 || !everyProbeRefusedAuth(results) {
+		return nil
+	}
+	return fmt.Errorf("server at %s: %w", addr, results[0].authErr)
+}
+
+// discoveryTarget is one (backend, addr) pair discovery probes.
+type discoveryTarget struct {
+	backend string
+	server  LLMServer
+	host    string
+	port    int
+}
+
+func (t discoveryTarget) addr() string {
+	return fmt.Sprintf("%s:%d", t.host, t.port)
+}
+
+// discoveryTargets derives the distinct (backend, addr) pairs to probe from
+// the config (see DiscoverRunningInstances), sorted by backend name and
+// then address so every consumer sees them in a deterministic order.
+// Backends that are not registered are left out — nothing could probe them.
+func discoveryTargets(cfg *Config) []discoveryTarget {
+	seen := make(map[string]discoveryTarget)
 	add := func(backend, host string, port int) {
-		t := target{backend: backend, host: host, port: port}
+		server, err := GetLLMServer(backend)
+		if err != nil {
+			return
+		}
 		key := fmt.Sprintf("%s|%s:%d", backend, host, port)
 		if _, ok := seen[key]; !ok {
-			seen[key] = t
+			seen[key] = discoveryTarget{backend: backend, server: server, host: host, port: port}
 		}
 	}
 
@@ -83,50 +150,94 @@ func DiscoverRunningInstances(cfg *Config) []*RunningInstance {
 		add(profile.Backend, *profile.Host, *profile.Port)
 	}
 
-	targets := make([]target, 0, len(seen))
+	targets := make([]discoveryTarget, 0, len(seen))
 	for _, t := range seen {
 		targets = append(targets, t)
 	}
-
-	type result struct {
-		instance *RunningInstance
-	}
-	ch := make(chan result, len(targets))
-	for _, t := range targets {
-		go func(t target) {
-			ch <- result{instance: probeInstance(cfg, t.backend, t.host, t.port)}
-		}(t)
-	}
-
-	var instances []*RunningInstance
-	for range targets {
-		r := <-ch
-		if r.instance != nil {
-			instances = append(instances, r.instance)
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].backend != targets[j].backend {
+			return targets[i].backend < targets[j].backend
 		}
-	}
-
-	sort.Slice(instances, func(i, j int) bool {
-		if instances[i].Backend != instances[j].Backend {
-			return instances[i].Backend < instances[j].Backend
-		}
-		return instances[i].Addr() < instances[j].Addr()
+		return targets[i].addr() < targets[j].addr()
 	})
-	return instances
+	return targets
 }
 
-func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance {
-	b, err := GetLLMServer(backend)
-	if err != nil {
-		return nil
+// probeResult is what probing one discoveryTarget found: a healthy or
+// Starting server of the target's backend (instance), a 401/403 answer to
+// its health check with no Starting server behind it (authErr), or neither.
+type probeResult struct {
+	target   discoveryTarget
+	instance *RunningInstance
+	authErr  error
+}
+
+// probeTargets probes every target in parallel and returns the results in
+// target order.
+func probeTargets(cfg *Config, targets []discoveryTarget) []probeResult {
+	results := make([]probeResult, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t discoveryTarget) {
+			defer wg.Done()
+			results[i] = probeInstance(cfg, t)
+		}(i, t)
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	wg.Wait()
+	return results
+}
+
+// authFailedRows returns one AuthFailed row per address at which every
+// probing backend's health check answered 401/403 — so an address where any
+// backend found a healthy or Starting server yields none.
+func authFailedRows(results []probeResult) []*RunningInstance {
+	byAddr := make(map[string][]probeResult)
+	var addrs []string
+	for _, r := range results {
+		addr := r.target.addr()
+		if _, ok := byAddr[addr]; !ok {
+			addrs = append(addrs, addr)
+		}
+		byAddr[addr] = append(byAddr[addr], r)
+	}
+
+	var rows []*RunningInstance
+	for _, addr := range addrs {
+		atAddr := byAddr[addr]
+		if !everyProbeRefusedAuth(atAddr) {
+			continue
+		}
+		rows = append(rows, &RunningInstance{
+			Host:       atAddr[0].target.host,
+			Port:       atAddr[0].target.port,
+			AuthFailed: true,
+		})
+	}
+	return rows
+}
+
+// everyProbeRefusedAuth reports whether every result carries a 401/403
+// health answer.
+func everyProbeRefusedAuth(results []probeResult) bool {
+	for _, r := range results {
+		if r.authErr == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func probeInstance(cfg *Config, t discoveryTarget) probeResult {
+	result := probeResult{target: t}
+	b := t.server
+	addr := t.addr()
 	inst := &RunningInstance{
-		Backend: backend,
-		Host:    host,
-		Port:    port,
+		Backend: t.backend,
+		Host:    t.host,
+		Port:    t.port,
 	}
-	if b.HealthCheck(addr) != nil {
+	if healthErr := b.HealthCheck(addr); healthErr != nil {
 		// A failing health check does not always mean nothing is there: a
 		// managed llama-server answers 503 during its whole model load, and
 		// a loading Splash is up but has not bound its address yet. The
@@ -137,9 +248,16 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 		// anyway).
 		if startingUp(b, addr) {
 			inst.Starting = true
-			return inst
+			result.instance = inst
+			return result
 		}
-		return nil
+		// A 401/403 is a server refusing the configured api_key — a real
+		// listener, not an absent one. It is recorded rather than dropped so
+		// the address can surface as one AuthFailed row (authFailedRows).
+		if errors.Is(healthErr, ErrAuthFailed) {
+			result.authErr = healthErr
+		}
+		return result
 	}
 	if ml, ok := b.(ModelLister); ok {
 		models, err := ml.ListRunningModels(addr)
@@ -152,20 +270,28 @@ func probeInstance(cfg *Config, backend, host string, port int) *RunningInstance
 		}
 	}
 	inst.ActiveProfile = matchProfileName(cfg, inst)
-	return inst
+	result.instance = inst
+	return result
 }
 
 // instancesSignature condenses a discovery result into a comparable string.
 // Two discovery passes produce the same signature exactly when the same
 // backends are reachable at the same addresses with the same models loaded
-// and the same Starting state (so a Starting→healthy transition changes
-// the signature). The interactive menu compares signatures across refresh
+// and the same Starting and AuthFailed states (so a Starting→healthy or an
+// auth-failed→healthy transition changes the signature). The interactive menu compares signatures across refresh
 // ticks to notice background changes (e.g. a model loaded via the CLI in
 // another terminal) without any persisted state.
 func instancesSignature(instances []*RunningInstance) string {
 	parts := make([]string, 0, len(instances))
 	for _, inst := range instances {
-		parts = append(parts, fmt.Sprintf("%s|%s|%s|%t", inst.Backend, inst.Addr(), inst.ActiveModel, inst.Starting))
+		parts = append(parts, fmt.Sprintf(
+			"%s|%s|%s|%t|%t",
+			inst.Backend,
+			inst.Addr(),
+			inst.ActiveModel,
+			inst.Starting,
+			inst.AuthFailed,
+		))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "\n")
