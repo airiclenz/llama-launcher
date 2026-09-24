@@ -957,7 +957,7 @@ Follow the `coding-standards` skill when writing or modifying code. It is a pers
 
 ### After Changing Code
 
-1. Update the documents `llama-launcher.TDD.md`, `README.md`, `CHANGELOG.md`, and `TODO.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here.
+1. Update the documents `llama-launcher.TDD.md`, `README.md`, and `CHANGELOG.md` if the change affects behavior, configuration schema, subcommands, error handling, or any other aspect covered here. Close, update or file the matching beads (`bd`, see `AGENTS.md`) — beads is the issue register; `TODO.md` was retired into it on 2026-09-24.
 2. If the change touches one of the architectural decisions in [docs/adr/](docs/adr/), update or supersede the relevant ADR in the same change.
 3. Run `make check` — unit tests plus the ADR-0012 cross-compile gate ([§12](#12-testing)) — before committing.
 4. Run `make build` and exercise the freshly built `./llama-launcher` locally; installed copies come from Homebrew once a release is tagged (`brew upgrade llama-launcher`, §13).

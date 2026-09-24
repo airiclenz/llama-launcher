@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "llama_launcher",
+  "project_id": "919fce6b-0659-49c8-b801-f8aafb9fd9ff"
+}
