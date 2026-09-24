@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.8.0
 
 ### Security
 
 - **`api_key_cmd` runs only from a config file you own.** On macOS and Linux, a config with an enabled `api_key_cmd` entry now loads only when the current user owns the file and neither the group nor others can write it. A config owned by another account, or group- or world-writable, stops the load with an error naming the file and the fix (`chmod 600 <path>`), and no command runs. A symlinked config is judged by its target. Configs without `api_key_cmd` load at any mode, and Windows is unchanged. `config validate` does not report this check; the next load does. ADR-0016 records the decision.
 - **The macOS Keychain move refuses keys and names that `security -i` could misread.** A key or entry name that contains a double quote, a backslash or a control character is now refused before any `security` process starts. The migration reports the refusal and the key stays in the config file. The refusal never quotes the key. All other values are written inside double quotes, so base64 keys (`=`, `+`, `/`) and entry names with spaces, such as "work laptop", still move. The Linux Secret Service write is unchanged: the key goes to `secret-tool` on stdin, so a key with a quote, a backslash or a tab still moves there.
+- **Corrected: an `extra_args` `--api-key` for llamacpp does not replace the configured `api_key` — both keys are accepted.** The 1.7.0 notes said an override would win; the new integration test (`TestLlamaServerAPIKey`, `make test-integration`) found the flag's key appended to the environment key on llama.cpp b10851, so both authenticate. To change the key, change `api_key` rather than adding an override. The same test found neither key echoed into llama-server's own log file. README and TDD now say so.
+- **Log output masks API keys** — llama-launcher logs, the menu's *Show log*, the start-crash log tail, and the MCP `tail_log` tool now replace the backend's configured key and any `--api-key` value with `[redacted]`. Unconditional defense in depth: no tested llama-server build echoes its keys, but a future build or wrapper script that does can no longer leak them through a log view. Log files on disk are unchanged.
 
 ### Fixed
 
@@ -47,11 +49,6 @@
 ### Changed
 
 - **CI:** GitHub Actions now runs `make check` (unit tests plus the cross-compile gate) on macOS and Linux for every push to `main` and every pull request (`.github/workflows/ci.yml`). The integration suite stays host-only.
-
-### Security
-
-- **Corrected: an `extra_args` `--api-key` for llamacpp does not replace the configured `api_key` — both keys are accepted.** The 1.7.0 notes said an override would win; the new integration test (`TestLlamaServerAPIKey`, `make test-integration`) found the flag's key appended to the environment key on llama.cpp b10851, so both authenticate. To change the key, change `api_key` rather than adding an override. The same test found neither key echoed into llama-server's own log file. README and TDD now say so.
-- **Log output masks API keys** — llama-launcher logs, the menu's *Show log*, the start-crash log tail, and the MCP `tail_log` tool now replace the backend's configured key and any `--api-key` value with `[redacted]`. Unconditional defense in depth: no tested llama-server build echoes its keys, but a future build or wrapper script that does can no longer leak them through a log view. Log files on disk are unchanged.
 
 ## 1.7.0
 
