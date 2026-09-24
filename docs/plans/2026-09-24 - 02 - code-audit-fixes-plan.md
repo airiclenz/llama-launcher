@@ -255,7 +255,11 @@ internal/launcher/cli_test.go — Run helper; llama-launcher.TDD.md — legacy s
 - `go test ./internal/launcher/ -run 'TestCleanupLegacyStateFiles|TestIsLegacyStateFile' -count=1`
 **Commit:** `fix(launcher): delete only launcher-written legacy state files`
 
-## 12. Stop never signals a reused PID
+## 12. Stop never signals a reused PID — ✅ DONE (2026-09-24)
+
+NOTES (2026-09-24): `stopServerAt` reads the identity right after resolving the PID (inside the existing `IsProcessAlive` guard, so TDD §16.6's windows "stop verbs" line stays true); an unreadable identity skips `terminatePID` entirely. `terminatePID(pid, identity, progress)` also uses `sameProcess` as its poll condition in both wait loops (identity match implies alive), not only before the two signals — so a PID reused mid-wait ends the wait too.
+NOTES (2026-09-24): helper `sameProcess(pid, identity)` added to untagged proc_identity.go beside `parseProcStatStartTime`; the darwin identity is `P_starttime` in nanoseconds (a zero value is an error). Beyond the plan's tests, `TestProcessIdentity` also checks a reaped child has no identity. The linux reader and its test were compile-checked only (`GOOS=linux go test -c`); they run on the ubuntu CI runner.
+NOTES (2026-09-24): docs: TDD §6.5 step 1 (identity check), the SIGKILL port-release reasoning (polls `sameProcess`, not `IsProcessAlive`), the server_test.go row, new proc_identity file-table rows and the §16.6 platform-file list.
 
 **What:** Fixes audit finding "TOCTOU PID-reuse kill on the stop path". Depends on item 8 (golang.org/x/sys becomes a direct require there).
 **Regression guard.** The helper is `processIdentity` — `processStartTime(pid) time.Time` already exists (discovery.go, uptime). The pure `/proc/<pid>/stat` field-22 parser lives in untagged proc_identity.go; only the readers are build-tagged. `TestTerminatePID`'s `terminatePID(pid, nil)` call is updated; the TDD §6.5 stop escalation gains the identity check.

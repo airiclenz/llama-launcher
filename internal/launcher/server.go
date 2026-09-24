@@ -371,7 +371,11 @@ func stopServerAt(backend, addr string, nativeHook bool, progress ProgressFunc) 
 		}
 	}
 	if pid > 0 && IsProcessAlive(pid) {
-		terminatePID(pid, progress)
+		// Recorded as the PID is resolved: an identity that cannot be read
+		// means the process is already gone, so nothing is signalled.
+		if identity, err := processIdentity(pid); err == nil {
+			terminatePID(pid, identity, progress)
+		}
 	}
 
 	var stopErr error
@@ -393,7 +397,14 @@ func stopServerAt(backend, addr string, nativeHook bool, progress ProgressFunc) 
 	return pid, fmt.Errorf("server at %s is still reachable after signalling PID %d", addr, pid)
 }
 
-func terminatePID(pid int, progress ProgressFunc) {
+// terminatePID runs the SIGTERM → SIGKILL → port-release escalation (TDD
+// §6.5) against pid and its process group, but only while pid still names the
+// process whose start time identity records: the check runs before SIGTERM,
+// on every poll, and again before SIGKILL. A mismatch or an unreadable
+// identity means the process exited and the kernel may have handed its PID to
+// an unrelated one, so no further signal is sent and the PID counts as gone.
+// The window between a check and the signal after it is a syscall wide.
+func terminatePID(pid int, identity int64, progress ProgressFunc) {
 	if pid <= 0 {
 		return
 	}
@@ -402,6 +413,9 @@ func terminatePID(pid int, progress ProgressFunc) {
 		return
 	}
 
+	if !sameProcess(pid, identity) {
+		return
+	}
 	reportStep(progress, "Sending stop signal")
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		return
@@ -412,18 +426,21 @@ func terminatePID(pid int, progress ProgressFunc) {
 	reportStep(progress, "Waiting for shutdown")
 	deadline := time.Now().Add(sigtermTimeout)
 	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) {
+		if !sameProcess(pid, identity) {
 			return
 		}
 		time.Sleep(stopPollInterval)
 	}
 
+	if !sameProcess(pid, identity) {
+		return
+	}
 	_ = proc.Signal(syscall.SIGKILL)
 	_ = signalGroup(pid, syscall.SIGKILL)
 
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) {
+		if !sameProcess(pid, identity) {
 			break
 		}
 		time.Sleep(stopPollInterval)

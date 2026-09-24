@@ -1599,11 +1599,44 @@ func TestTerminatePID(t *testing.T) {
 	// IsProcessAlive (kill(pid, 0) succeeds), which would stall the wait loop.
 	go cmd.Wait()
 	t.Cleanup(func() { cmd.Process.Kill() })
+	identity, err := processIdentity(pid)
+	if err != nil {
+		t.Fatalf("processIdentity(%d): %v", pid, err)
+	}
 
-	terminatePID(pid, nil)
+	terminatePID(pid, identity, nil)
 
 	if IsProcessAlive(pid) {
 		t.Errorf("PID %d still alive after terminatePID", pid)
+	}
+}
+
+// TestTerminatePID_MismatchedIdentity stands in for a reused PID: a real
+// child whose start time differs from the recorded identity is never
+// signalled, and terminatePID returns without waiting out the escalation.
+func TestTerminatePID_MismatchedIdentity(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting sleep: %v", err)
+	}
+	pid := cmd.Process.Pid
+	go cmd.Wait()
+	t.Cleanup(func() { cmd.Process.Kill() })
+	identity, err := processIdentity(pid)
+	if err != nil {
+		t.Fatalf("processIdentity(%d): %v", pid, err)
+	}
+
+	started := time.Now()
+	terminatePID(pid, identity+1, nil)
+
+	if !IsProcessAlive(pid) {
+		t.Errorf("PID %d was signalled despite a mismatching identity", pid)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("terminatePID took %v on a mismatch, want an immediate return", elapsed)
 	}
 }
 
