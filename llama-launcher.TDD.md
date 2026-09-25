@@ -406,7 +406,7 @@ Parameters are resolved in order of precedence (highest first):
 
 1. Profile-level value (including `server`)
 2. `defaults` block value (`defaults.server` is honoured but emits a deprecation warning when used — see [ADR-0005](docs/adr/0005-profile-server-is-identity.md))
-3. Server-specific fallback from `servers` map address or `LLMServer.DefaultAddr()` (e.g. Ollama defaults to `localhost:11434`, LM Studio to `localhost:1234`, Splash to `127.0.0.1:8000`)
+3. Server-specific fallback from `LLMServer.DefaultAddr()` (e.g. Ollama defaults to `localhost:11434`, LM Studio to `localhost:1234`, Splash to `127.0.0.1:8000`)
 4. Built-in fallback (only for `host: 127.0.0.1` and `port: 8080`)
 
 All numeric and boolean parameters use pointer types internally to distinguish "not set" from zero/false. A nil pointer means "inherit from the next level."
@@ -708,7 +708,7 @@ The path forks on whether the backend implements `ManagedLLMServer`:
 
 **Plain `LLMServer` (Ollama, LM Studio):**
 
-1. Resolve the address from `servers` map (if host:port value) or `LLMServer.DefaultAddr()`.
+1. Resolve the address from the profile's `host`/`port` (via `defaults`) or `LLMServer.DefaultAddr()`. A `servers` entry carries no address — it is a bool or an `enabled`/`api_key`/`api_key_cmd`/`plaintext_key_ok` mapping.
 2. Call `LLMServer.HealthCheck(addr)` to verify server is reachable.
 3. If not reachable, call `LLMServer.TryStart()` (e.g. `lms server start`, `ollama serve`). A `TryStart` failure is returned wrapped — `<Server> not reachable at <addr> and could not be started: <TryStart error>` — so its own text (the binary missing from `PATH`) and any sentinel it carries (`ErrUnsupported` on windows) reach the caller. A forked `ollama serve` child is reaped by a `cmd.Wait()` goroutine so it cannot linger as a zombie in a long-lived launcher process (a zombie still satisfies `kill(pid, 0)` and would stall a later stop's signal escalation).
 4. Poll health check until successful (up to 15 seconds, `externalStartWait`). On timeout the started server is **left running**, as on the managed arm, and the error wraps `ErrStartupTimeout` (`externalStartupTimeoutErr`). It names the spawned PID and log path only when the backend implements `PIDTracker` (Ollama; LM Studio does not, so neither a `PID 0` nor an empty `Log:` line is printed), and its guidance is to retry once the server is healthy — it names no `logs`/`stop` command, since both find an external server only after it answers its health check.
