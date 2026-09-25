@@ -426,12 +426,16 @@ func doLoadProfile(cfg *Config, name string) error {
 	displayName := profile.DisplayName()
 
 	var progress ProgressFunc
+	var tracker *progressTracker
 	if isTerminal() {
-		_, progress = newTUIProgress(fmt.Sprintf("Loading %s", displayName))
+		tracker, progress = newTUIProgress(fmt.Sprintf("Loading %s", displayName))
 	} else {
 		progress = newCLIProgress(fmt.Sprintf("Loading %s", displayName))
 	}
 	inst, started, err := LoadProfile(cfg, profile, false, progress)
+	if tracker != nil {
+		tracker.Close()
+	}
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return err

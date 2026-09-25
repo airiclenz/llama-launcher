@@ -119,7 +119,11 @@ llama-launcher.TDD.md — §15 connection-timeouts paragraph
 
 **Commit:** `fix(mcp): raise the write timeout above the startup wait cap`
 
-## 5. TUI progress popup ticks elapsed time on the active step
+## 5. TUI progress popup ticks elapsed time on the active step — ✅ DONE (2026-09-25)
+
+NOTES (2026-09-25): the tracker gained an `out io.Writer` seam alongside `now` (the guard allowed either); tests use a private `newProgressTracker(title, out, now, interval)` constructor, so they run in parallel without `captureStdout`. `newTUIProgress` keeps its signature.
+NOTES (2026-09-25): the shrink-blanking now blanks the previous rect's own cells (its startCol and width) on a row or column shrink, instead of full terminal-width rows on a row shrink only.
+NOTES (2026-09-25): added `TestProgressTracker_NoElapsedUnderOneSecond` beyond the three planned tests; a step reported after `Close()` is recorded but not drawn.
 
 **What:**
 **Goal:** while a TUI progress popup is open, its active (last) step line shows the elapsed time for that step as `▸ Waiting for server... 1:07`, redrawn every second. The CLI progress output, `ProgressFunc` and the facade are unchanged. The ticker stops when the popup is closed, with no redraw after close.
