@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- **Menu:** with `auto_close: false`, the screen no longer goes blank for a few seconds after a model finishes loading. The load popup now stays up, showing `Refreshing menu`, until the menu is redrawn. That redraw waits on a server check that is slow while the new model is still saturating the machine.
 - **MCP server:** the HTTP `WriteTimeout` of `llama-launcher-mcp` is now 65 minutes (was 10), so a `load_profile` call that waits up to the configured `startup_max_wait` (at most 60 minutes) plus a restart's stop no longer has its response cut off.
 
 ### Added

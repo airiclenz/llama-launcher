@@ -437,18 +437,35 @@ func doLoadProfile(cfg *Config, name string) error {
 	}
 	loadStart := time.Now()
 	inst, started, err := LoadProfile(cfg, profile, false, progress)
+	if err == nil && menuRedrawsAfterLoad(cfg) {
+		// The success lines would be wiped by the menu's first paint, which
+		// only comes after a discovery pass — seconds on a machine busy with
+		// the model it just loaded. Keep the popup up until then instead of
+		// a cleared screen.
+		progress("Refreshing menu")
+		tracker.Close()
+		return nil
+	}
 	if tracker != nil {
 		tracker.Close()
 	}
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
 		return routeLoadError(err, isTerminal(), func(timeoutErr error, st startupTimeout) error {
-			return keepWaitingForLoad(profile, displayName, timeoutErr, st, loadStart)
+			return keepWaitingForLoad(cfg, profile, displayName, timeoutErr, st, loadStart)
 		})
 	}
 
 	printLoadSuccess(displayName, inst, started)
 	return nil
+}
+
+// menuRedrawsAfterLoad reports whether the interactive menu repaints the
+// screen once a load returns: a terminal session with auto_close off. Only
+// then may a successful load leave its popup on screen for the menu to
+// paint over.
+func menuRedrawsAfterLoad(cfg *Config) bool {
+	return isTerminal() && !cfg.ShouldAutoClose()
 }
 
 // printLoadSuccess prints the confirmation lines of a completed load: the
@@ -486,10 +503,11 @@ func routeLoadError(err error, terminal bool, wait stillLoadingWaiter) error {
 
 // keepWaitingForLoad is the production stillLoadingWaiter: it shows the
 // still-loading popup for the profile's server and prints the normal load
-// confirmation once the server turns healthy. Esc returns nil with the
+// confirmation once the server turns healthy — or, when the menu redraws
+// afterwards, leaves the popup for it to paint over. Esc returns nil with the
 // server left running; a server that is gone returns the timeout error with
 // a line saying so.
-func keepWaitingForLoad(profile *ResolvedProfile, displayName string, timeoutErr error, st startupTimeout, loadStart time.Time) error {
+func keepWaitingForLoad(cfg *Config, profile *ResolvedProfile, displayName string, timeoutErr error, st startupTimeout, loadStart time.Time) error {
 	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
 		return timeoutErr
@@ -505,6 +523,11 @@ func keepWaitingForLoad(profile *ResolvedProfile, displayName string, timeoutErr
 		},
 		enterRaw: enterStillLoadingRawMode,
 	}, timeoutErr)
+	if healthy && menuRedrawsAfterLoad(cfg) {
+		// As in doLoadProfile: the menu paints over the popup.
+		return nil
+	}
+	fmt.Print(escClear + escCursorShow)
 	if !healthy {
 		return err
 	}
@@ -582,7 +605,7 @@ func waitStillLoading(watch stillLoadingWatch, timeoutErr error) (bool, error) {
 
 // enterStillLoadingRawMode puts stdin in raw mode for the still-loading
 // popup's key reads. Its restore function returns the terminal to its
-// previous state and clears the popup.
+// previous state; keepWaitingForLoad decides whether to clear the popup.
 func enterStillLoadingRawMode() (func(), error) {
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
@@ -591,7 +614,6 @@ func enterStillLoadingRawMode() (func(), error) {
 	}
 	return func() {
 		term.Restore(fd, oldState)
-		fmt.Print(escClear + escCursorShow)
 	}, nil
 }
 
