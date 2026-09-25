@@ -58,7 +58,7 @@ Running `llama-launcher` with no arguments enters a one-shot interactive menu wi
       Qwen 2.5 32B             131K
       reasoning-phi             32K
       ─
-      Start server only
+      Edit config
 
     ↑↓ select · enter start & load · q quit
 ```
@@ -912,7 +912,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 | Model load/unload API error | Print server response, exit 3. |
 | SIGTERM timeout (on `stop`) | Escalate to SIGKILL, warn, exit 0 (server is stopped). |
 | `lsof` not on PATH (stop path) | Print message that the listening PID could not be determined, exit 3. On windows, whose process seam refuses stopping by PID, the message is instead `server at <addr> is still reachable and could not be stopped: stopping a server process: operation not supported on this platform` (wrapping `ErrUnsupported`, §16.6), exit 3. |
-| Port already in use | Detected via early server exit — the forked child is reaped by a `cmd.Wait()` goroutine, and if it exits within ~500 ms of start the launcher reports the log tail instead of a running instance. |
+| Port already in use | Refused before forking when `lsof` names an occupant (row above). As a fallback it is detected via early server exit — the forked child is reaped by a `cmd.Wait()` goroutine, and if it exits within ~500 ms of start the launcher reports the log tail instead of a running instance. |
 
 ## 11. Future Considerations
 
@@ -927,7 +927,7 @@ These are explicitly out of scope for v1 but noted as natural extensions:
 
 ## 12. Testing
 
-Tests come in two layers (historical plan: `backend-tests-plan.md`; the validated Layer-2 spec is `docs/plans/2026-07-19-starting-stop-and-integration-tests.md`):
+Tests come in two layers (historical plan: `backend-tests-plan.md`; the validated Layer-2 spec is `docs/plans/archived/2026-07-19-starting-stop-and-integration-tests.md`):
 
 - **Layer 1 — unit tests** (§12.1–12.4): fake-driven and `httptest`-based, no external processes. Run with `make test` (= `go test ./...`) on every change. Since v1.6.1 they pass **natively on Linux** as well as on macOS — the claim ADR-0012 makes checkable, and the reason a client's Linux CI can run them.
 - **Layer 2 — integration tests** (§12.5): files carrying the `integration` build tag that start and stop **real** backend servers. Invisible to the untagged build; run manually **on the host** with `make test-integration` — by convention the *user* runs this layer and reports back, because agents working on this repository operate in a container and must not start real servers (they verify only that the tagged files compile, which `make cross` does for all three platforms).
@@ -966,7 +966,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 
 | Test | What it covers |
 |---|---|
-| `TestIsProcessAlive` | Current PID → true; PID 0 → false; negative PID → false; invalid PID → false. |
+| `TestIsProcessAlive_*` | Current PID → true; PID 0 → false; negative PID → false; invalid PID → false. |
 | `TestReadLastLines` | More lines than requested; fewer lines; nonexistent file. |
 | `TestRunningInstance_Addr` / `_Uptime` / `_Uptime_ZeroStart` | Instance helper methods including the zero-StartedAt fallback. |
 | `TestDiscoverRunningInstances_*` | Discovery returns the empty set when nothing listens; an httptest llama-server stand-in is found with `ActiveModel` populated from `/v1/models`, and `/props` is not probed (live params are queried on demand by drift detection, not during discovery). `TestDiscoverRunningInstances_WildcardSplash` finds a Splash configured on `0.0.0.0` that 403s a wildcard `Host`: probed over loopback, keyed by the configured address (ADR-0006). `TestDiscoverRunningInstances_AuthFailed` pins the one `AuthFailed` row per address answering every backend with 401/403 and its suppression by a healthy or Starting backend there; `TestDiscoverAuthRefusalAt` pins the same rule as `load`'s refusal. |
@@ -982,7 +982,7 @@ Backend methods are tested using `net/http/httptest` mock servers. These tests r
 | `TestConnectExternal_TimeoutIsErrStartupTimeout` / `TestConnectExternal_UntrackedTimeoutOmitsPIDAndLog` / `TestConnectExternal_TryStartErrorSurfaces` | `connectExternalServer` against fake external backends whose health never passes, with a shortened wait: an Ollama-shaped `PIDTracker` backend's timeout wraps `ErrStartupTimeout`, names the PID and log path and suggests no `logs`/`stop`; an LM Studio-shaped backend (no `PIDTracker`) times out with neither a PID nor a `Log:` line; a `TryStart` error — "not found in PATH", or one wrapping `ErrUnsupported` — reaches the caller wrapped, without the generic "start it manually" advice and without reading as a timeout. |
 | `TestStop_RefusingStopSeamWrapsErrUnsupported` / `TestUnload_ManagedRefusingStopSeamWrapsErrUnsupported` / `TestStop_PermittingStopSeamKeepsUnixMessage` / `TestStopServerAt_HookStopSucceedsUnderRefusingSeam` / `TestStartServer_TryStartUnsupportedWrapsErrUnsupported` | The windows stop refusal proved on the unix host (§16.6): with `processStopGuard` swapped for a refusing seam, `Stop` and a managed `Unload` against an always-healthy stub whose stop hook is a no-op return an error wrapping `ErrUnsupported` (`still reachable and could not be stopped`), while the unswapped unix seam keeps the `PID could not be determined` message with no sentinel, and a stop hook that works still stops the server under the refusing seam. `StartServer` against an external fake whose `TryStart` returns the windows `requireProcessControl` refusal wraps `ErrUnsupported` too. Not parallel: they swap `processStopGuard` and the backend registry. |
 | `TestRun_StatusJSONNothingRunning` / `TestRun_ExitCodes` | The real `Run` dispatcher's exit-code contract (§3.3): usage errors exit 2, nothing-running `stop`/`unload` exit 1, and `status --json` exits 1 while still emitting the JSON array — the mapping the MCP adapter's result handling keys off. |
-| `TestGetLLMServer` | Known LLM Server names return correct instance; unknown returns error. |
+| `TestGetLLMServer_*` | Known LLM Server names return correct instance; unknown returns error. |
 | `TestExpandTilde` | `~/path`, bare `~`, `~username` (unchanged), absolute path, empty. |
 | `TestLoadConfig` | Missing file, valid config, no-profiles validation. |
 | `TestValidate_*` | Deprecated fields, no servers enabled, auto-assign default server, `defaults.server` deprecation warning; `TestValidate_ChecksFireOnBothSurfaces` breaks one check per case and asserts it fires in both `validate` and `validateAll` with each surface's prefix, indent and wording, and `TestValidate_WarningsDoNotRefuse` keeps a warning-only config loading. |
