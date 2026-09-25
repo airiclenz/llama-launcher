@@ -1122,3 +1122,133 @@ func TestMenuSimple_EKeyIgnoredWithoutAnEditor(t *testing.T) {
 		t.Errorf("runStoppedMenuSimple = %v, want an invalid-selection error", err)
 	}
 }
+
+// scriptedWatch builds a stillLoadingWatch whose probes answer from the
+// given per-poll scripts (the last answer repeats) and whose key reader
+// returns keys in order, then keyNone. Raw mode is a no-op that records its
+// restore.
+func scriptedWatch(healthy, starting, alive []bool, keys []keyCode, restored *bool) stillLoadingWatch {
+	at := func(script []bool, poll int) bool {
+		return script[min(poll, len(script)-1)]
+	}
+	polls := 0
+	return stillLoadingWatch{
+		healthy:  func() bool { polls++; return at(healthy, polls-1) },
+		starting: func() bool { return at(starting, polls-1) },
+		alive:    func() bool { return at(alive, polls-1) },
+		readKey: func(time.Duration) keyCode {
+			if len(keys) == 0 {
+				return keyNone
+			}
+			key := keys[0]
+			keys = keys[1:]
+			return key
+		},
+		draw:     func() {},
+		enterRaw: func() (func(), error) { return func() { *restored = true }, nil },
+	}
+}
+
+// TestWaitStillLoading_HealthyOnThirdPoll verifies the popup reports success
+// once the server turns healthy, after two still-starting polls.
+func TestWaitStillLoading_HealthyOnThirdPoll(t *testing.T) {
+	t.Parallel()
+	restored := false
+	watch := scriptedWatch([]bool{false, false, true}, []bool{true}, []bool{true}, nil, &restored)
+
+	healthy, err := waitStillLoading(watch, errors.New("timed out"))
+
+	if !healthy || err != nil {
+		t.Errorf("waitStillLoading = (%v, %v), want (true, nil)", healthy, err)
+	}
+	if !restored {
+		t.Error("raw mode was not restored")
+	}
+}
+
+// TestWaitStillLoading_GoneTwice verifies a server that is neither healthy,
+// starting nor alive on two polls in a row ends the wait with the timeout
+// text plus the no-longer-running line, while a single miss does not.
+func TestWaitStillLoading_GoneTwice(t *testing.T) {
+	t.Parallel()
+	restored := false
+	timeoutErr := errors.New("server startup timed out: left running")
+	watch := scriptedWatch([]bool{false}, []bool{false, true, false}, []bool{false}, nil, &restored)
+
+	healthy, err := waitStillLoading(watch, timeoutErr)
+
+	if healthy {
+		t.Fatal("waitStillLoading reported healthy for a gone server")
+	}
+	if err == nil || !strings.Contains(err.Error(), timeoutErr.Error()) || !strings.Contains(err.Error(), "no longer running") {
+		t.Errorf("error = %v, want the timeout text and %q", err, stillLoadingGoneText)
+	}
+	if !restored {
+		t.Error("raw mode was not restored")
+	}
+}
+
+// TestWaitStillLoading_ReturnKeysLeaveServer verifies Esc, Ctrl+C and q each
+// return to the menu with no error, while the server is still loading.
+func TestWaitStillLoading_ReturnKeysLeaveServer(t *testing.T) {
+	t.Parallel()
+	for _, key := range []keyCode{keyEscape, keyCtrlC, keyQ} {
+		restored := false
+		watch := scriptedWatch([]bool{false}, []bool{true}, []bool{true}, []keyCode{keyNone, key}, &restored)
+
+		healthy, err := waitStillLoading(watch, errors.New("timed out"))
+
+		if healthy || err != nil {
+			t.Errorf("key %d: waitStillLoading = (%v, %v), want (false, nil)", key, healthy, err)
+		}
+		if !restored {
+			t.Errorf("key %d: raw mode was not restored", key)
+		}
+	}
+}
+
+// TestDoLoadProfile_RoutesStartupTimeout verifies the post-LoadProfile
+// branching: only a managed startup timeout in terminal mode reaches the
+// still-loading waiter, with its address and PID; the external timeout and
+// every non-terminal error pass through unchanged.
+func TestDoLoadProfile_RoutesStartupTimeout(t *testing.T) {
+	t.Parallel()
+	managed := startupTimeoutErr(errors.New("health wait timed out"), &RunningInstance{
+		Backend: "llamacpp", Host: "127.0.0.1", Port: 8080, PID: 4242, LogFile: "/logs/llamacpp.log",
+	})
+	external := externalStartupTimeoutErr(errors.New("health wait timed out"), &RunningInstance{
+		Backend: "ollama", Host: "127.0.0.1", Port: 11434, PID: 4242,
+	})
+	tests := []struct {
+		name       string
+		err        error
+		terminal   bool
+		wantWaited bool
+	}{
+		{name: "non-terminal managed timeout", err: managed, terminal: false},
+		{name: "terminal external timeout", err: external, terminal: true},
+		{name: "terminal managed timeout", err: managed, terminal: true, wantWaited: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var waited *startupTimeout
+			waiter := func(_ error, st startupTimeout) error {
+				waited = &st
+				return nil
+			}
+
+			got := routeLoadError(tc.err, tc.terminal, waiter)
+
+			if !tc.wantWaited {
+				if waited != nil || got != tc.err {
+					t.Errorf("waiter called = %v, error = %v; want the error unchanged and no wait", waited != nil, got)
+				}
+				return
+			}
+			if waited == nil || waited.addr != "127.0.0.1:8080" || waited.pid != 4242 {
+				t.Errorf("waiter got %+v, want addr 127.0.0.1:8080 and PID 4242", waited)
+			}
+		})
+	}
+}

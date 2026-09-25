@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 var errUserQuit = errors.New("quit")
@@ -432,15 +435,26 @@ func doLoadProfile(cfg *Config, name string) error {
 	} else {
 		progress = newCLIProgress(fmt.Sprintf("Loading %s", displayName))
 	}
+	loadStart := time.Now()
 	inst, started, err := LoadProfile(cfg, profile, false, progress)
 	if tracker != nil {
 		tracker.Close()
 	}
 	fmt.Print(escClear + escCursorShow)
 	if err != nil {
-		return err
+		return routeLoadError(err, isTerminal(), func(timeoutErr error, st startupTimeout) error {
+			return keepWaitingForLoad(profile, displayName, timeoutErr, st, loadStart)
+		})
 	}
 
+	printLoadSuccess(displayName, inst, started)
+	return nil
+}
+
+// printLoadSuccess prints the confirmation lines of a completed load: the
+// server start (or the external connect) when this load started one, the
+// loaded profile and its address, and the log path when there is one.
+func printLoadSuccess(displayName string, inst *RunningInstance, started bool) {
 	if started && inst.PID > 0 {
 		fmt.Printf("  %s●%s Server started (PID %d)\n", cGreen, cReset, inst.PID)
 	} else if started {
@@ -450,7 +464,167 @@ func doLoadProfile(cfg *Config, name string) error {
 	if inst.LogFile != "" {
 		fmt.Printf("    Log: %s\n", inst.LogFile)
 	}
+}
+
+// stillLoadingWaiter keeps watching the server a managed startup timeout left
+// running. It receives the timeout error unchanged and the startupTimeout
+// errors.As found in it, and returns what doLoadProfile should return.
+type stillLoadingWaiter func(timeoutErr error, st startupTimeout) error
+
+// routeLoadError decides what a failed menu load does next. Only a managed
+// startup timeout (a startupTimeout carrying an address and a PID) in
+// terminal mode goes to wait; every other error — the external auto-start's
+// timeout, whose startupTimeout fields are zero, included — and every error
+// in non-terminal mode is returned unchanged for the error popup.
+func routeLoadError(err error, terminal bool, wait stillLoadingWaiter) error {
+	var st startupTimeout
+	if !terminal || !errors.As(err, &st) || st.addr == "" || st.pid <= 0 {
+		return err
+	}
+	return wait(err, st)
+}
+
+// keepWaitingForLoad is the production stillLoadingWaiter: it shows the
+// still-loading popup for the profile's server and prints the normal load
+// confirmation once the server turns healthy. Esc returns nil with the
+// server left running; a server that is gone returns the timeout error with
+// a line saying so.
+func keepWaitingForLoad(profile *ResolvedProfile, displayName string, timeoutErr error, st startupTimeout, loadStart time.Time) error {
+	b, err := GetLLMServer(profile.Backend)
+	if err != nil {
+		return timeoutErr
+	}
+
+	healthy, err := waitStillLoading(stillLoadingWatch{
+		healthy:  func() bool { return b.HealthCheck(st.addr) == nil },
+		starting: func() bool { return startingUp(b, st.addr) },
+		alive:    func() bool { return IsProcessAlive(st.pid) },
+		readKey:  readKeyTimeout,
+		draw: func() {
+			drawStillLoading(os.Stdout, displayName, time.Since(loadStart))
+		},
+		enterRaw: enterStillLoadingRawMode,
+	}, timeoutErr)
+	if !healthy {
+		return err
+	}
+
+	printLoadSuccess(displayName, &RunningInstance{
+		Backend: profile.Backend,
+		Host:    *profile.Host,
+		Port:    *profile.Port,
+		PID:     st.pid,
+		LogFile: st.logFile,
+	}, true)
 	return nil
+}
+
+// stillLoadingPollInterval is how often the still-loading popup polls the
+// server and redraws its elapsed time.
+const stillLoadingPollInterval = time.Second
+
+// stillLoadingGoneStreak is how many consecutive polls must find the server
+// gone before the popup gives up on it — one miss can be the moment a
+// loading process binds its address.
+const stillLoadingGoneStreak = 2
+
+// stillLoadingGoneText is the line added to the timeout text when the server
+// the popup was watching is no longer running.
+const stillLoadingGoneText = "The server is no longer running."
+
+// stillLoadingWatch is everything waitStillLoading touches outside itself,
+// injected so tests can drive it without a server or a terminal.
+type stillLoadingWatch struct {
+	healthy  func() bool                         // the server passes its health check
+	starting func() bool                         // the server reports Starting (StartupProber or LoadingPID)
+	alive    func() bool                         // the timed-out server's PID is alive
+	readKey  func(timeout time.Duration) keyCode // the key pressed within timeout, or keyNone
+	draw     func()                              // redraws the popup
+	enterRaw func() (restore func(), err error)  // enters raw mode; restore undoes it
+}
+
+// waitStillLoading polls the server a startup timeout left running, once per
+// stillLoadingPollInterval, until one of three outcomes: the server turns
+// healthy (true, nil); the server is gone — not healthy, not starting, its
+// PID not alive — on stillLoadingGoneStreak polls in a row (false, the
+// timeout error plus stillLoadingGoneText); or the user presses Esc, Ctrl+C
+// or q (false, nil), leaving the server running. Raw mode is entered first
+// and restored on every return path; when it cannot be entered the timeout
+// error is returned unchanged.
+func waitStillLoading(watch stillLoadingWatch, timeoutErr error) (bool, error) {
+	restore, err := watch.enterRaw()
+	if err != nil {
+		return false, timeoutErr
+	}
+	defer restore()
+
+	misses := 0
+	for {
+		if watch.healthy() {
+			return true, nil
+		}
+		if watch.starting() || watch.alive() {
+			misses = 0
+		} else {
+			misses++
+		}
+		if misses >= stillLoadingGoneStreak {
+			return false, fmt.Errorf("%w\n%s", timeoutErr, stillLoadingGoneText)
+		}
+
+		watch.draw()
+		switch watch.readKey(stillLoadingPollInterval) {
+		case keyEscape, keyCtrlC, keyQ:
+			return false, nil
+		}
+	}
+}
+
+// enterStillLoadingRawMode puts stdin in raw mode for the still-loading
+// popup's key reads. Its restore function returns the terminal to its
+// previous state and clears the popup.
+func enterStillLoadingRawMode() (func(), error) {
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		term.Restore(fd, oldState)
+		fmt.Print(escClear + escCursorShow)
+	}, nil
+}
+
+// drawStillLoading renders the still-loading popup to w: the profile, the
+// time since its load began as m:ss, and the Esc hint. The popup only grows
+// as the time ticks, so each draw covers the previous one.
+func drawStillLoading(w io.Writer, displayName string, elapsed time.Duration) {
+	body := []string{
+		"",
+		fmt.Sprintf("%sStill loading %s…%s %s%s%s", cBoldLightGray, displayName, cReset, cDim, formatElapsed(elapsed), cReset),
+		"",
+		fmt.Sprintf("%sEsc to return%s", cDim, cReset),
+		"",
+	}
+	f := Frame{Padding: 3, BorderColor: cLightGray}
+	popupLines := strings.Split(strings.TrimSuffix(f.Render(body), "\n"), "\n")
+	popupWidth := visibleWidth(popupLines[0])
+
+	startCol := (terminalWidth()-popupWidth)/2 + 1
+	startRow := (terminalHeight()-len(popupLines))/2 + 1
+	if lastMenuRect.width > 0 && lastMenuRect.height > 0 {
+		startCol = lastMenuRect.col + (lastMenuRect.width-popupWidth)/2
+		startRow = lastMenuRect.row + (lastMenuRect.height-len(popupLines))/2
+	}
+	startCol = max(startCol, 1)
+	startRow = max(startRow, 1)
+
+	var buf strings.Builder
+	buf.WriteString(escCursorHide)
+	for i, line := range popupLines {
+		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
+	}
+	io.WriteString(w, buf.String())
 }
 
 func doStopServer(cfg *Config, _ *RunningInstance) error {

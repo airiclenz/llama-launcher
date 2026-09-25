@@ -145,7 +145,10 @@ internal/launcher/server.go — loadProfileManaged (reportStep calls); llama-lau
 
 **Commit:** `feat(menu): show elapsed time on the active progress step`
 
-## 6. The menu keeps waiting after a startup timeout
+## 6. The menu keeps waiting after a startup timeout — ✅ DONE (2026-09-25)
+
+NOTES (2026-09-25): consequential edit — README.md: made necessary by the new user-facing still-loading popup in the interactive menu (one sentence added to the Starting-instance paragraph)
+NOTES (2026-09-25): the popup's m:ss counts from the start of the load (before LoadProfile), not from the moment the popup opens; waitStillLoading also injects its raw-mode entry (enterRaw) so the tests run without a terminal — the production enterStillLoadingRawMode does term.MakeRaw and restores it (plus clears the popup) on every return path
 
 **What:**
 **Goal:** in terminal mode, when `LoadProfile` returns an error wrapping `ErrStartupTimeout`, `doLoadProfile` shows a popup `Still loading <profile>… m:ss` with the hint `Esc to return`. It polls every second:
