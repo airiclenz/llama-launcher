@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **MCP server:** the HTTP `WriteTimeout` of `llama-launcher-mcp` is now 65 minutes (was 10), so a `load_profile` call that waits up to the configured `startup_max_wait` (at most 60 minutes) plus a restart's stop no longer has its response cut off.
+
+### Added
+
+- **Configurable startup wait.** Two new global config keys bound how long `load` waits for a server the launcher started itself: `startup_stall_timeout` (seconds without progress before giving up; default 30, clamped to 5..`startup_max_wait`) and `startup_max_wait` (hard cap; default 600, clamped to 5..3600).
+- **Menu:** while a model loads, the progress popup's active step now shows how long it has been running (`▸ Waiting for server... 1:07`), updated every second.
+- **Menu keeps waiting for a slow model load.** When a server the launcher started from the interactive menu misses its startup wait, the menu no longer shows the timeout as an error. A `Still loading <profile>… m:ss` popup polls the server every second: it prints the usual load confirmation once the server is healthy, shows the timeout text plus `The server is no longer running.` if the server disappears, and returns to the menu on Esc (or `q` / Ctrl+C) with the server left loading. The external (Ollama/LM Studio) auto-start timeout and non-terminal use are unchanged.
+
+### Changed
+
+- `load` (and `start --profile`) on a managed server (llamacpp, Splash) no longer gives up after a fixed 30 seconds. The wait continues as long as the server makes startup progress: its log file grows, or it reports that it is still loading. It times out only after `startup_stall_timeout` (default 30 s) with no progress, or after `startup_max_wait` (default 10 min) in total. A timeout still leaves the server running and still wraps `ErrStartupTimeout`. The library `LoadProfile` can now block up to that cap.
+
 ## 1.8.0
 
 ### Security
