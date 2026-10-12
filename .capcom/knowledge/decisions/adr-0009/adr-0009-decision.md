@@ -1,0 +1,5 @@
+---
+title: "ADR-0009 decision: LoadProfile's orchestration drives a package-private operations interface, bound to a logic-free real adapter"
+---
+
+`LoadProfile`'s orchestration — the ADR-0007 idempotency/drift check, the ADR-0004 `auto_stop_server`/`auto_unload` pass, and the managed/external activation fork — does not call processes or servers directly. It drives a package-private operations interface (`activationOps` in `server.go`) that captures every process, health, and probe effect the activation sequence needs: `healthy`, `loadedModel`, `liveDrift`, `discover`, `start`, `waitHealthy`, `stop`, `unloadInstance`, `loadModel`, `unloadModel`. The production adapter (`realOps`) delegates each operation to the live implementation — `exec`/`lsof`/signals for processes, each backend's HTTP API for probes — and the exported `LoadProfile` binds it. Tests substitute a fake. The orchestration also derives the target address (`host:port`) from the resolved profile exactly once and carries it, instead of re-deriving it per call site.

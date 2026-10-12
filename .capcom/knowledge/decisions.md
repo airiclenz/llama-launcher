@@ -17,3 +17,11 @@ The records:
 - `adr-0006`: LLM Server instances are keyed by `host:port`, not by type
 - `adr-0007`: Profile activation is idempotent by name within an address slot
 - `adr-0008`: Remote control runs through a separate MCP adapter, not a listener in the CLI
+- `adr-0009`: Activation orchestration drives an operations seam
+- `adr-0010`: A Starting LLM Server is visible and stoppable; only `--restart` displaces it
+- `adr-0011`: A curated public facade makes the launcher importable as a library
+- `adr-0012`: The library compiles everywhere and actuates where it can
+- `adr-0013`: On-demand Model serving runs through a separate Gateway binary, not the CLI
+- `adr-0014`: A Splash Model must already be installed; the launcher never downloads one
+- `adr-0015`: A loading Splash is found by its process, not by its address
+- `adr-0016`: api_key_cmd runs only from a config the user owns

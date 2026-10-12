@@ -1,0 +1,5 @@
+---
+title: "ADR-0010 partial supersession of 2026-09-24: a 401/403 answer at a configured address is identified by a third pass, and an explicit stop signals it"
+---
+
+> **Superseded in part 2026-09-24** for a 401/403 answer on an LLM API path at a configured address. The "Identification over signal-whatever-listens" choice and the Consequences line "`ErrNotRunning` is returned only when neither pass identifies" no longer hold for such a server. `identifyBackend` gains a third pass, run only when the health and startup passes both find nothing: a health check answering 401/403 (`ErrAuthFailed`) returns the sort-first such backend together with the auth error. An explicit stop then signals the listening PID. It runs no stop hook and reports `Backend ""`. Stop verification counts a 401/403 answer as still reachable. Discovery reports the address as one `AuthFailed` row when every probing backend answers 401/403. `load`, `unload` and facade `Unload` refuse with the auth error, and the `auto_stop_server` sweep skips the row. Anything that fails the passes without a 401/403 still gets `ErrNotRunning`, so the foreign-occupant protection stays.

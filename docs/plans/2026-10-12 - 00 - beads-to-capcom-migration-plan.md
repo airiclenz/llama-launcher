@@ -125,7 +125,11 @@ capcom origin/main .capcom/knowledge/decisions.md, decisions/adr-0010.md, decisi
 - `grep -rn -E '\]\([^)]*(docs/adr|\.md)[^)]*\)' .capcom/knowledge/decisions` prints nothing
 **Commit:** `docs(knowledge): move ADRs 0001-0008 into Knowledge`
 
-## 5. Decision records 0009–0016 and the Gateway brief as Note trees
+## 5. Decision records 0009–0016 and the Gateway brief as Note trees — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): the decisions.py cut now routes non-quote text after a blockquote cut per record (back into `adr-0011-decision`, or into `adr-0012-rest`) instead of aborting; regenerating left adr-0001…adr-0008 byte-identical after `capcom fmt`.
+NOTES (2026-10-12): Status lines beyond item 4's two forms: 0010 `Accepted; amended 2026-09-24 and superseded in part 2026-09-24.`, 0012 `Accepted; amended 2026-07-29 and 2026-09-24.`, 0015 `Accepted; amended 2026-09-24.` (its inline *(Amended 2026-09-24 …)* note in Consequences is not a blockquote cut and stays in `adr-0015-consequences`).
+NOTES (2026-10-12): `capcom agents` reported the AGENTS.md block already current (it lists top-level Notes only), so AGENTS.md is unchanged.
 
 Depends on item 4.
 
