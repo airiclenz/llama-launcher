@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"debug/buildinfo"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -25,13 +24,9 @@ const (
 	smokeBrewPrefix = "/opt/homebrew"
 )
 
-// smokeReadBucket is the one channel command whose answer the smoke tests vary, keyed as
-// smokeFake.failing reads it.
-const smokeReadBucket = "gh api repos/airiclenz/scoop-bucket/contents/bucket/llama-launcher.json --jq .content"
-
 // smokeFake is a published publishVersion whose assets sit in releaseDir: repo holds the
-// checkout and its GitHub repository, and respond answers the channel and binary commands the
-// way gh, brew and the released binaries would.
+// checkout and its GitHub repository, and respond answers the brew and binary commands the way
+// brew and the released binaries would.
 type smokeFake struct {
 	releaseDir string
 	repo       memRepo
@@ -46,22 +41,16 @@ type smokeFake struct {
 	// "installed"; brewReports is what its llama-launcher prints for `llama-launcher version`.
 	brew        string
 	brewReports string
-	// manifest is the bucket's manifest, "" for none (GitHub answers 404).
-	manifest string
 	// failing makes a command line fail with the error.
 	failing map[string]error
 }
 
 // newSmokeFake is a release published in full: the annotated tag is on origin and fetched, the
 // six archives and SHA256SUMS are on the release, every binary carries the tag's commit, brew
-// is installed and upgrades onto the version, and the bucket's manifest names it.
+// is installed and upgrades onto the version.
 func newSmokeFake(t *testing.T) *smokeFake {
 	t.Helper()
 	releaseDir := publishedRelease(t)
-	manifest, err := renderScoopManifest(publishVersion, readTestFile(t, filepath.Join(releaseDir, checksumsFile)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	return &smokeFake{
 		releaseDir:    releaseDir,
 		repo:          publishedRepo(t, releaseDir),
@@ -70,7 +59,6 @@ func newSmokeFake(t *testing.T) *smokeFake {
 		binaryVersion: strings.TrimPrefix(publishVersion, "v"),
 		brew:          "installed",
 		brewReports:   "llama-launcher " + strings.TrimPrefix(publishVersion, "v"),
-		manifest:      manifest,
 		failing:       map[string]error{},
 	}
 }
@@ -166,11 +154,6 @@ func (f *smokeFake) respond(call recordedCall) (string, error) {
 			return "", err
 		}
 		return fmt.Sprintf("llama-launcher %s (%s)\n", f.binaryVersion, strings.TrimSpace(string(stub))), nil
-	case line == smokeReadBucket:
-		if f.manifest == "" {
-			return "", fmt.Errorf("gh: Not Found (HTTP 404)")
-		}
-		return base64.StdEncoding.EncodeToString([]byte(f.manifest)) + "\n", nil
 	}
 	return "", fmt.Errorf("unexpected command %q", line)
 }
@@ -253,45 +236,44 @@ func TestSmokeChecks(t *testing.T) {
 				{"PASS", "6 assets carry vcs.revision 81eec1b3ac7d = the tag"},
 				{"PASS", "the released binary reports \"llama-launcher 0.24.11"},
 				{"PASS", "brew's llama-launcher reports \"llama-launcher 0.24.11\""},
-				{"PASS", "bucket at 0.24.11, both Windows hashes match SHA256SUMS"},
 			},
-			wantTally: "7 passed, 0 failed, 0 skipped",
+			wantTally: "6 passed, 0 failed, 0 skipped",
 		},
 		"no tag on origin": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.repo.remoteTags = map[string]string{} },
 			wantResults: [][2]string{{"FAIL", "origin has no tag v0.24.11"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
+			wantTally:   "5 passed, 1 failed, 0 skipped",
 		},
 		"lightweight tag": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.repo.remoteTags[publishVersion] = "commit" },
 			wantResults: [][2]string{{"FAIL", "v0.24.11 on origin is a lightweight tag"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
+			wantTally:   "5 passed, 1 failed, 0 skipped",
 		},
 		"origin's tags cannot be listed": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
 				fake.repo.failures[methodRemoteHasTag] = errors.New("not a git repository")
 			},
 			wantResults: [][2]string{{"SKIP", "could not list origin's tags"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"tag type unreadable": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
 				fake.repo.failures[methodRemoteTagType] = errors.New("gh: authentication required")
 			},
 			wantResults: [][2]string{{"SKIP", "gh could not read its type"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"no local build to compare": {
 			adjust:      func(_ *smokeFake, options *smokeOptions) { options.distDir = "" },
 			wantResults: [][2]string{{"SKIP", "no --dist-dir"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"local build differs from the published sums": {
 			adjust: func(fake *smokeFake, options *smokeOptions) {
 				options.distDir = otherBuild(t, fake.releaseDir, "llama-launcher_0.24.11_linux_arm64.tar.gz")
 			},
 			wantResults: [][2]string{{"FAIL", "differs from the published one for llama-launcher_0.24.11_linux_arm64.tar.gz"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
+			wantTally:   "5 passed, 1 failed, 0 skipped",
 		},
 		"an asset does not match SHA256SUMS": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
@@ -302,7 +284,7 @@ func TestSmokeChecks(t *testing.T) {
 				{"SKIP", "the assets did not all download and verify"},
 				{"PASS", "the released binary reports"},
 			},
-			wantTally: "5 passed, 1 failed, 1 skipped",
+			wantTally: "4 passed, 1 failed, 1 skipped",
 		},
 		"the release has no SHA256SUMS": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
@@ -313,21 +295,20 @@ func TestSmokeChecks(t *testing.T) {
 				{"FAIL", "no SHA256SUMS asset on release v0.24.11"},
 				{"SKIP", "the host's archive llama-launcher_0.24.11_linux_amd64.tar.gz did not download"},
 			},
-			wantTally: "2 passed, 1 failed, 4 skipped",
+			wantTally: "2 passed, 1 failed, 3 skipped",
 		},
 		"gh is not installed": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
 				fake.repo.failures[methodRemoteTagType] = notFound
 				fake.repo.failures[methodReadAsset] = notFound
-				fake.failing[smokeReadBucket] = notFound
 			},
 			wantResults: [][2]string{{"SKIP", "gh is not installed"}},
-			wantTally:   "1 passed, 0 failed, 6 skipped",
+			wantTally:   "1 passed, 0 failed, 5 skipped",
 		},
 		"tag not fetched into the local clone": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { delete(fake.repo.tagCommits, publishVersion) },
 			wantResults: [][2]string{{"SKIP", "tag v0.24.11 is not in the local clone"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"binaries built from another commit": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) { fake.revision = "0123456789abcdef0123456789abcdef01234567" },
@@ -335,17 +316,17 @@ func TestSmokeChecks(t *testing.T) {
 				{"FAIL", "asset llama-launcher_0.24.11_linux_amd64.tar.gz was built from 0123456789abcdef"},
 				{"FAIL", "asset llama-launcher_0.24.11_windows_arm64.zip was built from 0123456789abcdef"},
 			},
-			wantTally: "6 passed, 6 failed, 0 skipped",
+			wantTally: "5 passed, 6 failed, 0 skipped",
 		},
 		"binaries without a revision": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.revision = "" },
 			wantResults: [][2]string{{"FAIL", "carries no vcs.revision"}},
-			wantTally:   "6 passed, 6 failed, 0 skipped",
+			wantTally:   "5 passed, 6 failed, 0 skipped",
 		},
 		"binaries without build information": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.isUnstamped = true },
 			wantResults: [][2]string{{"FAIL", "carries no build information"}},
-			wantTally:   "6 passed, 6 failed, 0 skipped",
+			wantTally:   "5 passed, 6 failed, 0 skipped",
 		},
 		"binaries built from a modified tree": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) { fake.modified = "true" },
@@ -353,89 +334,32 @@ func TestSmokeChecks(t *testing.T) {
 				{"warning", "asset llama-launcher_0.24.11_darwin_amd64.tar.gz was built from a modified tree"},
 				{"PASS", "6 assets carry vcs.revision"},
 			},
-			wantTally: "7 passed, 0 failed, 0 skipped",
+			wantTally: "6 passed, 0 failed, 0 skipped",
 		},
 		"the host's binary reports another version": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.binaryVersion = "0.24.10" },
 			wantResults: [][2]string{{"FAIL", "the released binary reports \"llama-launcher 0.24.10"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
+			wantTally:   "5 passed, 1 failed, 0 skipped",
 		},
 		"no release archive for the host": {
 			adjust:      func(_ *smokeFake, options *smokeOptions) { options.goos = "freebsd" },
 			wantResults: [][2]string{{"SKIP", "no release archive is built for this host (freebsd/amd64)"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"Homebrew is not installed": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brew = "missing" },
 			wantResults: [][2]string{{"SKIP", "Homebrew is not installed on this host"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"llama-launcher is not installed through Homebrew": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brew = "absent" },
 			wantResults: [][2]string{{"SKIP", "llama-launcher is not installed through Homebrew here"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 0 failed, 1 skipped",
 		},
 		"brew upgrade leaves the old version": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brewReports = "llama-launcher 0.24.10" },
 			wantResults: [][2]string{{"FAIL", "brew's llama-launcher reports \"llama-launcher 0.24.10\", not \"llama-launcher 0.24.11\""}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
-		},
-		"the bucket's manifest is unreadable": {
-			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.manifest = "" },
-			wantResults: [][2]string{{"SKIP", "the bucket's manifest bucket/llama-launcher.json in airiclenz/scoop-bucket is unreadable"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
-		},
-		"the manifest's hashes are prefixed and upper-case": {
-			adjust: func(fake *smokeFake, _ *smokeOptions) {
-				fake.manifest = prefixHashes(t, fake.manifest, fake.releaseDir)
-			},
-			wantResults: [][2]string{{"PASS", "both Windows hashes match"}},
-			wantTally:   "7 passed, 0 failed, 0 skipped",
-		},
-		"a manifest hash does not match": {
-			adjust: func(fake *smokeFake, _ *smokeOptions) {
-				hash, err := checksumFor(readTestFile(t, filepath.Join(fake.releaseDir, checksumsFile)), "llama-launcher_0.24.11_windows_arm64.zip")
-				if err != nil {
-					t.Fatal(err)
-				}
-				fake.manifest = strings.Replace(fake.manifest, hash, strings.Repeat("0", 64), 1)
-			},
-			wantResults: [][2]string{{"FAIL", "the bucket's arm64 hash is"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
-		},
-		"the manifest is not JSON": {
-			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.manifest = "{" },
-			wantResults: [][2]string{{"FAIL", "is not valid JSON"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
-		},
-		"the bucket is behind the latest release": {
-			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.manifest = `{"version": "0.24.10"}` },
-			wantResults: [][2]string{{"FAIL", "not the latest release 0.24.11"}},
-			wantTally:   "6 passed, 1 failed, 0 skipped",
-		},
-		"the bucket has moved past an older release": {
-			adjust: func(fake *smokeFake, _ *smokeOptions) {
-				fake.manifest = `{"version": "0.24.12"}`
-				fake.repo.latestRelease = githubRelease{Tag: "v0.24.12"}
-			},
-			wantResults: [][2]string{{"SKIP", "v0.24.11 is not the latest release (v0.24.12)"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
-		},
-		"the latest release cannot be read": {
-			adjust: func(fake *smokeFake, _ *smokeOptions) {
-				fake.manifest = `{"version": "0.24.10"}`
-				fake.repo.failures[methodLatestRelease] = errors.New("gh: HTTP 502")
-			},
-			wantResults: [][2]string{{"SKIP", "the latest release could not be read: gh: HTTP 502"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
-		},
-		"no release is published": {
-			adjust: func(fake *smokeFake, _ *smokeOptions) {
-				fake.manifest = `{"version": "0.24.10"}`
-				fake.repo.latestRelease = githubRelease{}
-			},
-			wantResults: [][2]string{{"SKIP", "the bucket is at \"0.24.10\", not 0.24.11, and airiclenz/llama-launcher has no published release"}},
-			wantTally:   "6 passed, 0 failed, 1 skipped",
+			wantTally:   "5 passed, 1 failed, 0 skipped",
 		},
 	}
 	for name, tc := range cases {
@@ -480,21 +404,6 @@ func otherBuild(t *testing.T, releaseDir, name string) string {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, checksumsFile), strings.Replace(sums, hash, strings.Repeat("f", 64), 1))
 	return dir
-}
-
-// prefixHashes rewrites the manifest's two Windows hashes as Scoop also accepts them: upper-case,
-// behind a `sha256:` prefix.
-func prefixHashes(t *testing.T, manifest, releaseDir string) string {
-	t.Helper()
-	sums := readTestFile(t, filepath.Join(releaseDir, checksumsFile))
-	for _, goarch := range []string{"amd64", "arm64"} {
-		hash, err := checksumFor(sums, "llama-launcher_0.24.11_windows_"+goarch+".zip")
-		if err != nil {
-			t.Fatal(err)
-		}
-		manifest = strings.Replace(manifest, hash, "sha256:"+strings.ToUpper(hash), 1)
-	}
-	return manifest
 }
 
 // TestSmokeRunsTheHostsZipArchive pins the Windows host path: the host's archive is a .zip, and

@@ -9,12 +9,11 @@ import (
 	"testing"
 )
 
-// The errors gh fails with, copied from real runs: a GitHub 404 (a missing path or repository),
-// an empty repository's contents, and a release that does not exist.
+// The errors gh fails with, copied from real runs: a GitHub 404 (a missing path or repository)
+// and a release that does not exist.
 const (
-	ghNotFound        = "exit status 1: gh: Not Found (HTTP 404)"
-	ghEmptyRepository = "exit status 1: gh: This repository is empty. (HTTP 404)"
-	ghNoRelease       = "exit status 1: release not found"
+	ghNotFound  = "exit status 1: gh: Not Found (HTTP 404)"
+	ghNoRelease = "exit status 1: release not found"
 )
 
 // testFormula is the head of a llama-launcher formula in the tap, in the shape every formula in
@@ -38,21 +37,13 @@ var releaseAssetsV02411 = []string{
 	"SHA256SUMS",
 }
 
-// fakeRemote answers the channel probes' gh commands the way gh would over the tap, bucket and
-// winget-pkgs repositories in a given state; llama-launcher's own repository is a memRepo, never argv
-// here. Its zero value is channels whose one-time setup is still pending.
+// fakeRemote answers the channel probes' gh commands the way gh would over the tap repository in
+// a given state; llama-launcher's own repository is a memRepo, never argv here. Its zero value is
+// a channel whose one-time setup is still pending.
 type fakeRemote struct {
 	// hasTap is whether the tap repository exists; formula is its formula, "" for none.
 	hasTap  bool
 	formula string
-	// hasBucket is whether the bucket repository exists; bucketManifest is its manifest, ""
-	// for an empty repository.
-	hasBucket      bool
-	bucketManifest string
-	// wingetListing is the package's manifest directory listing in winget-pkgs, "" while the
-	// package is not there; wingetPulls is what `gh pr list` prints, "" for no pull request.
-	wingetListing string
-	wingetPulls   string
 	// failing names a command — "gh api repos/airiclenz/homebrew-tap" — that cannot run.
 	failing string
 }
@@ -66,7 +57,6 @@ func (r fakeRemote) respond(call recordedCall) (string, error) {
 	if r.failing != "" && strings.HasPrefix(command, r.failing) {
 		return fail("cannot run")
 	}
-	args := call.args
 	switch {
 	case command == "gh api repos/"+tapRepo+" --jq .full_name":
 		if !r.hasTap {
@@ -78,29 +68,6 @@ func (r fakeRemote) respond(call recordedCall) (string, error) {
 			return fail(ghNotFound)
 		}
 		return contentsAPIBase64(r.formula), nil
-	case command == "gh api repos/"+bucketRepo+" --jq .full_name":
-		if !r.hasBucket {
-			return fail(ghNotFound)
-		}
-		return bucketRepo + "\n", nil
-	case command == "gh api repos/"+bucketRepo+"/contents/"+bucketPath+" --jq .content":
-		switch {
-		case !r.hasBucket:
-			return fail(ghNotFound)
-		case r.bucketManifest == "":
-			return fail(ghEmptyRepository)
-		}
-		return contentsAPIBase64(r.bucketManifest), nil
-	case command == "gh api repos/"+wingetRepo+"/contents/"+wingetManifestDir:
-		if r.wingetListing == "" {
-			return fail(ghNotFound)
-		}
-		return r.wingetListing, nil
-	case call.name == "gh" && len(args) > 1 && args[0] == "pr" && args[1] == "list":
-		if r.wingetPulls == "" {
-			return "[]\n", nil
-		}
-		return r.wingetPulls, nil
 	}
 	return "", fmt.Errorf("unexpected command %s", command)
 }
@@ -120,23 +87,6 @@ func contentsAPIBase64(content string) string {
 		encoded = encoded[60:]
 	}
 	return strings.Join(append(lines, encoded), "\n") + "\n"
-}
-
-// wingetListing is a winget-pkgs contents listing of the package's manifest directory holding one
-// directory per version.
-func wingetListing(versions ...string) string {
-	entries := make([]string, 0, len(versions))
-	for _, version := range versions {
-		entries = append(entries, fmt.Sprintf(`{"name":%q,"path":"%s/%s","type":"dir"}`, version, wingetManifestDir, version))
-	}
-	return "[" + strings.Join(entries, ",") + "]\n"
-}
-
-// wingetPull is `gh pr list --json number,title,url` output holding one komac pull request
-// titled kind ("New version", or "New package" for the first submission).
-func wingetPull(number int, kind, version string) string {
-	return fmt.Sprintf(`[{"number":%d,"title":"%s: AiricLenz.LlamaLauncher version %s","url":"https://github.com/microsoft/winget-pkgs/pull/%d"}]`+"\n",
-		number, kind, version, number)
 }
 
 // mustVersion parses a release version or fails the test.
@@ -198,26 +148,6 @@ func TestProbesReportEachState(t *testing.T) {
 		"tap repo unreadable":   {probe: probeHomebrew, remote: fakeRemote{hasTap: true, formula: testFormula, failing: "gh api"}, wantState: stateUnknown, wantDetail: "could not read the airiclenz/homebrew-tap repository"},
 		"formula unreadable": {probe: probeHomebrew, remote: fakeRemote{hasTap: true, formula: testFormula, failing: "gh api repos/airiclenz/homebrew-tap/contents"},
 			wantState: stateUnknown, wantDetail: "could not read Formula/llama-launcher.rb"},
-		"bucket repo absent": {probe: probeScoop, wantState: stateSetupPending, wantDetail: "no airiclenz/scoop-bucket repository yet"},
-		"bucket repo empty":  {probe: probeScoop, remote: fakeRemote{hasBucket: true}, wantState: statePending, wantDetail: "has no bucket/llama-launcher.json"},
-		"bucket older":       {probe: probeScoop, remote: fakeRemote{hasBucket: true, bucketManifest: `{"version": "0.24.10"}`}, wantState: statePending, wantDetail: `manifest pins "0.24.10", not 0.24.11`},
-		"bucket current":     {probe: probeScoop, remote: fakeRemote{hasBucket: true, bucketManifest: `{"version": "0.24.11"}`}, wantState: stateDone, wantDetail: "manifest pins 0.24.11"},
-		"bucket unreadable":  {probe: probeScoop, remote: fakeRemote{hasBucket: true, failing: "gh api"}, wantState: stateUnknown, wantDetail: "could not read the airiclenz/scoop-bucket repository"},
-		"winget not set up": {probe: probeWinget, wantState: statePending,
-			wantDetail: "AiricLenz.LlamaLauncher is not in microsoft/winget-pkgs yet and no open pull request submits 0.24.11"},
-		"winget first submission open": {probe: probeWinget, remote: fakeRemote{wingetPulls: wingetPull(312345, "New package", "0.24.11")},
-			wantState: stateDone, wantDetail: "submitted: pull request #312345"},
-		"winget absent": {probe: probeWinget, remote: fakeRemote{wingetListing: wingetListing("0.24.10")},
-			wantState: statePending, wantDetail: "no AiricLenz.LlamaLauncher 0.24.11 manifest or open pull request"},
-		"winget pull request open": {probe: probeWinget, remote: fakeRemote{wingetListing: wingetListing("0.24.10"), wingetPulls: wingetPull(312345, "New version", "0.24.11")},
-			wantState: stateDone, wantDetail: "submitted: pull request #312345"},
-		"winget merged": {probe: probeWinget, remote: fakeRemote{wingetListing: wingetListing("0.24.10", "0.24.11")},
-			wantState: stateDone, wantDetail: "published: manifests/a/AiricLenz/LlamaLauncher/0.24.11"},
-		"winget pull request for a longer version": {probe: probeWinget, version: "v0.24.1",
-			remote:    fakeRemote{wingetListing: wingetListing("0.24.0"), wingetPulls: wingetPull(312345, "New version", "0.24.11")},
-			wantState: statePending, wantDetail: "no AiricLenz.LlamaLauncher 0.24.1 manifest"},
-		"winget pull requests unreadable": {probe: probeWinget, remote: fakeRemote{wingetListing: wingetListing("0.24.10"), failing: "gh pr list"},
-			wantState: stateUnknown, wantDetail: "could not list the open microsoft/winget-pkgs pull requests"},
 		"smoke": {probe: probeSmoke, repo: memRepo{remoteTags: annotated, releases: allAssets}, wantState: statePending, wantDetail: "publish runs it last"},
 	}
 	for name, tc := range cases {
@@ -251,7 +181,7 @@ func TestProbeStepsRunsEveryStepInPublishOrder(t *testing.T) {
 	for _, step := range steps {
 		names = append(names, step.Name)
 	}
-	want := []string{"tag", "release", "homebrew", "scoop", "winget", "smoke"}
+	want := []string{"tag", "release", "homebrew", "smoke"}
 	if !slices.Equal(names, want) {
 		t.Errorf("steps = %q, want %q", names, want)
 	}

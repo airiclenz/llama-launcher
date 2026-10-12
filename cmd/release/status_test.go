@@ -93,13 +93,12 @@ func TestStatusReportsTheGateBaselineAndHighestTag(t *testing.T) {
 		t.Errorf("report = %s\nwant     %s", gotJSON, wantJSON)
 	}
 
-	// Nothing is published for v0.24.14 and no channel's one-time setup has landed; winget needs
-	// none, so it is pending.
+	// Nothing is published for v0.24.14 and the tap's one-time setup has not landed.
 	var states []string
 	for _, step := range steps {
 		states = append(states, step.Name+" "+string(step.State))
 	}
-	wantStates := []string{"tag pending", "release pending", "homebrew setup-pending", "scoop setup-pending", "winget pending", "smoke pending"}
+	wantStates := []string{"tag pending", "release pending", "homebrew setup-pending", "smoke pending"}
 	if !slices.Equal(states, wantStates) {
 		t.Errorf("steps = %q, want %q", states, wantStates)
 	}
@@ -389,7 +388,7 @@ func TestStatusTextNamesTheBlockingConditions(t *testing.T) {
 		"- the working tree is not clean",
 		"\nsteps\n",
 		"  tag       pending        origin has no tag v0.24.14\n",
-		"  scoop     setup-pending  no airiclenz/scoop-bucket repository yet\n",
+		"  homebrew  setup-pending  no airiclenz/homebrew-tap repository yet\n",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("output lacks %q:\n%s", want, output)

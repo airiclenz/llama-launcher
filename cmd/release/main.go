@@ -17,7 +17,7 @@
 // GitHub repository goes through the repo seam (repo.go) above it: the verbs' tests hold that
 // state in memRepo and never fake an own-repo command by argv, which only execRepo's own tests
 // pin. The runner's fakes answer the toolchain, dist's read of its source tree's commit time, and
-// the tap, bucket and winget-pkgs commands.
+// the tap commands.
 //
 // It is a dev tool, never a release asset: dist does not ship it, and it imports nothing from
 // llama-launcher's internal packages.
@@ -60,8 +60,8 @@ func newRootCommand(commands runner, openRepo repoOpener) *cobra.Command {
 		Long: "release does the deterministic work of a llama-launcher release: it cross-builds the\n" +
 			"release archives and their checksums, reports the release gate and where each\n" +
 			"publish step stands, makes the CHANGELOG rollup and VERSION bump commits, publishes\n" +
-			"the GitHub release, the Homebrew formula, the Scoop manifest and the winget\n" +
-			"submission, and smoke-tests a published release, the same way on every host.",
+			"the GitHub release and the Homebrew formula, and smoke-tests a published release,\n" +
+			"the same way on every host.",
 		SilenceErrors: true,
 	}
 	cmd.AddCommand(newDistCommand(commands))

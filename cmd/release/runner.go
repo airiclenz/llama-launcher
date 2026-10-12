@@ -10,14 +10,14 @@ import (
 )
 
 // runner is the one seam every external command this program runs goes through — `go`, `git`,
-// `gh`, `komac` alike. The release verbs never call os/exec themselves, so a test hands them a
+// `gh` alike. The release verbs never call os/exec themselves, so a test hands them a
 // recording fake and no test of a verb ever reaches the network, a real `git` or a real
 // toolchain; only versionbump_test.go runs real `git`, under the workflow's script and never
 // through this seam.
 // What the verbs ask of the llama-launcher checkout and its GitHub repository goes through the repo seam
 // (repo.go) instead, whose execRepo is the one caller of the runner with that argv; the runner
-// itself carries the toolchain, dist's read of its source tree's commit time, and the tap, bucket
-// and winget-pkgs commands.
+// itself carries the toolchain, dist's read of its source tree's commit time, and the tap
+// commands.
 type runner interface {
 	// run executes name with args in dir, with env appended to the inherited environment (a
 	// later entry overrides an earlier one, so env wins), and returns what the command wrote to

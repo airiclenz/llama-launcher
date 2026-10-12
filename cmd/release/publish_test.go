@@ -37,8 +37,6 @@ var mutatingCommands = []string{
 	"gh release delete",
 	"gh repo clone",
 	"git commit",
-	"komac update",
-	"komac submit",
 }
 
 // publishFake is what publish meets: llama-launcher's checkout and GitHub repository held in repo, and
@@ -55,7 +53,7 @@ type publishFake struct {
 	// commit it is on.
 	tagKind   string
 	tagCommit string
-	// channels is the tap, the bucket and the komac and gh installs the channel steps meet.
+	// channels is the tap the channel step meets.
 	channels fakeChannels
 
 	mu sync.Mutex
@@ -64,8 +62,7 @@ type publishFake struct {
 // newPublishFake is a first run of publishVersion: HEAD is the VERSION bump, one commit ahead of
 // origin/main, whose feature commit CI passed; nothing is tagged or released yet, and the
 // workflow tags the bump on the third poll after the push. The tap's formula already pins the
-// version, the Scoop bucket's repository is not there yet (setup pending) and an open winget-pkgs
-// pull request already submits the version, so the channel steps change nothing.
+// version, so the channel step changes nothing.
 func newPublishFake() *publishFake {
 	fake := &publishFake{
 		repo: memRepo{
@@ -80,9 +77,8 @@ func newPublishFake() *publishFake {
 			publish:      &memPublish{},
 		},
 		remote: fakeRemote{
-			hasTap:      true,
-			formula:     testFormula,
-			wingetPulls: wingetPull(301234, "New version", strings.TrimPrefix(publishVersion, "v")),
+			hasTap:  true,
+			formula: testFormula,
 		},
 		tagAppearsAfter: 2,
 		tagKind:         gitObjectTag,
@@ -182,16 +178,13 @@ func runTestPublish(t *testing.T, fake *publishFake, isDryRun bool) publishRunRe
 }
 
 // runTestPublishWith runs publish of publishVersion over fake with options, filling in the
-// version, the test poll timing, a counting sleep and, unless options has one, an environment
-// with nothing set and a smoke step that records what it was asked to check and passes.
+// version, the test poll timing, a counting sleep and, unless options has one, a smoke step that
+// records what it was asked to check and passes.
 func runTestPublishWith(t *testing.T, fake *publishFake, options publishOptions) publishRunResult {
 	t.Helper()
 	result := publishRunResult{commands: fake.runner(), notesPath: options.notesFile}
 	if options.openRepo == nil {
 		options.openRepo = fake.opener()
-	}
-	if options.getenv == nil {
-		options.getenv = func(string) string { return "" }
 	}
 	if options.smoke == nil {
 		options.smoke = func(_ context.Context, _ io.Writer, smoke smokeOptions) error {
@@ -436,6 +429,16 @@ func TestPublishDryRunWithABlockedGateFailsButPrintsThePlan(t *testing.T) {
 		if !hasRow(result.output, want) {
 			t.Errorf("output lacks %q:\n%s", want, result.output)
 		}
+	}
+	_, plan, _ := strings.Cut(result.output, "plan (dry run, nothing was changed)\n")
+	var planned []string
+	for _, line := range strings.Split(plan, "\n") {
+		if fields := strings.Fields(line); strings.HasPrefix(line, "  ") && len(fields) > 0 {
+			planned = append(planned, fields[0])
+		}
+	}
+	if want := []string{"tag", "release", "homebrew", "smoke"}; !slices.Equal(planned, want) {
+		t.Errorf("planned steps = %q, want %q", planned, want)
 	}
 	if mutating := mutatingLines(result.commands); len(mutating) > 0 {
 		t.Errorf("issued mutating commands %q, want none", mutating)

@@ -38,8 +38,6 @@ type publishOptions struct {
 	tagTimeout   time.Duration
 	pollInterval time.Duration
 	sleep        func(ctx context.Context, duration time.Duration) error
-	// getenv reads the environment: the winget step takes its GitHub token from it first.
-	getenv func(key string) string
 	// smoke runs the smoke verb over options: the last step, run whatever the probes say.
 	smoke func(ctx context.Context, output io.Writer, options smokeOptions) error
 	// openRepo opens the checkout's repo; nil opens the execRepo over the run's runner.
@@ -61,16 +59,11 @@ type publishRun struct {
 	// against. Both stay empty when this run builds nothing.
 	buildDir string
 	distDir  string
-	// isWingetPackageListed is whether winget-pkgs already has the package, resolved once before
-	// any step runs while the winget step is pending: the winget step updates a listed package
-	// with `komac update` and submits the first manifests of an unlisted one with `komac submit`.
-	isWingetPackageListed bool
 }
 
 // publishAction is one step publish converges: what a dry run says it would do, the work itself,
 // run only while the step's probe reports it pending, and what the step table says once it has
-// run ("done by this run" when empty). A converge that returns a setupPendingError has not
-// failed: the step is reported setup-pending and the run goes on.
+// run ("done by this run" when empty).
 type publishAction struct {
 	name       string
 	describe   func(run *publishRun) string
@@ -86,8 +79,6 @@ var publishActions = []publishAction{
 	{name: stepTag, describe: describeTag, converge: convergeTag},
 	{name: stepRelease, describe: describeRelease, converge: convergeRelease},
 	{name: stepHomebrew, describe: describeHomebrew, converge: convergeHomebrew},
-	{name: stepScoop, describe: describeScoop, converge: convergeScoop},
-	{name: stepWinget, describe: describeWinget, converge: convergeWinget, doneDetail: wingetSubmittedDetail},
 	{name: stepSmoke, describe: describeSmoke, converge: convergeSmoke, doneDetail: smokePassedDetail},
 }
 
@@ -101,7 +92,6 @@ func newPublishCommand(commands runner, openRepo repoOpener) *cobra.Command {
 		tagTimeout:   defaultTagTimeout,
 		pollInterval: tagPollInterval,
 		sleep:        sleepContext,
-		getenv:       os.Getenv,
 		openRepo:     openRepo,
 	}
 	options.smoke = func(ctx context.Context, output io.Writer, smoke smokeOptions) error {
@@ -117,16 +107,11 @@ func newPublishCommand(commands runner, openRepo repoOpener) *cobra.Command {
 			"then pushes HEAD to main and waits (--tag-timeout) for the CI-made annotated tag — it\n" +
 			"never creates one. The release step builds the archives in a fresh clone at the tag\n" +
 			"and creates the GitHub release, or uploads only the assets it lacks after checking the\n" +
-			"rebuilt sums against its SHA256SUMS. The homebrew and scoop steps render the formula\n" +
-			"and the manifest from the release's SHA256SUMS and commit `llama-launcher X.Y.Z` straight to\n" +
-			"the tap and the bucket, pushing only when the file changes. The winget step submits\n" +
-			"with komac (GITHUB_TOKEN, else `gh auth token`): `komac update` once winget-pkgs has\n" +
-			"the package, and before that `komac submit` of the three manifests it renders from the\n" +
-			"SHA256SUMS; either pull request merges later, so the release is submitted to winget,\n" +
-			"not published there. A channel whose one-time setup is pending — a missing tap or\n" +
-			"bucket repository — is skipped and named; a first `komac submit` that fails leaves\n" +
-			"winget setup-pending, naming the kept manifest directory and the command to rerun.\n" +
-			"Either way the run still succeeds. Last, the smoke step checks the published release from the outside, as\n" +
+			"rebuilt sums against its SHA256SUMS. The homebrew step renders the formula from the\n" +
+			"release's SHA256SUMS and commits `llama-launcher X.Y.Z` straight to the tap, pushing\n" +
+			"only when the file changes. While its one-time setup is pending — a missing tap\n" +
+			"repository — the step is skipped and named, and the run still succeeds. Last, the\n" +
+			"smoke step checks the published release from the outside, as\n" +
 			"the smoke verb does, comparing its SHA256SUMS with this run's build when it made one; a\n" +
 			"failed check fails the run. It never prompts or reads stdin, and exits 1 after\n" +
 			"printing the step table when anything fails. --dry-run runs the gate and the probes\n" +
@@ -173,9 +158,6 @@ func runPublish(ctx context.Context, commands runner, output io.Writer, options 
 	if steps[0].State != stateDone {
 		gate, refusals = run.checkPushable(ctx, refusals)
 	}
-	if err := run.resolveWingetPackage(ctx, steps); err != nil {
-		refusals = append(refusals, err)
-	}
 	for _, step := range steps {
 		if step.State == stateUnknown {
 			refusals = append(refusals, fmt.Errorf("could not tell where the %s step stands: %s", step.Name, step.Detail))
@@ -198,9 +180,8 @@ func runPublish(ctx context.Context, commands runner, output io.Writer, options 
 }
 
 // converge runs every pending step in order; a done or setup-pending step is skipped, the latter
-// named, since the run succeeds without it. A step whose converge reports its setup pending is
-// recorded so and the run goes on. A failed step stops the run, which prints the steps as the
-// remote now holds them.
+// named, since the run succeeds without it. A failed step stops the run, which prints the steps
+// as the remote now holds them.
 func (r *publishRun) converge(ctx context.Context, gate string, steps []stepReport) error {
 	defer r.removeBuildDir()
 	for index, action := range publishActions {
@@ -211,14 +192,7 @@ func (r *publishRun) converge(ctx context.Context, gate string, steps []stepRepo
 			continue
 		}
 		_, _ = fmt.Fprintf(r.output, "%s: %s\n", action.name, action.describe(r))
-		err := action.converge(ctx, r)
-		var setupPending setupPendingError
-		if errors.As(err, &setupPending) {
-			_, _ = fmt.Fprintf(r.output, "%s: its one-time setup is pending: %s\n", action.name, setupPending.detail)
-			steps[index] = stepReport{Name: action.name, State: stateSetupPending, Detail: setupPending.detail}
-			continue
-		}
-		if err != nil {
+		if err := action.converge(ctx, r); err != nil {
 			if printErr := printPublish(r.output, r, gate, r.probe(ctx), false); printErr != nil {
 				return errors.Join(err, printErr)
 			}

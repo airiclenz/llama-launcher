@@ -85,7 +85,13 @@ Depends on item 1.
 - `GOOS=windows go vet ./cmd/release/...`
 **Commit:** `feat(release): port the capcom release program`
 
-## 3. Drop the Scoop and winget channels
+## 3. Drop the Scoop and winget channels — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): GITHUB_TOKEN handling removed (githubTokenVariable, redactedToken, githubToken, publishOptions.getenv): only komac used it, the Homebrew path pushes through gh/git credentials.
+NOTES (2026-10-12): setupPendingError and publish's converge branch for it removed, since winget's first `komac submit` was its only producer; a probe-reported setup-pending step (the missing tap) is still skipped and named.
+NOTES (2026-10-12): also removed winget/scoop-only render helpers (renderedFile, packageArchive.UpperSHA256, packageData.ReleaseURL/WingetPackageID, releasePageBase), probe helper titleNamesRelease, smoke's checkStaleBucket and scoopArchitectures, and the test-only ghEmptyRepository const; render_test fixture hashes renamed scoop* -> windowsAmd64Hash/windowsArm64Hash/otherArchiveHash so the acceptance grep holds.
+NOTES (2026-10-12): bucket/scoop-only channel tests rewritten for the tap where they covered kept behaviour (empty repo pushes to main -> TestPublishPushesAnEmptyTapToMain; resume once tagged -> TestPublishChannelConvergesFromRemoteStateOnceTheTagExists; setup-pending skip -> TestPublishSkipsAChannelWhoseSetupIsPending); smoke tallies drop the Scoop check; the publish dry-run test now asserts the planned steps are exactly tag, release, homebrew, smoke.
+NOTES (2026-10-12): left untouched for item 4: Windows targets/isWindows in dist, "six archives" wording, releaseAssetsV02411's Windows entries, goldenSums' Windows lines and TestSmokeRunsTheHostsZipArchive.
 
 **What:**
 **Goal:** `cmd/release` publishes, probes, reports and smokes only the tag, the GitHub release, Homebrew and the smoke step. No source or template under `cmd/release` names scoop, winget or komac.
