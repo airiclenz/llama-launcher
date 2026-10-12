@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Issue register:** open defects and parked ideas now live in capcom (`.capcom/issues/`, one markdown file per issue) instead of beads (`bd`). All 22 beads issues moved, closed ones included; each keeps its old `llama-launcher-…` id as an alias, so existing citations still resolve with `capcom show`. `.beads/` and its `.gitignore` block are gone, and `AGENTS.md` carries the capcom managed block in place of the beads section.
+- **Glossary:** the domain glossary moved from `CONTEXT.md` into capcom Knowledge as the `glossary` Note tree: one Note per term under the Language and Verbs sections, plus the flagged ambiguities (`capcom know tree glossary`, `capcom know show "<Term>"`). `CONTEXT.md` is now a short pointer to it.
+- **Decision records:** ADR-0001 to ADR-0016 and the Gateway decision brief moved from `docs/adr/` into capcom Knowledge as Note trees under `.capcom/knowledge/decisions/` (`capcom know show adr-0006`), one Note per record with its sections as verbatim children. `docs/adr/README.md` is now a short pointer, and the TDD, README and `AGENTS.md` link to the Notes.
+- **Working rules:** the issue-filing rules (spoken ids, plan linking, labels, closing alongside `CHANGELOG.md`) and the docs layout are now Knowledge Notes `issue-conventions` and `docs-layout`; `AGENTS.md` tells agents to open the Knowledge tree (`capcom know tree --depth 2`) before starting work.
+- Claude Code sessions in this repository are now briefed by `capcom prime` on start, resume, clear and compaction (`.claude/settings.json`, now tracked).
+
 ## 1.8.1
 
 ### Fixed
