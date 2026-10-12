@@ -1,41 +1,7 @@
 # llama-launcher
 
-A profile-driven launcher for local LLM serving software. Users name **Profiles**; the launcher resolves them into a running **LLM Server** with a **Model** loaded.
+llama-launcher's domain glossary lives in Knowledge as the `glossary` Note tree, one Note per term.
 
-## Language
-
-**LLM Server**:
-A piece of LLM-serving software the launcher knows how to drive (e.g. `llamacpp`, `ollama`, `lmstudio`, `splash`). The same term covers both the class ("llamacpp is an LLM Server") and a running instance ("the LLM Server on port 8080"); context disambiguates. A running LLM Server is identified by its `host:port` address — multiple LLM Servers of any type may run concurrently as long as each binds a distinct address (see [ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md)). The launcher can start and stop any LLM Server it supports; how that happens is an implementation detail of each LLM Server type and not exposed to the user.
-_Avoid_: Backend, server software, engine, runtime, "managed server", "external server".
-
-**Model**:
-The weights an LLM Server loads to serve requests. A file path on disk for llamacpp; an opaque identifier (`llama3.1:8b`, `lmstudio-community/...`) for Ollama and LM Studio; a Hugging Face `owner/repo` id of an installed Splash package for Splash (the launcher refuses one that is not installed — see [ADR-0014](docs/adr/0014-splash-models-must-be-installed.md)). Models are *loaded into* an LLM Server, never run on their own.
-_Avoid_: Weights file, GGUF (too narrow), checkpoint.
-
-**Profile**:
-A named, user-defined launch recipe = LLM Server + Model + parameter overrides + description. The only artefact the user names directly; everything else (which server is running, which model is loaded) is derived from the selected Profile at runtime.
-_Avoid_: Preset, config entry, model config (too narrow — a Profile is more than its Model).
-
-**Gateway**:
-The optional resident data-plane sibling binary (decided, not yet built — [ADR-0013](docs/adr/0013-gateway-data-plane-sibling.md)): one OpenAI-compatible endpoint that treats a request's `"model"` field as a Profile name, activates that Profile on demand through the library facade, queues requests during activation (priority-ordered, `interactive` above `background`, with an interactive stickiness window against background displacement), and proxies inference to the serving LLM Server — side-by-side with other Profiles when declared memory budgets fit. A conscious, scoped exception to [ADR-0002](docs/adr/0002-not-a-router.md) for this binary only; the CLI stays a one-shot process manager with no listener.
-_Avoid_: "router" / "proxy" as names (ADR-0002 reserves the plain words for what the CLI is *not*; this component is the Gateway), "load balancer" (it serializes onto scarce slots; it does not balance replicas).
-
-## Verbs
-
-**Activate** (a Profile):
-The orchestration the launcher performs when a user selects a Profile: resolve it, start the LLM Server if needed, load the Model if needed. Nothing is persisted. The user-facing CLI verb is `load` (`llama-launcher load <profile>`), but inside the codebase this whole operation is *activation* to avoid colliding with the lower-level Model load. One Profile is activated at a time per LLM Server.
-
-**Load** / **Unload** (a Model into an LLM Server):
-The API-level operation of putting Model weights into a running LLM Server's memory (or removing them). For LLM Servers with a load/unload HTTP API (Ollama, LM Studio), this is an HTTP call. For `llamacpp` and `splash`, there is no API load — the Model is baked into the server's start arguments, so "loading a Model" means starting (or restarting) the LLM Server with that Model in `--model`.
-
-**Start** / **Stop** (an LLM Server):
-Bringing the LLM Server's process up or down. The mechanism is internal to each LLM Server type (fork-and-detach for `llamacpp` and `splash`; for `ollama`, spawning `ollama serve` to start and signalling the process listening at the instance's address to stop — its CLI has no server-stop command, `ollama stop MODEL` only unloads a model; `lms server start` / `lms server stop` for `lmstudio`). Stop is unconditional — see [ADR-0001](docs/adr/0001-stop-is-unconditional.md).
-
-**Starting** (state of an LLM Server):
-The window after Start in which the LLM Server's process is up but not yet ready to serve. For `llamacpp` this lasts as long as the Model load takes, and the server already holds its address. `splash` binds its address only once the Model has loaded, so the launcher finds a loading Splash by its process instead (see [ADR-0015](docs/adr/0015-a-loading-splash-is-found-by-its-process.md)). Ollama and LM Studio have no such window — their server is ready before any Model is loaded. A Starting LLM Server is a first-class instance: it is visible (displayed as "starting…") and stoppable, but Activation will not displace it except via `--restart` — see [ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md).
-_Avoid_: "still-loading server", "booting", "warming up".
-
-## Flagged ambiguities
-
-- The Go interface is `LLMServer` (renamed from `Backend` in 1.3.0) and the config key is `servers:`, both aligned with the domain term **LLM Server**. The word *backend* still survives on the transient `RunningInstance.Backend` field — a per-instance snapshot rebuilt from live probes on every command and never written to disk. The launcher persists no state: there is no on-disk state struct or schema, and instance identity is derived live from the `host:port` each server binds (see [ADR-0006](docs/adr/0006-instances-are-keyed-by-address.md) and [ADR-0007](docs/adr/0007-profile-activation-idempotency.md)). Legacy `state-*.json` files written by pre-live-derivation versions are best-effort deleted on startup and carry no meaning.
-- There is no global "active" or "current" Profile or LLM Server. Each running LLM Server has its own active Profile/Model (derived live by probing that server, not stored anywhere), but the system never picks one as canonical. When an action could apply to several running LLM Servers, the user selects which one — in the CLI via an optional argument (`llama-launcher stop [target]`, `llama-launcher unload [profile]`), in the TUI via a sub-list. When only one is a valid target, selection collapses to a single auto-resolved option. Avoid "active server," "primary server," "current server" as cross-cutting terms.
+- `capcom know tree glossary`: the sections and their terms
+- `capcom know show "<Term>"`: one term, for example `capcom know show "Profile"`
+- To change a term, edit its file under `.capcom/knowledge/glossary/` in place.

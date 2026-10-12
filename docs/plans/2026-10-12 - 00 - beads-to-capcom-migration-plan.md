@@ -174,7 +174,9 @@ internal/launcher/backend.go — LLMServer doc comment (stays); capcom origin/ma
 - `grep -n -i -E 'beads|\x60bd\x60' llama-launcher.TDD.md` prints nothing
 **Commit:** `docs: cite decision records and the glossary by their Notes`
 
-## 7. Pointer stubs replace CONTEXT.md and docs/adr
+## 7. Pointer stubs replace CONTEXT.md and docs/adr — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): the 17 docs/adr deletions are already staged by git rm and docs/adr/README.md is intent-to-add (git add -N); CONTEXT.md is modified, unstaged
 
 Depends on item 6.
 
