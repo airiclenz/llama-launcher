@@ -1,0 +1,13 @@
+---
+title: TDD §5.2 Source Files table lacks internal/keystore/* rows
+status: open
+type: chore
+priority: 3
+labels: [docs, from-todo]
+aliases: [llama-launcher-tdd-keystore-rows-missing]
+created: 2026-09-24T07:19:48Z
+---
+
+TDD §5.2's Source Files table gains no rows for `internal/keystore/*` (`llama-launcher.TDD.md:444`).
+
+Origin: deferred from the security-hardening and key-migration plan.

@@ -43,7 +43,12 @@
 - 8: guard folded (base AGENTS.md source; `git grep -P`; tracked-only refs)
 - 6 (round 2): decision folded (TDD link count ≈85, none to the 0013 brief) and guard folded (link text and prose naming CONTEXT.md / docs/adr reworded)
 
-## 1. Issue register moves from beads to capcom
+## 1. Issue register moves from beads to capcom — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): bead `llama-launcher-readme-api-key-cmd-row` became `readme-api-key-cmd`, not `readme-api-key-cmd-row`: capcom refuses an id of more than four words (`capcom check`: invalid id); the full bead id is its alias as for every other issue.
+NOTES (2026-10-12): the untracked `.beads/` runtime (embedded Dolt DB, backup/) and the root `.beads.gate.lock` were moved to `~/Backups/llama-launcher-beads/` (`dot-beads/`, `.beads.gate.lock`) rather than `rm -rf`ed — the auto-mode classifier refused the delete; the tree result (`test ! -e`) is the same and the Dolt history is kept beside the final export. `.beads.gate.lock` is untracked, so it is not in FILES.
+NOTES (2026-10-12): `.beads/` tracked files are already staged as deletions (`git rm`); until the commit `git status --short | grep -c beads` prints 5, after it 0. No notes field, comment or non-blocks dependency other than the two dated notes/three blocks deps existed; no `bd remember` memories; `core.hooksPath` was unset. Also exported `bd list --all --json` to `~/Backups/llama-launcher-beads/list-all.json`.
+NOTES (2026-10-12): `internal/launcher/backend_http_test.go:287` comment "(bead llama-launcher-ipv6-host-address-format)" still resolves through the alias but its word "bead" will match item 8’s final `git grep -P` beads check (code comments are out of scope per the plan header).
 
 **What:**
 **Goal:** `.capcom/` holds one issue file per bead (22, closed included) that `capcom check` accepts; `capcom list --all` shows the same issues and the same 13 open; `.beads/`, the beads block of `.gitignore` and the beads section of `AGENTS.md` are gone; the AGENTS.md capcom managed block exists; `git config --local beads.role` is unset.

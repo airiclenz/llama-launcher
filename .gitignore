@@ -5,10 +5,3 @@ llama-launcher
 frame-design.txt
 media/logo.png
 validate
-
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-.beads/proxieddb/
-*.gate.lock*

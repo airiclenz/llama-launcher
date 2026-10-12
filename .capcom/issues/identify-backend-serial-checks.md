@@ -1,0 +1,13 @@
+---
+title: Parallelise identifyBackend health checks
+status: open
+type: task
+priority: 4
+labels: [from-todo, performance]
+aliases: [llama-launcher-identify-backend-serial-checks]
+created: 2026-09-24T07:19:45Z
+---
+
+`identifyBackend(addr)` health-checks the backends serially — parallelising would shave latency from `stop <host:port>`.
+
+Origin: loose end carried from the 2026-06-08 handoff.
