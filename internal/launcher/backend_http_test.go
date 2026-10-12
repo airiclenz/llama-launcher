@@ -284,7 +284,7 @@ func TestProbeAddr(t *testing.T) {
 	}{
 		{"IPv4 wildcard maps to loopback", "0.0.0.0:1111", "127.0.0.1:1111"},
 		// Helper-only: IPv6 host addresses are out of scope launcher-wide
-		// (bead llama-launcher-ipv6-host-address-format).
+		// (issue ipv6-host-address-format).
 		{"IPv6 wildcard maps to loopback", "[::]:1111", "[::1]:1111"},
 		{"empty host maps to loopback", ":1111", "127.0.0.1:1111"},
 		{"loopback unchanged", "127.0.0.1:1111", "127.0.0.1:1111"},

@@ -194,7 +194,10 @@ capcom origin/main CONTEXT.md, docs/adr/README.md — stub wording; internal/lau
 - `capcom check` exits 0 with no output
 **Commit:** `docs: leave pointers where the glossary and ADRs were`
 
-## 8. Working rules as Knowledge Notes
+## 8. Working rules as Knowledge Notes — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): internal/launcher/backend_http_test.go: comment-only edit `(bead llama-launcher-ipv6-host-address-format)` -> `(issue ipv6-host-address-format)`; item 1 had left it, and without it this item's final beads `git grep -P` Acceptance check fails. No code change.
+NOTES (2026-10-12): left out of issue-conventions on purpose: the beads storage, sync, export and bd-quirk rules, which have no capcom equivalent (issues are plain files versioned with the code).
 
 Depends on item 7.
 

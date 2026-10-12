@@ -4,6 +4,11 @@ Consult `llama-launcher.TDD.md` for all project details: architecture, build com
 
 Supported LLM Servers: `llamacpp`, `ollama`, `lmstudio` and `splash` — see the `glossary` Note (`capcom know show glossary`) for the domain terms and `llama-launcher.TDD.md` for how each one is driven.
 
+Project knowledge lives in capcom's Knowledge tree (listed at the end of this file). Before
+starting work, run `capcom know tree --depth 2`, then `capcom know tree <id>` to open a branch,
+and `capcom know show <id>` on every Note whose title matches the task. `--depth 2` prints the
+top level and its direct children only.
+
 <!-- BEGIN CAPCOM -->
 <!-- Managed by capcom: run "capcom agents" to refresh. Edits inside these markers are overwritten. -->
 ## Issues and knowledge: capcom
@@ -22,5 +27,7 @@ Without a `capcom` binary, install it from https://github.com/airiclenz/capcom#i
 Knowledge tree, top level:
 
 - `decisions`: Decision records: why llama-launcher works the way it does, one Note per record with its sections as children
+- `docs-layout`: Before reading or changing a design: where the glossary, decisions, plans, handoffs and changelog live
 - `glossary`: Domain glossary: the terms to use in code, docs and messages, one Note per term
+- `issue-conventions`: Before filing or changing an issue: how issues are named, labelled, planned and closed
 <!-- END CAPCOM -->
