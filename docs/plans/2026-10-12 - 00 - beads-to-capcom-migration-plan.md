@@ -67,7 +67,7 @@ llama-launcher.TDD.md — contribution workflow step 1 (beads line); internal/la
 - `git grep -P -n -i '\bbeads?\b|\bbd [a-z]|\.beads' -- AGENTS.md .gitignore` prints nothing
 **Commit:** `chore(issues): move the issue register from beads to capcom`
 
-## 2. Session briefing through Claude Code hooks
+## 2. Session briefing through Claude Code hooks — ✅ DONE (2026-10-12)
 
 Depends on item 1.
 
