@@ -44,7 +44,7 @@
 - Changing how the binaries print their version.
 - actionlint, golangci-lint, govulncheck, SHA-pinning of the existing ci.yml steps.
 
-## 1. Tag on VERSION bump in CI
+## 1. Tag on VERSION bump in CI — ✅ DONE (2026-10-12)
 
 **What:**
 **Goal:** A push to main that changes VERSION to a bare X.Y.Z gets an annotated `vX.Y.Z` tag created by CI, and `.github/scripts/version-bump.sh` reports bump commits for a range.
