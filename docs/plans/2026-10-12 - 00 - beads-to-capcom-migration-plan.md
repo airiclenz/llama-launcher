@@ -84,7 +84,7 @@ Depends on item 1.
 - `grep -rn '"bd ' .claude/settings.json .claude/settings.local.json` prints nothing
 **Commit:** `chore(claude): brief every session with capcom prime`
 
-## 3. Glossary as a Note tree
+## 3. Glossary as a Note tree — ✅ DONE (2026-10-12)
 
 Depends on item 1.
 
