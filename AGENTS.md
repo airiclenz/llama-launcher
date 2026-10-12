@@ -2,7 +2,7 @@
 
 Consult `llama-launcher.TDD.md` for all project details: architecture, build commands, coding standards, and contribution workflow.
 
-Supported LLM Servers: `llamacpp`, `ollama`, `lmstudio` and `splash` — see `CONTEXT.md` for the domain terms and `llama-launcher.TDD.md` for how each one is driven.
+Supported LLM Servers: `llamacpp`, `ollama`, `lmstudio` and `splash` — see the `glossary` Note (`capcom know show glossary`) for the domain terms and `llama-launcher.TDD.md` for how each one is driven.
 
 <!-- BEGIN CAPCOM -->
 <!-- Managed by capcom: run "capcom agents" to refresh. Edits inside these markers are overwritten. -->

@@ -5,7 +5,7 @@
 // implements every tool by shelling out to the installed llama-launcher CLI.
 // It never proxies inference traffic — it only dispatches control commands —
 // so llama-launcher itself keeps no listener and ADR-0002 ("not a router")
-// stays intact (see docs/adr/0008-mcp-control-plane-adapter.md).
+// stays intact (see ADR-0008).
 //
 // Access is gated by an IP allowlist plus a narrow bind to the container-facing
 // interface, and cross-origin browser requests are refused outright; no token

@@ -89,7 +89,7 @@ Other top-level options control launcher behaviour (`auto_stop_server`, `auto_un
 | `lmstudio` | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
 | `splash` | `127.0.0.1:8000` | Hugging Face `owner/repo` id (e.g. `incoai/Qwen3.8-27B-Splash`), installed once via `splash serve --model …` |
 
-For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp` and `splash`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](docs/adr/0001-stop-is-unconditional.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
+For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp` and `splash`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](.capcom/knowledge/decisions/adr-0001.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
 
 #### Splash
 
@@ -102,7 +102,7 @@ Splash, like `llamacpp`, is restarted to switch models: each profile starts `spl
   ```
 
   A launcher or MCP adapter started by launchd does not see your shell's `PATH`, so its `PATH` must include the wrapper's directory (e.g. `~/.local/bin`) too.
-- **Install each model once, by hand.** Run `splash serve --model <owner/repo>` in a terminal; the first run downloads the model, which can take around twenty minutes. The launcher checks the Hugging Face cache (`$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`) for the installed model and refuses a profile whose model is not there, naming that command. It never starts the download itself ([ADR-0014](docs/adr/0014-splash-models-must-be-installed.md)).
+- **Install each model once, by hand.** Run `splash serve --model <owner/repo>` in a terminal; the first run downloads the model, which can take around twenty minutes. The launcher checks the Hugging Face cache (`$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`) for the installed model and refuses a profile whose model is not there, naming that command. It never starts the download itself ([ADR-0014](.capcom/knowledge/decisions/adr-0014.md)).
 - **Parameters.** `context_size` becomes `--max-context`, and `host` / `port` become `--host` / `--port`. Sampling parameters are ignored. Pass any other Splash flag — reasoning effort, KV format, max memory — through the profile's `extra_args`.
 - **Network access.** Splash refuses requests whose `Host` names a host it does not know. When a profile's `host` is not loopback (for example `0.0.0.0` or a LAN address), the launcher adds `--allowed-host` for the machine's hostname and its short form (`Apollo-II.local` and `Apollo-II`), so LAN clients can reach it by IP or by hostname. Add `--allowed-host` to `extra_args` only for other names, such as a reverse proxy or a DNS alias. A Splash bound to `0.0.0.0` is still probed, listed and stopped by its configured address; the launcher's own checks reach it over loopback.
 
@@ -242,7 +242,7 @@ llama-launcher config reset                 # Reset config to the example (overw
 llama-launcher version                      # Print version
 ```
 
-A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](docs/adr/0010-starting-instances-are-visible-and-stoppable.md)). Splash binds its port only once the model has loaded, so the launcher finds a loading Splash server by its process instead (a Splash launch for that host and port with nothing listening yet) and treats it the same way ([ADR-0015](docs/adr/0015-a-loading-splash-is-found-by-its-process.md)). Windows is the exception: the launcher cannot read the process table there, so a loading Splash stays hidden until it is ready. When a load started from the interactive menu outlasts the startup wait, the menu does not report an error: it keeps watching in a `Still loading` popup that ticks the elapsed time, prints the usual confirmation once the server is ready, and reports an error only if the server stops running. Press Esc to return to the menu and leave the server loading.
+A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](.capcom/knowledge/decisions/adr-0010.md)). Splash binds its port only once the model has loaded, so the launcher finds a loading Splash server by its process instead (a Splash launch for that host and port with nothing listening yet) and treats it the same way ([ADR-0015](.capcom/knowledge/decisions/adr-0015.md)). Windows is the exception: the launcher cannot read the process table there, so a loading Splash stays hidden until it is ready. When a load started from the interactive menu outlasts the startup wait, the menu does not report an error: it keeps watching in a `Still loading` popup that ticks the elapsed time, prints the usual confirmation once the server is ready, and reports an error only if the server stops running. Press Esc to return to the menu and leave the server loading.
 
 A server that rejects the configured `api_key` (it answers every backend probing its address with 401 or 403) does not vanish either: `stop` still stops it by signalling whatever listens there, and reports `Stopped server at <host:port>` because no backend could identify it. `load` and `unload` against it fail with the "check api_key" error, and `auto_stop_server` leaves it alone. Only an explicit `stop` touches it. `status`, the menu and every server listing show it as `auth failed at <host:port> — check api_key in the servers section`, and `status --json` reports it as an entry with `"backend": ""`, `"running": false` and `"auth_failed": true` (every other entry carries `"auth_failed": false`).
 
@@ -262,7 +262,7 @@ Any interface counts: a process holding `127.0.0.1:<port>` blocks a `0.0.0.0` bi
 
 ## Remote control from a container (MCP)
 
-`llama-launcher` itself has no network surface — it is a one-shot CLI ([ADR-0002](docs/adr/0002-not-a-router.md)). When a client on another machine needs to control which model is running — typically a coding agent in a container reaching back to the host — an **optional, separate** binary, `llama-launcher-mcp`, exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP. It runs on the host, implements every tool by shelling out to the CLI, and never proxies inference traffic ([ADR-0008](docs/adr/0008-mcp-control-plane-adapter.md)).
+`llama-launcher` itself has no network surface — it is a one-shot CLI ([ADR-0002](.capcom/knowledge/decisions/adr-0002.md)). When a client on another machine needs to control which model is running — typically a coding agent in a container reaching back to the host — an **optional, separate** binary, `llama-launcher-mcp`, exposes the lifecycle commands as [MCP](https://modelcontextprotocol.io) tools over HTTP. It runs on the host, implements every tool by shelling out to the CLI, and never proxies inference traffic ([ADR-0008](.capcom/knowledge/decisions/adr-0008.md)).
 
 Tools: `list_profiles`, `server_status`, `tail_log` (read) and `load_profile`, `unload_model`, `start_server`, `stop_server` (mutating, omitted under `--read-only`).
 
@@ -284,7 +284,7 @@ Then point the container's MCP client at `http://192.168.64.1:7331/mcp` — no t
 
 ## Using llama-launcher as a Go library
 
-The launcher is importable as well as runnable: the `launcher/` package is a curated Go API over the same core, so your program can load a profile, see what is running, and stop or unload it in-process instead of shelling out to the CLI ([ADR-0011](docs/adr/0011-public-library-facade.md), [TDD §16](llama-launcher.TDD.md#16-public-library-facade)).
+The launcher is importable as well as runnable: the `launcher/` package is a curated Go API over the same core, so your program can load a profile, see what is running, and stop or unload it in-process instead of shelling out to the CLI ([ADR-0011](.capcom/knowledge/decisions/adr-0011.md), [TDD §16](llama-launcher.TDD.md#16-public-library-facade)).
 
 ```bash
 go get github.com/airiclenz/llama-launcher/launcher@v1.8.1
@@ -327,7 +327,7 @@ Two caveats before you wire it in: there is **one config per process** (per-serv
 
 ### Supported platforms
 
-The package **compiles on macOS, Linux and Windows**, and each verb works wherever its mechanism exists ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)). No build tags, no stubs on your side.
+The package **compiles on macOS, Linux and Windows**, and each verb works wherever its mechanism exists ([ADR-0012](.capcom/knowledge/decisions/adr-0012.md)). No build tags, no stubs on your side.
 
 | Platform | What you get |
 |---|---|
@@ -350,7 +350,7 @@ make test-all          # Both test layers (host only)
 make clean             # Remove the binaries
 ```
 
-`make cross` is the platform contract as a check ([ADR-0012](docs/adr/0012-the-library-compiles-everywhere-and-actuates-where-it-can.md)): it builds and vets the whole tree — test files included — for macOS, Linux and Windows, so a portability regression fails here instead of in an importing client's CI.
+`make cross` is the platform contract as a check ([ADR-0012](.capcom/knowledge/decisions/adr-0012.md)): it builds and vets the whole tree — test files included — for macOS, Linux and Windows, so a portability regression fails here instead of in an importing client's CI.
 
 GitHub Actions runs `make check` on macOS and Linux for every push to `main` and every pull request (`.github/workflows/ci.yml`).
 
@@ -364,7 +364,7 @@ All code lives in `internal/launcher/`, with the public `launcher/` package a th
 
 The launcher does not persist runtime state. Each command rediscovers running servers by probing the addresses in your config and asking each server's own API which model is loaded. `llama-launcher logs` covers launcher-managed servers only.
 
-The architectural decisions are written down as [ADRs](docs/adr/); the domain language is in [CONTEXT.md](CONTEXT.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
+The architectural decisions are written down as [decision records](.capcom/knowledge/decisions.md); the domain language is in the [glossary](.capcom/knowledge/glossary.md); the technical design doc is [llama-launcher.TDD.md](llama-launcher.TDD.md).
 
 | Path | Purpose |
 |------|---------|

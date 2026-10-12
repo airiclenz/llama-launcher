@@ -149,7 +149,9 @@ docs/adr/0010-starting-instances-are-visible-and-stoppable.md — Amended / Supe
 - `grep -rn -E '\]\([^)]*(docs/adr|\.md)[^)]*\)' .capcom/knowledge/decisions` prints nothing
 **Commit:** `docs(knowledge): move ADRs 0009-0016 and the Gateway brief into Knowledge`
 
-## 6. Human docs and code cite the Notes
+## 6. Human docs and code cite the Notes — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): the "issue-conventions" Note named in the rewritten TDD contribution-workflow sentence is created by item 8, so it does not resolve yet; the sentence cites it by id only (no link), as the item's guard prescribes.
 
 Depends on items 3 and 5.
 
