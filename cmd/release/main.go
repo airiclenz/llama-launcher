@@ -1,0 +1,104 @@
+// Command release is llama-launcher's release maintainer program: it does the deterministic half of
+// cutting a release — building the archives, reporting where the release stands, making the
+// rollup and bump commits, publishing the release and its package channels, and smoke-testing a
+// published release — the same way on Linux, macOS and Windows, leaving the judgment half
+// (release notes, the version to cut) to the committed release skills.
+//
+//	go run ./cmd/release dist [--src DIR] [--out DIR]
+//	go run ./cmd/release status [vX.Y.Z] [--json]
+//	go run ./cmd/release prepare vX.Y.Z
+//	go run ./cmd/release publish vX.Y.Z --notes-file F [--dry-run] [--tag-timeout D]
+//	go run ./cmd/release smoke [vX.Y.Z] [--dist-dir D]
+//
+// Every external command it runs goes through one runner seam (runner.go), so the tests of its
+// verbs never reach the network, a real `git` or a real toolchain. The one exception is
+// versionbump_test.go, which runs the tag-on-version-bump workflow's script against a throwaway
+// local git repository, with no network and no gh (ADR 0008's bumptest amendment). What it asks of the llama-launcher checkout and its
+// GitHub repository goes through the repo seam (repo.go) above it: the verbs' tests hold that
+// state in memRepo and never fake an own-repo command by argv, which only execRepo's own tests
+// pin. The runner's fakes answer the toolchain, dist's read of its source tree's commit time, and
+// the tap, bucket and winget-pkgs commands.
+//
+// It is a dev tool, never a release asset: dist does not ship it, and it imports nothing from
+// llama-launcher's internal packages.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+)
+
+// The exit codes. A bad command line is told apart from a run that started and failed, so a
+// script or skill driving this program can react to each.
+const (
+	exitRunFailed = 1
+	exitBadUsage  = 2
+)
+
+func main() {
+	commands := execRunner{}
+	if err := newRootCommand(commands, execRepos(commands)).ExecuteContext(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "release:", err)
+		os.Exit(exitCodeFor(err))
+	}
+}
+
+// newRootCommand builds the command tree over commands, the runner every verb executes its
+// external commands through, and openRepo, which every verb that reads the llama-launcher checkout
+// opens its repo with. Errors are printed by main, not by Cobra, so a failure reads the
+// same whichever verb produced it; usage still prints for a bad command line, because that is the
+// one failure the usage text actually answers. The root declares no Args, so Cobra's own check
+// refuses an unknown verb instead of printing help and exiting 0.
+func newRootCommand(commands runner, openRepo repoOpener) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "release",
+		Short: "Build and publish a llama-launcher release",
+		Long: "release does the deterministic work of a llama-launcher release: it cross-builds the\n" +
+			"release archives and their checksums, reports the release gate and where each\n" +
+			"publish step stands, makes the CHANGELOG rollup and VERSION bump commits, publishes\n" +
+			"the GitHub release, the Homebrew formula, the Scoop manifest and the winget\n" +
+			"submission, and smoke-tests a published release, the same way on every host.",
+		SilenceErrors: true,
+	}
+	cmd.AddCommand(newDistCommand(commands))
+	cmd.AddCommand(newStatusCommand(commands, openRepo))
+	cmd.AddCommand(newPrepareCommand(commands, openRepo))
+	cmd.AddCommand(newPublishCommand(commands, openRepo))
+	cmd.AddCommand(newSmokeCommand(commands, openRepo))
+	return cmd
+}
+
+// runError marks a failure that happened after the command line was accepted, so exitCodeFor
+// can tell a mistyped invocation from a run that started and failed.
+type runError struct{ err error }
+
+func (e runError) Error() string { return e.err.Error() }
+func (e runError) Unwrap() error { return e.err }
+
+// runE adapts a verb's body: usage stops being printed the moment the command line has been
+// accepted, and every failure from here on is marked as a run failure rather than a usage one.
+// Cobra's own flag and argument errors never pass through here, which is what makes them
+// distinguishable.
+func runE(run func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		if err := run(cmd, args); err != nil {
+			return runError{err: err}
+		}
+		return nil
+	}
+}
+
+// exitCodeFor reports the status an error asks for: a run that started and failed exits 1, a
+// command line that never started one exits 2 with its usage printed.
+func exitCodeFor(err error) int {
+	var failed runError
+	if errors.As(err, &failed) {
+		return exitRunFailed
+	}
+	return exitBadUsage
+}

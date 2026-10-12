@@ -58,7 +58,11 @@
 - `test -x .github/scripts/version-bump.sh`
 **Commit:** `ci: tag the commit that bumps VERSION`
 
-## 2. Port capcom's release program verbatim
+## 2. Port capcom's release program verbatim — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): Formula desc, Scoop description and winget ShortDescription use the existing tap formula's desc ("CLI tool for managing local LLM servers (llama.cpp, Ollama, LM Studio, Splash)"); winget package id renamed AiricLenz.Capcom -> AiricLenz.LlamaLauncher (manifest dir manifests/a/AiricLenz/LlamaLauncher), runner test env vars CAPCOM_* -> LAUNCHER_*, winget LicenseUrl points at LICENSE.md.
+NOTES (2026-10-12): `llama-launcher version` prints the bare version, while the ported smoke check and formula test comment expect "llama-launcher X.Y.Z"; left as ported, since item 6 owns the version smoke.
+NOTES (2026-10-12): gofmt realigned two const/map blocks (probes.go, smoke_test.go) after the rename changed literal widths.
 
 **What:**
 **Goal:** `cmd/release` exists as a copy of capcom's `cmd/release`, with every capcom project literal renamed to llama-launcher, and `go test ./cmd/release/...` passes.
