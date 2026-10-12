@@ -113,7 +113,12 @@ Depends on item 2.
 - `! grep -rniE 'scoop|winget|komac' cmd/release`
 **Commit:** `refactor(release): ship through GitHub and Homebrew only`
 
-## 4. Dist builds both binaries for four targets
+## 4. Dist builds both binaries for four targets — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): consequential edit — cmd/release/probes.go: made necessary by distTargets dropping windows (probeRelease doc comment said "the six archives").
+NOTES (2026-10-12): channels_test.go needed no change (it slices releaseAssetsV02411 by len(distTargets)); the "six release targets" comment in templates/llama-launcher.rb.tmpl and testdata/llama-launcher-0.0.0.rb, and render_test's windows checksum fixtures, are left to item 6, which rewrites the formula and render.
+NOTES (2026-10-12): the real `llama-launcher version` prints a bare "1.8.1", while smoke's checkReportsVersion expects "llama-launcher X.Y.Z"; item 6 (version smoke, not yet done) owns that check.
+
 
 **What:**
 **Goal:** `go run ./cmd/release dist` writes four archives, `llama-launcher_<X.Y.Z>_<os>_<arch>.tar.gz` for darwin and linux on amd64 and arm64, plus SHA256SUMS.

@@ -46,7 +46,7 @@ type smokeFake struct {
 }
 
 // newSmokeFake is a release published in full: the annotated tag is on origin and fetched, the
-// six archives and SHA256SUMS are on the release, every binary carries the tag's commit, brew
+// four archives and SHA256SUMS are on the release, every binary carries the tag's commit, brew
 // is installed and upgrades onto the version.
 func newSmokeFake(t *testing.T) *smokeFake {
 	t.Helper()
@@ -94,7 +94,7 @@ func (f *smokeFake) openRepo(string) repo {
 	return f.repo
 }
 
-// publishedRelease builds publishVersion's six archives and SHA256SUMS with the fake toolchain
+// publishedRelease builds publishVersion's four archives and SHA256SUMS with the fake toolchain
 // and returns the directory holding them.
 func publishedRelease(t *testing.T) string {
 	t.Helper()
@@ -232,8 +232,8 @@ func TestSmokeChecks(t *testing.T) {
 			wantResults: [][2]string{
 				{"PASS", "annotated tag v0.24.11 on origin"},
 				{"PASS", "SHA256SUMS in"},
-				{"PASS", "6 assets downloaded, all checksums match"},
-				{"PASS", "6 assets carry vcs.revision 81eec1b3ac7d = the tag"},
+				{"PASS", "4 assets downloaded, all checksums match"},
+				{"PASS", "4 assets carry vcs.revision 81eec1b3ac7d = the tag"},
 				{"PASS", "the released binary reports \"llama-launcher 0.24.11"},
 				{"PASS", "brew's llama-launcher reports \"llama-launcher 0.24.11\""},
 			},
@@ -314,25 +314,25 @@ func TestSmokeChecks(t *testing.T) {
 			adjust: func(fake *smokeFake, _ *smokeOptions) { fake.revision = "0123456789abcdef0123456789abcdef01234567" },
 			wantResults: [][2]string{
 				{"FAIL", "asset llama-launcher_0.24.11_linux_amd64.tar.gz was built from 0123456789abcdef"},
-				{"FAIL", "asset llama-launcher_0.24.11_windows_arm64.zip was built from 0123456789abcdef"},
+				{"FAIL", "asset llama-launcher_0.24.11_darwin_arm64.tar.gz was built from 0123456789abcdef"},
 			},
-			wantTally: "5 passed, 6 failed, 0 skipped",
+			wantTally: "5 passed, 4 failed, 0 skipped",
 		},
 		"binaries without a revision": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.revision = "" },
 			wantResults: [][2]string{{"FAIL", "carries no vcs.revision"}},
-			wantTally:   "5 passed, 6 failed, 0 skipped",
+			wantTally:   "5 passed, 4 failed, 0 skipped",
 		},
 		"binaries without build information": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.isUnstamped = true },
 			wantResults: [][2]string{{"FAIL", "carries no build information"}},
-			wantTally:   "5 passed, 6 failed, 0 skipped",
+			wantTally:   "5 passed, 4 failed, 0 skipped",
 		},
 		"binaries built from a modified tree": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) { fake.modified = "true" },
 			wantResults: [][2]string{
 				{"warning", "asset llama-launcher_0.24.11_darwin_amd64.tar.gz was built from a modified tree"},
-				{"PASS", "6 assets carry vcs.revision"},
+				{"PASS", "4 assets carry vcs.revision"},
 			},
 			wantTally: "6 passed, 0 failed, 0 skipped",
 		},
@@ -406,22 +406,23 @@ func otherBuild(t *testing.T, releaseDir, name string) string {
 	return dir
 }
 
-// TestSmokeRunsTheHostsZipArchive pins the Windows host path: the host's archive is a .zip, and
-// the binary run is the llama-launcher.exe inside it — the windows/amd64 build, not another platform's.
-func TestSmokeRunsTheHostsZipArchive(t *testing.T) {
+// TestSmokeRunsTheHostsOwnLauncherBinary pins the host path: the binary run is the llama-launcher
+// inside the host's own archive — the darwin/arm64 build of the root package, not another
+// platform's and not llama-launcher-mcp beside it.
+func TestSmokeRunsTheHostsOwnLauncherBinary(t *testing.T) {
 	t.Parallel()
 	fake := newSmokeFake(t)
 
 	result := runTestSmoke(t, fake, func(options *smokeOptions) {
-		options.goos = "windows"
-		options.goarch = "amd64"
+		options.goos = "darwin"
+		options.goarch = "arm64"
 	})
 
 	if result.err != nil {
 		t.Fatalf("smoke failed: %v\n%s", result.err, result.output)
 	}
-	if !hasResult(result.output, "PASS", "GOOS=windows GOARCH=amd64") {
-		t.Errorf("the host check did not run the windows/amd64 binary:\n%s", result.output)
+	if !hasResult(result.output, "PASS", "stub binary . [CGO_ENABLED=0 GOOS=darwin GOARCH=arm64]") {
+		t.Errorf("the host check did not run the darwin/arm64 llama-launcher binary:\n%s", result.output)
 	}
 	var ran []string
 	for _, call := range result.commands.calls {
@@ -429,8 +430,8 @@ func TestSmokeRunsTheHostsZipArchive(t *testing.T) {
 			ran = append(ran, call.name)
 		}
 	}
-	if len(ran) != 1 || filepath.Base(ran[0]) != "llama-launcher.exe" {
-		t.Errorf("ran %q version, want the one llama-launcher.exe from the zip", ran)
+	if len(ran) != 1 || filepath.Base(ran[0]) != "llama-launcher" {
+		t.Errorf("ran %q version, want the one llama-launcher from the archive", ran)
 	}
 }
 

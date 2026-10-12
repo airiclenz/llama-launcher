@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"compress/gzip"
 	"context"
 	"debug/buildinfo"
@@ -76,7 +75,7 @@ type smokeRun struct {
 	sums       string
 	sumsErr    error
 	isSumsRead bool
-	// isDownloaded is set once all six archives downloaded and matched SHA256SUMS.
+	// isDownloaded is set once all four archives downloaded and matched SHA256SUMS.
 	isDownloaded bool
 
 	passed  int
@@ -93,7 +92,7 @@ func newSmokeCommand(commands runner, openRepo repoOpener) *cobra.Command {
 		Use:   "smoke [vX.Y.Z] [--dist-dir D]",
 		Short: "Check a published release from the outside",
 		Long: "smoke proves a published release is usable: the tag is on origin and annotated;\n" +
-			"with --dist-dir, that build's SHA256SUMS equals the published one; the six archives\n" +
+			"with --dist-dir, that build's SHA256SUMS equals the published one; the four archives\n" +
 			"download and match SHA256SUMS; every binary's build stamp names the tagged commit; the\n" +
 			"host's archive holds a binary reporting the version; where llama-launcher is installed with\n" +
 			"Homebrew, `brew upgrade llama-launcher` moves it onto the version. A check whose tool or\n" +
@@ -427,7 +426,7 @@ func (r *smokeRun) publishedSums(ctx context.Context) (string, error) {
 	return r.sums, r.sumsErr
 }
 
-// archiveNames are the six archives a release of the version carries.
+// archiveNames are the four archives a release of the version carries.
 func (r *smokeRun) archiveNames() []string {
 	names := make([]string, 0, len(distTargets))
 	for _, target := range distTargets {
@@ -436,25 +435,19 @@ func (r *smokeRun) archiveNames() []string {
 	return names
 }
 
-// extractBinary copies the target's binary out of its downloaded archive — the one entry
-// <stem>/<binary> that the package channels read — into destDir, executable,
-// and returns its path.
+// extractBinary copies the target's llama-launcher binary out of its downloaded archive — the
+// entry <stem>/llama-launcher that the package channels read — into destDir, executable, and
+// returns its path.
 func (r *smokeRun) extractBinary(target distTarget, destDir string) (string, error) {
 	bare := bareRelease(r.version)
 	archivePath := filepath.Join(r.workDir, target.archiveName(bare))
-	entry := target.stem(bare) + "/" + target.binaryFile()
+	entry := target.stem(bare) + "/" + binaryName
 	if err := os.MkdirAll(destDir, directoryMode); err != nil {
 		return "", fmt.Errorf("create %s: %w", destDir, err)
 	}
-	binary := filepath.Join(destDir, target.binaryFile())
+	binary := filepath.Join(destDir, binaryName)
 
-	var err error
-	if target.isWindows() {
-		err = extractZipEntry(archivePath, entry, binary)
-	} else {
-		err = extractTarGzEntry(archivePath, entry, binary)
-	}
-	if err != nil {
+	if err := extractTarGzEntry(archivePath, entry, binary); err != nil {
 		return "", fmt.Errorf("read %s from the archive: %w", entry, err)
 	}
 	return binary, nil
@@ -462,27 +455,6 @@ func (r *smokeRun) extractBinary(target distTarget, destDir string) (string, err
 
 // errNoEntry is an archive lacking the entry asked for.
 var errNoEntry = errors.New("the archive holds no such entry")
-
-// extractZipEntry writes the zip archive's entry to destination.
-func extractZipEntry(archivePath, entry, destination string) error {
-	archive, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = archive.Close() }()
-	for _, file := range archive.File {
-		if file.Name != entry {
-			continue
-		}
-		contents, err := file.Open()
-		if err != nil {
-			return err
-		}
-		defer func() { _ = contents.Close() }()
-		return writeExecutable(destination, contents)
-	}
-	return errNoEntry
-}
 
 // extractTarGzEntry writes the gzip-compressed tar archive's entry to destination.
 func extractTarGzEntry(archivePath, entry, destination string) error {

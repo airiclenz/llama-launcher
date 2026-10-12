@@ -116,7 +116,7 @@ func probeTag(ctx context.Context, env probeEnv, version releaseVersion) stepRep
 }
 
 // probeRelease reports the GitHub release done only when it carries every asset a release ships:
-// the six archives and SHA256SUMS, each fully uploaded.
+// the four archives and SHA256SUMS, each fully uploaded.
 func probeRelease(ctx context.Context, env probeEnv, version releaseVersion) stepReport {
 	tag := version.String()
 	uploaded, isFound, err := env.repo.ReleaseAssets(ctx, tag)

@@ -121,8 +121,7 @@ func (f *publishFake) respond(call recordedCall) (string, error) {
 	case command == "git log -1 --format=%ct HEAD":
 		return testCommitTime, nil
 	case call.name == "go" && len(args) > 0 && args[0] == "build":
-		output := args[slices.Index(args, "-o")+1]
-		return "", os.WriteFile(output, []byte(stubBinary(call.env)), 0o755)
+		return "", stubBuild(call.env, args)
 	}
 	if output, isAnswered, err := f.respondChannel(call); isAnswered {
 		return output, err
@@ -251,7 +250,7 @@ func lineIndex(lines []string, prefix string) int {
 // TestPublishFirstRunConvergesTheTagThenTheRelease pins a first run's order end to end: push
 // HEAD, wait for the CI-made tag, fetch it — the memRepo resolves no tag before it is fetched, so
 // a run that resolved it first would fail — then clone at the tag, build every archive and
-// create the release with the seven assets in release order, and print every step done.
+// create the release with the five assets in release order, and print every step done.
 func TestPublishFirstRunConvergesTheTagThenTheRelease(t *testing.T) {
 	t.Parallel()
 	fake := newPublishFake()
@@ -265,7 +264,7 @@ func TestPublishFirstRunConvergesTheTagThenTheRelease(t *testing.T) {
 		"repo PushMain",
 		"repo FetchTag v0.24.11",
 		"repo CloneAt v0.24.11 ",
-		"go build", "go build", "go build", "go build", "go build", "go build",
+		"go build", "go build", "go build", "go build", "go build", "go build", "go build", "go build",
 		"repo CreateRelease v0.24.11 " + result.notesPath + " ",
 	}
 	mutating := mutatingLines(result.commands)
@@ -307,12 +306,12 @@ func TestPublishChangesNothingWhenItHasNothingToDo(t *testing.T) {
 	}{
 		"second run over a finished release": {
 			fake:       finished,
-			wantOutput: []string{"tag      done  annotated tag v0.24.11 on origin", "release  done  release v0.24.11 with all 7 assets"},
+			wantOutput: []string{"tag      done  annotated tag v0.24.11 on origin", "release  done  release v0.24.11 with all 5 assets"},
 		},
 		"dry run over an unstarted release": {
 			fake:       newPublishFake(),
 			isDryRun:   true,
-			wantOutput: []string{"gate     cleared at", "plan (dry run, nothing was changed)", "  tag      push HEAD to origin/main", "  release  build the 7 assets in a fresh clone at v0.24.11"},
+			wantOutput: []string{"gate     cleared at", "plan (dry run, nothing was changed)", "  tag      push HEAD to origin/main", "  release  build the 5 assets in a fresh clone at v0.24.11"},
 		},
 	}
 	for name, tc := range cases {
@@ -424,7 +423,7 @@ func TestPublishDryRunWithABlockedGateFailsButPrintsThePlan(t *testing.T) {
 		"  tag      pending  origin has no tag v0.24.11",
 		"  release  pending  no GitHub release v0.24.11",
 		"  tag      push HEAD to origin/main",
-		"  release  build the 7 assets",
+		"  release  build the 5 assets",
 	} {
 		if !hasRow(result.output, want) {
 			t.Errorf("output lacks %q:\n%s", want, result.output)
@@ -535,12 +534,12 @@ func TestPublishPartialReleaseUploadsOnlyTheMissingAssets(t *testing.T) {
 		wantDownload bool
 	}{
 		"two archives missing": {
-			uploaded:     slices.Delete(slices.Clone(releaseAssetsV02411), 4, 6),
-			wantUploads:  []string{"llama-launcher_0.24.11_windows_amd64.zip", "llama-launcher_0.24.11_windows_arm64.zip"},
+			uploaded:     slices.Delete(slices.Clone(releaseAssetsV02411), 2, 4),
+			wantUploads:  []string{"llama-launcher_0.24.11_linux_amd64.tar.gz", "llama-launcher_0.24.11_linux_arm64.tar.gz"},
 			wantDownload: true,
 		},
 		"SHA256SUMS missing": {
-			uploaded:    releaseAssetsV02411[:6],
+			uploaded:    releaseAssetsV02411[:4],
 			wantUploads: []string{checksumsFile},
 		},
 	}
@@ -591,7 +590,7 @@ func TestPublishRefusesARebuildThatDoesNotMatchThePublishedSums(t *testing.T) {
 	t.Parallel()
 	fake := newPublishFake()
 	fake.tagged()
-	fake.repo.releases[publishVersion] = slices.Delete(slices.Clone(releaseAssetsV02411), 4, 6)
+	fake.repo.releases[publishVersion] = slices.Delete(slices.Clone(releaseAssetsV02411), 0, 2)
 	sums := rebuiltSums(t)
 	linuxHash, err := checksumFor(sums, "llama-launcher_0.24.11_linux_amd64.tar.gz")
 	if err != nil {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -48,10 +47,17 @@ func testSourceTreeAt(t *testing.T, version string) string {
 	return sourceDir
 }
 
-// stubBinary is what the fake `go build` writes for a target: distinct per platform, so a test
-// can tell which build ended up in which archive.
-func stubBinary(env []string) string {
-	return fmt.Sprintf("stub binary %v\n", env)
+// stubBinary is what the fake `go build` writes for a build of mainPackage under env: distinct
+// per package and platform, so a test can tell which build ended up in which archive entry.
+func stubBinary(env []string, mainPackage string) string {
+	return fmt.Sprintf("stub binary %s %v\n", mainPackage, env)
+}
+
+// stubBuild writes the stub binary a `go build` call with args and env produces: at its -o path,
+// keyed on the package, its last argument.
+func stubBuild(env, args []string) error {
+	output := args[slices.Index(args, "-o")+1]
+	return os.WriteFile(output, []byte(stubBinary(env, args[len(args)-1])), 0o755)
 }
 
 // fakeToolchain answers dist's commands the way git and go would over a checkout: the HEAD
@@ -62,8 +68,7 @@ func fakeToolchain() *fakeRunner {
 		case call.name == "git" && slices.Equal(call.args, []string{"log", "-1", "--format=%ct", "HEAD"}):
 			return testCommitTime, nil
 		case call.name == "go" && len(call.args) > 0 && call.args[0] == "build":
-			output := call.args[slices.Index(call.args, "-o")+1]
-			return "", os.WriteFile(output, []byte(stubBinary(call.env)), 0o755)
+			return "", stubBuild(call.env, call.args)
 		}
 		return "", fmt.Errorf("unexpected command %s %v", call.name, call.args)
 	}}
@@ -79,22 +84,43 @@ func runTestDist(t *testing.T, commands runner, sourceDir string) string {
 	return outDir
 }
 
-// TestDistBuildsEveryTargetWithTrimpathAndNoLdflags pins the six cross-builds: the platform
-// environment and the plain -trimpath build of the root package — no -ldflags, so the default
-// -buildvcs stamps the commit into the build info.
-func TestDistBuildsEveryTargetWithTrimpathAndNoLdflags(t *testing.T) {
+// wantBuilds are the two builds every target runs, in order: each package with the -X ldflag
+// the Makefile's LDFLAGS and MCP_LDFLAGS apply, stamping the bare version.
+var wantBuilds = []struct {
+	binary      string
+	mainPackage string
+	ldflags     string
+}{
+	{binary: "llama-launcher", mainPackage: ".", ldflags: "-X github.com/airiclenz/llama-launcher/internal/launcher.Version=" + testBareVersion},
+	{binary: "llama-launcher-mcp", mainPackage: "./cmd/llama-launcher-mcp", ldflags: "-X main.Version=" + testBareVersion},
+}
+
+// TestDistBuildsBothBinariesForEveryTarget pins the cross-builds: four platforms, two packages
+// each, every one a -trimpath build in the platform environment whose only -ldflags is the
+// version stamp — so the default -buildvcs still stamps the commit into the build info.
+func TestDistBuildsBothBinariesForEveryTarget(t *testing.T) {
 	t.Parallel()
 	sourceDir := testSourceTree(t)
 	commands := fakeToolchain()
 
 	runTestDist(t, commands, sourceDir)
 
-	builds := commands.recorded("go")
-	if len(builds) != len(distTargets) {
-		t.Fatalf("got %d go builds, want %d", len(builds), len(distTargets))
+	wantTargets := []distTarget{
+		{goos: "linux", goarch: "amd64"},
+		{goos: "linux", goarch: "arm64"},
+		{goos: "darwin", goarch: "amd64"},
+		{goos: "darwin", goarch: "arm64"},
 	}
-	for i, target := range distTargets {
-		build := builds[i]
+	if !slices.Equal(distTargets, wantTargets) {
+		t.Fatalf("distTargets = %v, want %v", distTargets, wantTargets)
+	}
+	builds := commands.recorded("go")
+	if len(builds) != len(wantTargets)*len(wantBuilds) {
+		t.Fatalf("got %d go builds, want %d", len(builds), len(wantTargets)*len(wantBuilds))
+	}
+	for i, build := range builds {
+		target := wantTargets[i/len(wantBuilds)]
+		want := wantBuilds[i%len(wantBuilds)]
 		wantEnv := []string{"CGO_ENABLED=0", "GOOS=" + target.goos, "GOARCH=" + target.goarch}
 		if !slices.Equal(build.env, wantEnv) {
 			t.Errorf("build %d env = %v, want %v", i, build.env, wantEnv)
@@ -103,11 +129,11 @@ func TestDistBuildsEveryTargetWithTrimpathAndNoLdflags(t *testing.T) {
 			t.Errorf("build %d ran in %s, want the source tree %s", i, build.dir, sourceDir)
 		}
 		output := build.args[slices.Index(build.args, "-o")+1]
-		wantArgs := []string{"build", "-trimpath", "-o", output, "."}
+		wantArgs := []string{"build", "-trimpath", "-ldflags", want.ldflags, "-o", output, want.mainPackage}
 		if !slices.Equal(build.args, wantArgs) {
 			t.Errorf("build %d args = %q, want %q", i, build.args, wantArgs)
 		}
-		wantTail := filepath.Join(target.stem(testBareVersion), target.binaryFile())
+		wantTail := filepath.Join(target.stem(testBareVersion), want.binary)
 		if !filepath.IsAbs(output) || !strings.HasSuffix(output, string(filepath.Separator)+wantTail) {
 			t.Errorf("build %d writes %s, want an absolute path ending in %s", i, output, wantTail)
 		}
@@ -129,8 +155,8 @@ func TestDistNamesArchivesAfterTheBareVersion(t *testing.T) {
 	if !slices.Contains(listed, "llama-launcher_0.0.0_linux_amd64.tar.gz") {
 		t.Errorf("output directory holds %v, want llama-launcher_0.0.0_linux_amd64.tar.gz", listed)
 	}
-	if !slices.Contains(listed, "llama-launcher_0.0.0_windows_arm64.zip") {
-		t.Errorf("output directory holds %v, want llama-launcher_0.0.0_windows_arm64.zip", listed)
+	if !slices.Contains(listed, "llama-launcher_0.0.0_darwin_arm64.tar.gz") {
+		t.Errorf("output directory holds %v, want llama-launcher_0.0.0_darwin_arm64.tar.gz", listed)
 	}
 }
 
@@ -141,10 +167,11 @@ type archiveFile struct {
 	content string
 }
 
-// TestDistArchivesHoldTheBinaryAndDocsUnderTheStem reads every archive back the way a package
-// channel does: one top-level llama-launcher_<version>_<os>_<arch> directory holding the platform's
-// binary (executable, a regular file) and the two documents, entries in sorted order.
-func TestDistArchivesHoldTheBinaryAndDocsUnderTheStem(t *testing.T) {
+// TestDistArchivesHoldTheBinariesAndDocsUnderTheStem reads every archive back the way a package
+// channel does: one top-level llama-launcher_<version>_<os>_<arch> directory holding the
+// platform's two binaries (executable, regular files, each built from its own package) and the
+// two documents, entries in sorted order.
+func TestDistArchivesHoldTheBinariesAndDocsUnderTheStem(t *testing.T) {
 	t.Parallel()
 	sourceDir := testSourceTree(t)
 
@@ -152,12 +179,13 @@ func TestDistArchivesHoldTheBinaryAndDocsUnderTheStem(t *testing.T) {
 
 	for _, target := range distTargets {
 		stem := target.stem(testBareVersion)
-		binary := stubBinary([]string{"CGO_ENABLED=0", "GOOS=" + target.goos, "GOARCH=" + target.goarch})
+		env := []string{"CGO_ENABLED=0", "GOOS=" + target.goos, "GOARCH=" + target.goarch}
 		want := []archiveFile{
 			{name: stem + "/", mode: fs.ModeDir | 0o755},
 			{name: stem + "/LICENSE.md", mode: 0o644, content: testLicense},
 			{name: stem + "/README.md", mode: 0o644, content: testReadme},
-			{name: stem + "/" + target.binaryFile(), mode: 0o755, content: binary},
+			{name: stem + "/llama-launcher", mode: 0o755, content: stubBinary(env, ".")},
+			{name: stem + "/llama-launcher-mcp", mode: 0o755, content: stubBinary(env, "./cmd/llama-launcher-mcp")},
 		}
 
 		got := readArchive(t, filepath.Join(outDir, target.archiveName(testBareVersion)))
@@ -168,40 +196,14 @@ func TestDistArchivesHoldTheBinaryAndDocsUnderTheStem(t *testing.T) {
 	}
 }
 
-// readArchive returns the entries of the .tar.gz or .zip at archivePath, in archive order.
+// readArchive returns the entries of the .tar.gz at archivePath, in archive order.
 func readArchive(t *testing.T, archivePath string) []archiveFile {
 	t.Helper()
 	raw, err := os.ReadFile(archivePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasSuffix(archivePath, ".zip") {
-		return readZip(t, raw)
-	}
 	return readTarGz(t, raw)
-}
-
-// readZip returns a zip archive's entries.
-func readZip(t *testing.T, raw []byte) []archiveFile {
-	t.Helper()
-	reader, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var files []archiveFile
-	for _, file := range reader.File {
-		entry, err := file.Open()
-		if err != nil {
-			t.Fatal(err)
-		}
-		content, err := io.ReadAll(entry)
-		_ = entry.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, archiveFile{name: file.Name, mode: file.Mode(), content: string(content)})
-	}
-	return files
 }
 
 // readTarGz returns a tar.gz archive's entries, checking each header's owner and kind on the
@@ -257,8 +259,6 @@ func TestDistWritesSHA256SUMSSortedByName(t *testing.T) {
 		"llama-launcher_1.2.3_darwin_arm64.tar.gz",
 		"llama-launcher_1.2.3_linux_amd64.tar.gz",
 		"llama-launcher_1.2.3_linux_arm64.tar.gz",
-		"llama-launcher_1.2.3_windows_amd64.zip",
-		"llama-launcher_1.2.3_windows_arm64.zip",
 	}
 	var want strings.Builder
 	for _, name := range names {
@@ -277,7 +277,7 @@ func TestDistWritesSHA256SUMSSortedByName(t *testing.T) {
 		t.Errorf("SHA256SUMS =\n%s\nwant\n%s", got, want.String())
 	}
 	if listed := listDir(t, outDir); !slices.Equal(listed, append([]string{"SHA256SUMS"}, names...)) {
-		t.Errorf("output directory holds %v, want the six archives and SHA256SUMS", listed)
+		t.Errorf("output directory holds %v, want the four archives and SHA256SUMS", listed)
 	}
 }
 
@@ -346,7 +346,7 @@ func TestDistDefaultsToAnEmptiedDistDirectory(t *testing.T) {
 		t.Errorf("the stale archive survived the run (stat: %v)", err)
 	}
 	if listed := listDir(t, filepath.Join(sourceDir, "dist")); len(listed) != len(distTargets)+1 {
-		t.Errorf("dist/ holds %v, want the six archives and SHA256SUMS", listed)
+		t.Errorf("dist/ holds %v, want the four archives and SHA256SUMS", listed)
 	}
 }
 

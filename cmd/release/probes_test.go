@@ -25,15 +25,13 @@ const testFormula = `class LlamaLauncher < Formula
   license "MIT"
 `
 
-// releaseAssetsV02411 are the assets a v0.24.11 release carries, written out by hand: the six
+// releaseAssetsV02411 are the assets a v0.24.11 release carries, written out by hand: the four
 // archives the channels install from, and SHA256SUMS.
 var releaseAssetsV02411 = []string{
 	"llama-launcher_0.24.11_darwin_amd64.tar.gz",
 	"llama-launcher_0.24.11_darwin_arm64.tar.gz",
 	"llama-launcher_0.24.11_linux_amd64.tar.gz",
 	"llama-launcher_0.24.11_linux_arm64.tar.gz",
-	"llama-launcher_0.24.11_windows_amd64.zip",
-	"llama-launcher_0.24.11_windows_arm64.zip",
 	"SHA256SUMS",
 }
 
@@ -99,7 +97,7 @@ func mustVersion(t *testing.T, text string) releaseVersion {
 	return version
 }
 
-// TestReleaseAssetNamesMatchAPublishedRelease pins the seven assets the release probe wants
+// TestReleaseAssetNamesMatchAPublishedRelease pins the five assets the release probe wants
 // against the ones a real release carries.
 func TestReleaseAssetNamesMatchAPublishedRelease(t *testing.T) {
 	t.Parallel()
@@ -119,7 +117,7 @@ func TestProbesReportEachState(t *testing.T) {
 
 	annotated := map[string]string{"v0.24.11": gitObjectTag}
 	lightweight := map[string]string{"v0.24.11": "commit"}
-	sixAssets := map[string][]string{"v0.24.11": releaseAssetsV02411[:6]}
+	fourAssets := map[string][]string{"v0.24.11": releaseAssetsV02411[:4]}
 	allAssets := map[string][]string{"v0.24.11": releaseAssetsV02411}
 	olderFormula := strings.Replace(testFormula, `version "0.24.11"`, `version "0.24.10"`, 1)
 
@@ -138,8 +136,8 @@ func TestProbesReportEachState(t *testing.T) {
 		"tag type unreadable":   {probe: probeTag, repo: memRepo{remoteTags: annotated, failing: methodRemoteTagType}, wantState: stateUnknown, wantDetail: "could not read the type of tag v0.24.11"},
 		"tag of another object": {probe: probeTag, repo: memRepo{remoteTags: map[string]string{"v0.24.11": "tree"}}, wantState: stateUnknown, wantDetail: `points at a "tree" object`},
 		"release absent":        {probe: probeRelease, wantState: statePending, wantDetail: "no GitHub release v0.24.11"},
-		"release 6 of 7 assets": {probe: probeRelease, repo: memRepo{releases: sixAssets}, wantState: statePending, wantDetail: "lacks 1 of its 7 assets: SHA256SUMS"},
-		"release complete":      {probe: probeRelease, repo: memRepo{releases: allAssets}, wantState: stateDone, wantDetail: "all 7 assets"},
+		"release 4 of 5 assets": {probe: probeRelease, repo: memRepo{releases: fourAssets}, wantState: statePending, wantDetail: "lacks 1 of its 5 assets: SHA256SUMS"},
+		"release complete":      {probe: probeRelease, repo: memRepo{releases: allAssets}, wantState: stateDone, wantDetail: "all 5 assets"},
 		"release unreadable":    {probe: probeRelease, repo: memRepo{releases: allAssets, failing: methodReleaseAssets}, wantState: stateUnknown, wantDetail: "could not read GitHub release v0.24.11"},
 		"tap repo absent":       {probe: probeHomebrew, wantState: stateSetupPending, wantDetail: "no airiclenz/homebrew-tap repository yet"},
 		"formula absent":        {probe: probeHomebrew, remote: fakeRemote{hasTap: true}, wantState: statePending, wantDetail: "has no Formula/llama-launcher.rb"},

@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -22,23 +21,43 @@ import (
 )
 
 // The fixed names a release archive is built from. An archive name or a binary entry that
-// drifted from them would break the package channels that install from the archives.
+// drifted from them would break the package channels that install from the archives. binaryName
+// is also the archive stem's prefix and the formula and tap name.
 const (
 	binaryName    = "llama-launcher"
-	mainPackage   = "."
 	versionFile   = "VERSION"
 	checksumsFile = "SHA256SUMS"
 	defaultOutDir = "dist"
 )
 
-// The archive entry modes: the binary is executable, everything else is plain read-only data.
+// distBuild is one binary every release archive carries: its file name, the package it is built
+// from, and the variable its `-X` ldflag stamps the bare version into.
+type distBuild struct {
+	binary          string
+	mainPackage     string
+	versionVariable string
+}
+
+// ldflags is the build's -ldflags value for bareVersion — the same stamp the Makefile's LDFLAGS
+// and MCP_LDFLAGS apply, so a released binary reports the bare VERSION.
+func (b distBuild) ldflags(bareVersion string) string {
+	return "-X " + b.versionVariable + "=" + bareVersion
+}
+
+// distBuilds are the binaries every archive carries, in build order.
+var distBuilds = []distBuild{
+	{binary: binaryName, mainPackage: ".", versionVariable: "github.com/airiclenz/llama-launcher/internal/launcher.Version"},
+	{binary: "llama-launcher-mcp", mainPackage: "./cmd/llama-launcher-mcp", versionVariable: "main.Version"},
+}
+
+// The archive entry modes: the binaries are executable, everything else is plain read-only data.
 const (
 	binaryMode    = 0o755
 	documentMode  = 0o644
 	directoryMode = 0o755
 )
 
-// documentFiles are copied from the source tree into every archive beside the binary.
+// documentFiles are copied from the source tree into every archive beside the binaries.
 var documentFiles = []string{"LICENSE.md", "README.md"}
 
 // distTarget is one platform a release ships a binary for.
@@ -47,42 +66,23 @@ type distTarget struct {
 	goarch string
 }
 
-// distTargets are the six release platforms.
+// distTargets are the four release platforms.
 var distTargets = []distTarget{
 	{goos: "linux", goarch: "amd64"},
 	{goos: "linux", goarch: "arm64"},
 	{goos: "darwin", goarch: "amd64"},
 	{goos: "darwin", goarch: "arm64"},
-	{goos: "windows", goarch: "amd64"},
-	{goos: "windows", goarch: "arm64"},
-}
-
-// isWindows reports whether the target ships a .exe in a .zip rather than a bare binary in a
-// .tar.gz.
-func (t distTarget) isWindows() bool {
-	return t.goos == "windows"
 }
 
 // stem is the archive's name without its extension, and the one top-level directory inside it:
 // llama-launcher_<bare version>_<os>_<arch>. The package channels look for exactly <stem>/<binary>
-// inside the archive.
+// inside the archive, for each binary of distBuilds.
 func (t distTarget) stem(bareVersion string) string {
 	return fmt.Sprintf("%s_%s_%s_%s", binaryName, bareVersion, t.goos, t.goarch)
 }
 
-// binaryFile is the binary's file name for the target.
-func (t distTarget) binaryFile() string {
-	if t.isWindows() {
-		return binaryName + ".exe"
-	}
-	return binaryName
-}
-
 // archiveName is the archive's file name for the target.
 func (t distTarget) archiveName(bareVersion string) string {
-	if t.isWindows() {
-		return t.stem(bareVersion) + ".zip"
-	}
 	return t.stem(bareVersion) + ".tar.gz"
 }
 
@@ -106,11 +106,11 @@ func newDistCommand(commands runner) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "dist",
-		Short: "Build the six release archives and SHA256SUMS",
-		Long: "dist cross-builds llama-launcher for linux, darwin and windows on amd64 and arm64, packs\n" +
-			"each binary with LICENSE.md and README.md into llama-launcher_<version>_<os>_<arch>.tar.gz\n" +
-			"(.zip on windows), and writes SHA256SUMS beside them. The archives are byte-identical\n" +
-			"across runs over the same commit. --out is emptied first.",
+		Short: "Build the four release archives and SHA256SUMS",
+		Long: "dist cross-builds llama-launcher and llama-launcher-mcp for linux and darwin on amd64 and\n" +
+			"arm64, each stamped with the bare VERSION, packs both binaries with LICENSE.md and README.md\n" +
+			"into llama-launcher_<version>_<os>_<arch>.tar.gz, and writes SHA256SUMS beside them. The\n" +
+			"archives are byte-identical across runs over the same commit. --out is emptied first.",
 		Args: cobra.NoArgs,
 		RunE: runE(func(cmd *cobra.Command, _ []string) error {
 			return runDist(cmd.Context(), commands, cmd.OutOrStdout(), options)
@@ -215,32 +215,33 @@ func headCommitTime(ctx context.Context, commands runner, sourceDir string) (tim
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-// buildArchive cross-builds target's binary into the staging directory and packs it, with the
-// documents, into its archive in outDir. The build is a plain `CGO_ENABLED=0 go build -trimpath`:
-// no -ldflags, and the default -buildvcs stamps the commit into the binary's build info.
+// buildArchive cross-builds target's binaries into the staging directory and packs them, with
+// the documents, into its archive in outDir. Each build is a `CGO_ENABLED=0 go build -trimpath`
+// whose only -ldflags is the version stamp; the default -buildvcs stamps the commit into the
+// binary's build info.
 func buildArchive(ctx context.Context, commands runner, target distTarget, bareVersion string, commitTime time.Time, sourceDir, stageDir, outDir string) error {
 	stem := target.stem(bareVersion)
 	binaryDir := filepath.Join(stageDir, stem)
 	if err := os.MkdirAll(binaryDir, directoryMode); err != nil {
 		return fmt.Errorf("stage %s: %w", stem, err)
 	}
-	binaryPath := filepath.Join(binaryDir, target.binaryFile())
 	env := []string{"CGO_ENABLED=0", "GOOS=" + target.goos, "GOARCH=" + target.goarch}
-	if _, err := commands.run(ctx, sourceDir, env, "go", "build", "-trimpath", "-o", binaryPath, mainPackage); err != nil {
-		return fmt.Errorf("build %s: %w", stem, err)
-	}
 
-	entries := make([]archiveEntry, 0, len(documentFiles)+1)
-	entries = append(entries, archiveEntry{name: path.Join(stem, target.binaryFile()), source: binaryPath, mode: binaryMode})
+	entries := make([]archiveEntry, 0, len(documentFiles)+len(distBuilds))
+	for _, build := range distBuilds {
+		binaryPath := filepath.Join(binaryDir, build.binary)
+		args := []string{"build", "-trimpath", "-ldflags", build.ldflags(bareVersion), "-o", binaryPath, build.mainPackage}
+		if _, err := commands.run(ctx, sourceDir, env, "go", args...); err != nil {
+			return fmt.Errorf("build %s for %s: %w", build.binary, stem, err)
+		}
+		entries = append(entries, archiveEntry{name: path.Join(stem, build.binary), source: binaryPath, mode: binaryMode})
+	}
 	for _, document := range documentFiles {
 		entries = append(entries, archiveEntry{name: path.Join(stem, document), source: filepath.Join(sourceDir, document), mode: documentMode})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 
 	archivePath := filepath.Join(outDir, target.archiveName(bareVersion))
-	if target.isWindows() {
-		return writeArchive(archivePath, func(file io.Writer) error { return packZip(file, stem, entries, commitTime) })
-	}
 	return writeArchive(archivePath, func(file io.Writer) error { return packTarGz(file, stem, entries, commitTime) })
 }
 
@@ -311,44 +312,6 @@ func addTarEntry(archive *tar.Writer, entry archiveEntry, commitTime time.Time) 
 		return err
 	}
 	if _, err := io.Copy(archive, source); err != nil {
-		return fmt.Errorf("add %s: %w", entry.name, err)
-	}
-	return nil
-}
-
-// packZip writes a deflated zip of the stem directory and entries, every entry carrying the same
-// fixed time and a Unix mode.
-func packZip(destination io.Writer, stem string, entries []archiveEntry, commitTime time.Time) error {
-	archive := zip.NewWriter(destination)
-
-	directory := &zip.FileHeader{Name: stem + "/", Method: zip.Store, Modified: commitTime}
-	directory.SetMode(fs.ModeDir | directoryMode)
-	if _, err := archive.CreateHeader(directory); err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if err := addZipEntry(archive, entry, commitTime); err != nil {
-			return err
-		}
-	}
-	return archive.Close()
-}
-
-// addZipEntry writes one regular-file entry.
-func addZipEntry(archive *zip.Writer, entry archiveEntry, commitTime time.Time) error {
-	source, err := os.Open(entry.source)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = source.Close() }()
-
-	header := &zip.FileHeader{Name: entry.name, Method: zip.Deflate, Modified: commitTime}
-	header.SetMode(entry.mode)
-	destination, err := archive.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(destination, source); err != nil {
 		return fmt.Errorf("add %s: %w", entry.name, err)
 	}
 	return nil
