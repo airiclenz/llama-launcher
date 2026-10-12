@@ -102,7 +102,11 @@ capcom origin/main docs/format.md — Note files, Aliases (resolution: trim, low
 - `capcom know show gateway` prints `ADR-0013` and no `docs/adr`
 **Commit:** `docs(knowledge): move the glossary into Knowledge as a Note tree`
 
-## 4. Decision records 0001–0008 as Note trees
+## 4. Decision records 0001–0008 as Note trees — ✅ DONE (2026-10-12)
+
+NOTES (2026-10-12): the split runs from a new throwaway `docs/skill-runs/migrate-knowledge/decisions.py` (gitignored, beside item 3's `glossary.py`) rather than inside `glossary.py`; item 5 extends its RECORDS table.
+NOTES (2026-10-12): citation call applied to relative links only: the relative CHANGELOG link in ADR-0007 became the repo-root path `CHANGELOG.md`; the absolute llama.cpp #20851 issue link in ADR-0003 stays a markdown link (not a relative link, not matched by the acceptance grep).
+NOTES (2026-10-12): child Notes drop the `##` heading line (the title names the section, as the reference does); the 0001 amendment child keeps the blockquote verbatim, including its `> **Amended 2026-09-24.**` opening.
 
 Depends on item 1.
 

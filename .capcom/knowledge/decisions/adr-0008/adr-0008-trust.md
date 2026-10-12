@@ -1,0 +1,11 @@
+---
+title: "ADR-0008 trust model: an IP allowlist on a narrow bridge bind, no secret, and an allowlist gate on every forwarded input"
+---
+
+The driving constraint is that the remote client is a **cloud LLM agent that must not be given credentials** — anything in the container's filesystem or environment is effectively handed to the model. An SSH key or bearer token placed in the container fails this test.
+
+The adapter therefore authenticates by **source IP allowlist** (`--allow <ip|cidr|host>`, repeatable; a hostname is resolved to its addresses once at startup — or `--allow-interface <name>`, which allows the subnet(s) of a local interface such as the bridge, so any IP the bridge assigns the container is covered without knowing or pinning it, and a private bridge subnet cannot collide with a public hostname) and is meant to **bind the container-facing bridge interface** (`--listen`), not `0.0.0.0`. The client receives no secret it could leak; access is "you are the container, on the private bridge." The IP check is defense-in-depth layered on the narrow bind, not a replacement for it. When no `--allow` is given the allowlist defaults to loopback only, so an accidentally-started adapter is never exposed.
+
+A `--read-only` flag exposes only the read tools (`list_profiles`, `server_status`, `tail_log`) for containers that should observe but not mutate. Judgment rules that require context (e.g. "never swap Models mid-simulation") stay with the agent via the `manage-llm-server` skill; the adapter exposes the mutating tools plainly.
+
+Because the client is assumed prompt-injectable, tool inputs are treated as hostile. Every free-form value the adapter forwards to the CLI (`target` on `tail_log`/`stop_server`, `profile`/`name` on `unload_model`/`load_profile`/`start_server`) passes through a positive-allowlist validation gate before the CLI is invoked: a `target` must be exactly a known backend name or a valid `host:port`, and a profile name must match a conservative charset and not begin with `-`; anything else returns an MCP tool error without shelling out. Without this, `tail_log{"target":"clean"}` would run the destructive `logs clean` through the read surface, and `tail_log{"target":"-f"}` would block the adapter on a `logs --follow` that never returns. The gate lives in the adapter; the CLI's own argument parsing is unchanged.

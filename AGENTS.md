@@ -21,5 +21,6 @@ Without a `capcom` binary, install it from https://github.com/airiclenz/capcom#i
 
 Knowledge tree, top level:
 
+- `decisions`: Decision records: why llama-launcher works the way it does, one Note per record with its sections as children
 - `glossary`: Domain glossary: the terms to use in code, docs and messages, one Note per term
 <!-- END CAPCOM -->
