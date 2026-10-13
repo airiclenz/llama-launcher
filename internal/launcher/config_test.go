@@ -1802,6 +1802,161 @@ func TestLoadConfig_KeyCommandTrustGate(t *testing.T) {
 	}
 }
 
+// countingKeyCommand returns an api_key_cmd that appends one line to counter
+// each time it runs and then prints key, or fails when key is empty.
+func countingKeyCommand(counter, key string) string {
+	if key == "" {
+		return "echo run >> '" + counter + "'; exit 1"
+	}
+	return "echo run >> '" + counter + "'; printf " + key
+}
+
+// keyCommandRuns reports how many times a countingKeyCommand writing to counter
+// has run.
+func keyCommandRuns(t *testing.T, counter string) int {
+	t.Helper()
+
+	data, err := os.ReadFile(counter)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatalf("reading counter: %v", err)
+	}
+	return strings.Count(string(data), "\n")
+}
+
+// writeKeyCommandConfig rewrites the config at path so the llamacpp entry runs
+// command, keeping the file's 0600 mode.
+func writeKeyCommandConfig(t *testing.T, path, command string) {
+	t.Helper()
+
+	yaml := "servers:\n  llamacpp:\n    api_key_cmd: \"" + command + "\"\nprofiles:\n  test:\n    model: test.gguf\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+}
+
+// The menu reloads the config before every menu and on every header probe, so
+// an unchanged api_key_cmd must not run again on each one: the key resolved
+// once is carried across Reload, and only a new or changed command runs.
+func TestReload_ReusesKeyCommandWhileUnchanged(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs")
+	path := filepath.Join(dir, "config.yaml")
+	writeKeyCommandConfig(t, path, countingKeyCommand(counter, "sk-one"))
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.Reload()
+	cfg.Reload()
+	if got := keyCommandRuns(t, counter); got != 1 {
+		t.Errorf("runs after two reloads = %d, want 1", got)
+	}
+	if got := cfg.APIKeyFor("llamacpp"); got != "sk-one" {
+		t.Errorf("APIKeyFor = %q, want %q", got, "sk-one")
+	}
+
+	writeKeyCommandConfig(t, path, countingKeyCommand(counter, "sk-two"))
+	cfg.Reload()
+	cfg.Reload()
+	if got := keyCommandRuns(t, counter); got != 2 {
+		t.Errorf("runs after changing the command = %d, want 2", got)
+	}
+	if got := cfg.APIKeyFor("llamacpp"); got != "sk-two" {
+		t.Errorf("APIKeyFor = %q, want %q", got, "sk-two")
+	}
+}
+
+// A failed resolve fails the reload and leaves the receiver as it was, so it
+// caches nothing: the next Reload runs the command again.
+func TestReload_RetriesFailedKeyCommand(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good")
+	bad := filepath.Join(dir, "bad")
+	path := filepath.Join(dir, "config.yaml")
+	writeKeyCommandConfig(t, path, countingKeyCommand(good, "sk-one"))
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	writeKeyCommandConfig(t, path, countingKeyCommand(bad, ""))
+	cfg.Reload()
+	cfg.Reload()
+
+	if got := keyCommandRuns(t, bad); got != 2 {
+		t.Errorf("failing command runs after two reloads = %d, want 2", got)
+	}
+	if got := cfg.APIKeyFor("llamacpp"); got != "sk-one" {
+		t.Errorf("APIKeyFor = %q, want the last good key %q", got, "sk-one")
+	}
+}
+
+// Reuse is decided after the trust gate, never instead of it: a config that
+// turned group-writable is refused even when its command is the cached one.
+func TestReload_KeyCommandReuseKeepsTrustGate(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs")
+	path := filepath.Join(dir, "config.yaml")
+	writeKeyCommandConfig(t, path, countingKeyCommand(counter, "sk-one"))
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("servers:\n  llamacpp:\n    api_key_cmd: \""+
+		countingKeyCommand(counter, "sk-one")+"\"\nprofiles:\n  other:\n    model: other.gguf\n"), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	if err := os.Chmod(path, 0o620); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	cfg.Reload()
+
+	if _, ok := cfg.Profiles["other"]; ok {
+		t.Error("Reload applied a config that failed the trust gate")
+	}
+	if _, ok := cfg.Profiles["test"]; !ok {
+		t.Error("Reload changed the receiver after the trust gate refused the file")
+	}
+	if got := keyCommandRuns(t, counter); got != 1 {
+		t.Errorf("runs = %d, want 1", got)
+	}
+}
+
+// The reuse belongs to Reload alone: the exported loads have no previous config
+// to reuse from, so each one runs the command.
+func TestLoadConfig_KeyCommandRunsOnEveryExportedLoad(t *testing.T) {
+	requirePOSIXShell(t)
+
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs")
+	path := filepath.Join(dir, "config.yaml")
+	writeKeyCommandConfig(t, path, countingKeyCommand(counter, "sk-one"))
+
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if _, err := LoadConfig(path); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if _, err := LoadConfigNotify(path, nil); err != nil {
+		t.Fatalf("LoadConfigNotify: %v", err)
+	}
+	if got := keyCommandRuns(t, counter); got != 3 {
+		t.Errorf("runs = %d, want 3", got)
+	}
+}
+
 // A disabled server is one the launcher never talks to, so asking its store for
 // a secret would be a dialog the user cannot connect to anything they did — and
 // a broken command on an entry nobody uses must not stop the launcher.

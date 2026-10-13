@@ -72,8 +72,9 @@ type ServerConfig struct {
 	APIKeyCmd      string
 	PlaintextKeyOK bool
 
-	// resolvedKey is what api_key_cmd printed. It is filled in once per load
-	// (resolveKeyCommands) rather than parsed, so it is deliberately not a
+	// resolvedKey is what api_key_cmd printed. It is filled in at load
+	// (resolveKeyCommands) rather than parsed — and carried over by Reload
+	// while the entry's command is unchanged — so it is deliberately not a
 	// YAML field: nothing in the file can set it, and a Config built by hand
 	// in a test carries a key only where it put one.
 	resolvedKey string
@@ -461,7 +462,13 @@ func extractProfileOrder(root *yaml.Node) []string {
 // LoadConfig reads, parses, and validates the YAML configuration at the given path.
 // Non-fatal deprecation warnings are written to stderr after a successful validation.
 func LoadConfig(path string) (*Config, error) {
-	return LoadConfigNotify(path, func(w string) { fmt.Fprintf(os.Stderr, "warning: %s\n", w) })
+	return LoadConfigNotify(path, printConfigWarning)
+}
+
+// printConfigWarning is the CLI's warning sink: one "warning: " line on stderr
+// per non-fatal config warning.
+func printConfigWarning(w string) {
+	fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 }
 
 // LoadConfigNotify reads, parses, and validates the YAML configuration at the
@@ -471,6 +478,14 @@ func LoadConfig(path string) (*Config, error) {
 // registry and replaces the configured-address snapshot a 401/403 stop is
 // scoped to (applyConfiguredTargets): the last load in a process wins.
 func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
+	return loadConfig(path, notify, nil)
+}
+
+// loadConfig is LoadConfigNotify's body with one addition: previous is the
+// server section of the config this load replaces, whose resolved keys
+// resolveKeyCommands reuses for every entry whose api_key_cmd is unchanged.
+// Only Reload passes one; a nil previous runs every command.
+func loadConfig(path string, notify NoticeFunc, previous map[string]ServerConfig) (*Config, error) {
 	cfg, err := parseConfig(path)
 	if err != nil {
 		return nil, err
@@ -478,7 +493,7 @@ func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	if err := cfg.resolveKeyCommands(); err != nil {
+	if err := cfg.resolveKeyCommands(previous); err != nil {
 		return nil, err
 	}
 	applyAPIKeys(cfg)
@@ -491,11 +506,15 @@ func LoadConfigNotify(path string, notify NoticeFunc) (*Config, error) {
 
 // Reload re-reads and validates the config file, updating the receiver in place.
 // If the file is unreadable or invalid, the receiver is left unchanged.
-// It goes through LoadConfig, so it writes non-fatal config warnings to
-// stderr: it is for the CLI only. Library clients re-read a changed config
-// by calling the facade's LoadConfig again, which takes a notice sink.
+// An enabled entry whose api_key_cmd is the same string the receiver resolved
+// keeps the receiver's key without running the command again; a new or changed
+// command runs once, and a failed one — which leaves the receiver unchanged —
+// runs again on the next Reload. It writes non-fatal config warnings to
+// stderr, as LoadConfig does: it is for the CLI only. Library clients re-read
+// a changed config by calling the facade's LoadConfig again, which takes a
+// notice sink.
 func (c *Config) Reload() {
-	newCfg, err := LoadConfig(c.ConfigPath)
+	newCfg, err := loadConfig(c.ConfigPath, printConfigWarning, c.Servers)
 	if err != nil {
 		return
 	}
@@ -709,8 +728,11 @@ func (c *Config) apiKeyWarnings() []string {
 // popping up in the middle of a model switch and a broken command reported by
 // whatever the user was doing rather than by the load that read the file. The
 // launcher loads its config exactly once per run (cli.go), so this is one
-// subprocess per configured entry per run; the interactive menu's Reload runs
-// them again, which is the point — the store may have changed underneath it.
+// subprocess per configured entry per run. The interactive menu's Reload, which
+// re-reads the file before every menu and on every header probe, keeps an
+// entry's resolved key while its api_key_cmd string is unchanged and runs only
+// a new or changed command — re-running every command on that cadence would
+// put a keychain dialog in front of the user every few seconds.
 //
 // A command that fails, times out or prints nothing FAILS THE LOAD. It is never
 // read as "this server takes no key": a keyless server is spelled by naming no
@@ -748,18 +770,21 @@ const (
 const maxKeyErrorStderr = 240
 
 // resolveKeyCommands runs the api_key_cmd of every enabled server and stores
-// what it printed as that entry's key. Disabled entries are skipped: the
+// what it printed as that entry's key. An entry whose command is the same
+// string previous holds a resolved key for reuses that key instead of running
+// it; previous is nil on every load but Reload's. Disabled entries are skipped: the
 // launcher never talks to their server, so asking their store for a secret
 // would be a dialog the user cannot connect to anything they did.
 //
 // Before any command runs, the file they came from must pass configTrusted:
 // on unix, a config the current user does not own, or that its group or others
 // can write, is refused naming the file, and no command runs. A config with no
-// enabled api_key_cmd is never judged — it runs nothing.
+// enabled api_key_cmd is never judged — it runs nothing. The gate is checked
+// before reuse is considered, so a reused key never skips it.
 //
 // The first failure stops the load and is returned as-is — it already names the
 // entry and quotes the command.
-func (c *Config) resolveKeyCommands() error {
+func (c *Config) resolveKeyCommands(previous map[string]ServerConfig) error {
 	names := make([]string, 0, len(c.Servers))
 	for name, sc := range c.Servers {
 		if !sc.Enabled || strings.TrimSpace(sc.APIKeyCmd) == "" {
@@ -778,6 +803,11 @@ func (c *Config) resolveKeyCommands() error {
 
 	for _, name := range names {
 		sc := c.Servers[name]
+		if prev, ok := previous[name]; ok && prev.resolvedKey != "" && prev.APIKeyCmd == sc.APIKeyCmd {
+			sc.resolvedKey = prev.resolvedKey
+			c.Servers[name] = sc
+			continue
+		}
 		key, err := runKeyCommand(name, sc.APIKeyCmd, keyCommandTimeout)
 		if err != nil {
 			return err

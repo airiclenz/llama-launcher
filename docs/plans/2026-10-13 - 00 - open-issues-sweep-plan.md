@@ -90,7 +90,9 @@ NOTES (2026-10-13): followed the Regression guard over the Approach — `splitCo
 **Acceptance:** `go test ./internal/launcher/ -run 'SaveServer|CRLF' -v`
 **Commit:** `fix(config): keep CRLF line endings when rewriting key source lines`
 
-## 5. Resolve api_key_cmd once per entry across menu reloads
+## 5. Resolve api_key_cmd once per entry across menu reloads — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): extracted the CLI warning printer into `printConfigWarning` so `Reload` can call the new unexported `loadConfig(path, notify, previous)` with the same sink `LoadConfig` binds; LoadConfig/LoadConfigNotify signatures and behaviour unchanged.
 
 **What:** fix — `Config.Reload()` (menu loop and `liveStatusHeaderFn` probe tick) re-runs every `api_key_cmd`, contradicting "one subprocess per configured entry per run". Ratified: carry the key across Reload when the command is unchanged.
 **Goal:** with the menu open, an unchanged `api_key_cmd` runs exactly once per launcher run; editing an entry's `api_key_cmd` makes it run once more; a failed resolve is retried on the next Reload.
