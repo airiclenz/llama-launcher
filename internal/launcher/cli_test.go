@@ -883,6 +883,202 @@ func TestRun_StatusJSONNothingRunning(t *testing.T) {
 	}
 }
 
+// listJSONEntry mirrors the fields of cmdListJSON's output that the tests
+// assert on. The numeric fields are pointers so a decoded entry tells "absent"
+// apart from zero.
+type listJSONEntry struct {
+	Name        string `json:"name"`
+	Backend     string `json:"backend"`
+	Model       string `json:"model"`
+	GPULayers   *int   `json:"gpu_layers"`
+	ContextSize *int   `json:"context_size"`
+}
+
+// decodeListJSON unmarshals cmdListJSON's stdout into entries keyed by
+// profile name, failing on a duplicate name.
+func decodeListJSON(t *testing.T, out string) map[string]listJSONEntry {
+	t.Helper()
+
+	var entries []listJSONEntry
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatalf("unmarshalling list JSON %q: %v", out, err)
+	}
+	byName := make(map[string]listJSONEntry, len(entries))
+	for _, e := range entries {
+		if _, dup := byName[e.Name]; dup {
+			t.Fatalf("profile %q listed twice in %q", e.Name, out)
+		}
+		byName[e.Name] = e
+	}
+	return byName
+}
+
+// decodeListJSONKeys unmarshals cmdListJSON's stdout into raw key sets keyed
+// by profile name, so a test can assert a field is absent rather than null.
+func decodeListJSONKeys(t *testing.T, out string) map[string]map[string]json.RawMessage {
+	t.Helper()
+
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatalf("unmarshalling list JSON %q: %v", out, err)
+	}
+	byName := make(map[string]map[string]json.RawMessage, len(raw))
+	for _, fields := range raw {
+		var name string
+		if err := json.Unmarshal(fields["name"], &name); err != nil {
+			t.Fatalf("decoding name of %v: %v", fields, err)
+		}
+		byName[name] = fields
+	}
+	return byName
+}
+
+// listJSONTestConfig returns a config with two enabled backends and one
+// disabled one: "tuned" sets gpu_layers and context_size, "plain" sets
+// neither, and "hidden" sits on the disabled backend.
+func listJSONTestConfig() *Config {
+	return &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+			"lmstudio": {Enabled: false},
+		},
+		Defaults: ProfileParams{Server: strPtrLocal("llamacpp")},
+		Profiles: map[string]Profile{
+			"tuned": {
+				Model: "/models/tuned.gguf",
+				ProfileParams: ProfileParams{
+					GPULayers:   ptrInt(99),
+					ContextSize: ptrInt(8192),
+				},
+			},
+			"plain": {
+				Model:         "llama3",
+				ProfileParams: ProfileParams{Server: strPtrLocal("ollama")},
+			},
+			"hidden": {
+				Model:         "qwen",
+				ProfileParams: ProfileParams{Server: strPtrLocal("lmstudio")},
+			},
+		},
+	}
+}
+
+// TestCmdListJSON_ListsEveryEnabledProfile asserts every profile of an
+// enabled backend appears once with its name, resolved backend and model.
+func TestCmdListJSON_ListsEveryEnabledProfile(t *testing.T) {
+	cfg := listJSONTestConfig()
+
+	var code int
+	out := captureStdout(t, func() { code = cmdListJSON(cfg) })
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	entries := decodeListJSON(t, out)
+	want := map[string]listJSONEntry{
+		"tuned": {Name: "tuned", Backend: "llamacpp", Model: "/models/tuned.gguf"},
+		"plain": {Name: "plain", Backend: "ollama", Model: "llama3"},
+	}
+	for name, w := range want {
+		got, ok := entries[name]
+		if !ok {
+			t.Errorf("profile %q missing from %q", name, out)
+			continue
+		}
+		if got.Backend != w.Backend || got.Model != w.Model {
+			t.Errorf("entry %q = backend %q model %q, want backend %q model %q",
+				name, got.Backend, got.Model, w.Backend, w.Model)
+		}
+	}
+}
+
+// TestCmdListJSON_OmitsProfilesOfDisabledServers asserts a profile tied to a
+// disabled backend is absent from the output.
+func TestCmdListJSON_OmitsProfilesOfDisabledServers(t *testing.T) {
+	cfg := listJSONTestConfig()
+
+	out := captureStdout(t, func() { cmdListJSON(cfg) })
+
+	entries := decodeListJSON(t, out)
+	if _, ok := entries["hidden"]; ok {
+		t.Errorf("profile on disabled backend listed: %q", out)
+	}
+	if len(entries) != 2 {
+		t.Errorf("got %d entries, want 2: %q", len(entries), out)
+	}
+}
+
+// TestCmdListJSON_NumericParamsPresentOnlyWhenSet asserts gpu_layers and
+// context_size carry their values when set and are absent (not null) when
+// unset.
+func TestCmdListJSON_NumericParamsPresentOnlyWhenSet(t *testing.T) {
+	cfg := listJSONTestConfig()
+
+	out := captureStdout(t, func() { cmdListJSON(cfg) })
+
+	entries := decodeListJSON(t, out)
+	tuned := entries["tuned"]
+	if tuned.GPULayers == nil || *tuned.GPULayers != 99 {
+		t.Errorf("tuned gpu_layers = %v, want 99", tuned.GPULayers)
+	}
+	if tuned.ContextSize == nil || *tuned.ContextSize != 8192 {
+		t.Errorf("tuned context_size = %v, want 8192", tuned.ContextSize)
+	}
+
+	keys := decodeListJSONKeys(t, out)
+	for _, field := range []string{"gpu_layers", "context_size"} {
+		if v, ok := keys["plain"][field]; ok {
+			t.Errorf("plain carries %s = %s, want the key absent", field, v)
+		}
+	}
+}
+
+// TestCmdListJSON_EmptyProfileSetIsValidJSON asserts that with no profiles
+// the output is an empty JSON array rather than null or nothing.
+func TestCmdListJSON_EmptyProfileSetIsValidJSON(t *testing.T) {
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		Profiles: map[string]Profile{},
+	}
+
+	var code int
+	out := captureStdout(t, func() { code = cmdListJSON(cfg) })
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if strings.TrimSpace(out) != "[]" {
+		t.Errorf("output = %q, want []", out)
+	}
+	if entries := decodeListJSON(t, out); len(entries) != 0 {
+		t.Errorf("got %d entries, want 0", len(entries))
+	}
+}
+
+// TestRun_ListJSON drives `list --json` through the real Run dispatcher and
+// asserts the one configured profile comes back with exit code 0.
+func TestRun_ListJSON(t *testing.T) {
+	cfgPath := writeRunConfig(t)
+
+	out, code := runCLI(t, cfgPath, "list", "--json")
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	entries := decodeListJSON(t, out)
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %q", len(entries), out)
+	}
+	chat, ok := entries["chat"]
+	if !ok {
+		t.Fatalf("profile chat missing from %q", out)
+	}
+	if chat.Backend != "ollama" || chat.Model != "llama3" {
+		t.Errorf("chat = backend %q model %q, want ollama llama3", chat.Backend, chat.Model)
+	}
+}
+
 // TestRun_ExitCodes exercises the documented exit-code contract (TDD §3.3)
 // through the real Run dispatcher: usage errors are 2 and a nothing-running
 // stop/unload is 1.

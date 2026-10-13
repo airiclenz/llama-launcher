@@ -65,7 +65,7 @@ NOTES (2026-10-13): TestStopServerAt_AuthFailedListener carries the same hard-fa
 **Acceptance:** `go test ./internal/keystore/ -run 'TestReadCmd' -v`
 **Commit:** `test(keystore): cover entry names containing a single quote`
 
-## 3. Test list --json
+## 3. Test list --json — ✅ DONE (2026-10-13)
 
 **What:** test-only. Add `TestCmdListJSON_*` tests in `internal/launcher/cli_test.go` mirroring the `status --json` pattern (`captureStdout` around `cmdListJSON(cfg)`, a test-side decode struct): every enabled profile appears with `name`, `backend`, `model`; `gpu_layers`/`context_size` present when set and omitted when unset; profiles of disabled servers are absent; output is valid JSON for an empty profile set. One end-to-end case via `writeRunConfig` + `runCLI(t, cfgPath, "list", "--json")`.
 **Files:** internal/launcher/cli_test.go
