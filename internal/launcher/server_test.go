@@ -27,6 +27,49 @@ func TestRunningInstance_Addr(t *testing.T) {
 	}
 }
 
+func TestRunningInstance_AddrIPv6(t *testing.T) {
+	t.Parallel()
+
+	for host, want := range map[string]string{
+		"localhost": "localhost:8000",
+		"::1":       "[::1]:8000",
+		"::":        "[::]:8000",
+		"[::1]":     "[::1]:8000",
+	} {
+		inst := &RunningInstance{Host: host, Port: 8000}
+		if got := inst.Addr(); got != want {
+			t.Errorf("RunningInstance{Host: %q}.Addr() = %q, want %q", host, got, want)
+		}
+	}
+}
+
+// TestEnsureServer_IPv6Addr reaches a healthy llama-server on the IPv6
+// loopback through a profile naming host ::1, and gets back the unbracketed
+// host and its port. Not parallel: the registered llamacpp backend carries
+// the process-global api_key that other tests set.
+func TestEnsureServer_IPv6Addr(t *testing.T) {
+	addr := listenIPv6Loopback(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	_, port, ok := splitHostPort(addr)
+	if !ok {
+		t.Fatalf("splitHostPort(%q) failed", addr)
+	}
+	host := "::1"
+	profile := &ResolvedProfile{Backend: "llamacpp"}
+	profile.Host = &host
+	profile.Port = &port
+
+	inst, started, err := EnsureServer(&Config{}, profile)
+	if err != nil {
+		t.Fatalf("EnsureServer: %v", err)
+	}
+	if started || inst.Host != "::1" || inst.Port != port || inst.Addr() != addr {
+		t.Errorf("EnsureServer = {Host: %q, Port: %d, Addr: %q}, started %v; want ::1, %d, %q, false",
+			inst.Host, inst.Port, inst.Addr(), started, port, addr)
+	}
+}
+
 func TestRunningInstance_Uptime(t *testing.T) {
 	t.Parallel()
 

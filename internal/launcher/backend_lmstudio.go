@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -170,8 +171,8 @@ func (b *LMStudio) TryStart(_ *Config, addr string) error {
 	}
 
 	args := []string{"server", "start"}
-	_, portStr, ok := strings.Cut(addr, ":")
-	if ok {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err == nil {
 		if _, err := strconv.Atoi(portStr); err == nil {
 			args = append(args, "--port", portStr)
 		}

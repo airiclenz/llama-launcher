@@ -771,6 +771,52 @@ func TestConfiguredBackendAddr(t *testing.T) {
 	}
 }
 
+func TestConfiguredBackendAddr_IPv6(t *testing.T) {
+	t.Parallel()
+
+	for host, want := range map[string]string{
+		"127.0.0.1": "127.0.0.1:8000",
+		"::1":       "[::1]:8000",
+		"[::1]":     "[::1]:8000",
+	} {
+		h, port := host, 8000
+		cfg := &Config{
+			Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+			Defaults: ProfileParams{Host: &h, Port: &port},
+		}
+		if got := cfg.ConfiguredBackendAddr("llamacpp"); got != want {
+			t.Errorf("ConfiguredBackendAddr with host %q = %q, want %q", host, got, want)
+		}
+	}
+}
+
+// ipv6DefaultServer is a stub backend whose default address is a bracketed
+// IPv6 one.
+type ipv6DefaultServer struct{ *startingStopServer }
+
+func (ipv6DefaultServer) DefaultAddr() string { return "[::1]:8000" }
+
+// TestApplyBackendFallbacks_BracketedIPv6Addr checks a backend default
+// address of [::1]:8000 falls back to host ::1 and port 8000, and rebuilds
+// to the same address. Not parallel: it mutates the global llmServers
+// registry.
+func TestApplyBackendFallbacks_BracketedIPv6Addr(t *testing.T) {
+	stub := ipv6DefaultServer{&startingStopServer{name: "ipv6default"}}
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.Name()) })
+
+	var p ProfileParams
+	applyBackendFallbacks(&p, &Config{}, stub.Name(), stub)
+	if p.Host == nil || *p.Host != "::1" || p.Port == nil || *p.Port != 8000 {
+		t.Fatalf("applyBackendFallbacks gave host %v, port %v; want ::1, 8000", p.Host, p.Port)
+	}
+
+	cfg := &Config{Servers: map[string]ServerConfig{stub.Name(): {Enabled: true}}}
+	if got := cfg.ConfiguredBackendAddr(stub.Name()); got != "[::1]:8000" {
+		t.Errorf("ConfiguredBackendAddr = %q, want [::1]:8000", got)
+	}
+}
+
 func TestShouldAutoClose(t *testing.T) {
 	t.Parallel()
 

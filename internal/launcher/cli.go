@@ -160,7 +160,7 @@ func cmdUnload(cfg *Config, args []string) int {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 2
 		}
-		addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+		addr := joinHostPort(*profile.Host, *profile.Port)
 		instances := DiscoverRunningInstances(cfg)
 		target = findInstance(instances, addr)
 		if target != nil && target.AuthFailed {

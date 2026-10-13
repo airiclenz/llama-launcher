@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -716,4 +718,120 @@ func TestDiscoverAuthRefusalAt(t *testing.T) {
 			t.Errorf("err = %v, want nil", err)
 		}
 	})
+}
+
+func TestJoinHostPort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{"IPv4 loopback", "127.0.0.1", "127.0.0.1:8000"},
+		{"hostname", "localhost", "localhost:8000"},
+		{"empty host", "", ":8000"},
+		{"IPv6 loopback is bracketed", "::1", "[::1]:8000"},
+		{"IPv6 wildcard is bracketed", "::", "[::]:8000"},
+		{"bracketed IPv6 is not bracketed twice", "[::1]", "[::1]:8000"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := joinHostPort(tt.host, 8000)
+			if got != tt.want {
+				t.Fatalf("joinHostPort(%q, 8000) = %q, want %q", tt.host, got, tt.want)
+			}
+			u, err := url.Parse("http://" + got + "/health")
+			if err != nil {
+				t.Fatalf("url.Parse(http://%s/health): %v", got, err)
+			}
+			if u.Host != got || u.Port() != "8000" {
+				t.Errorf("URL host, port = %q, %q; want %q, 8000", u.Host, u.Port(), got)
+			}
+		})
+	}
+}
+
+func TestSplitHostPort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		addr     string
+		wantHost string
+		wantPort int
+		wantOK   bool
+	}{
+		{"127.0.0.1:8000", "127.0.0.1", 8000, true},
+		{"localhost:11434", "localhost", 11434, true},
+		{":8000", "", 8000, true},
+		{"[::1]:8000", "::1", 8000, true},
+		{"[::]:8000", "::", 8000, true},
+		{"::1:8000", "", 0, false},
+		{"localhost", "", 0, false},
+		{"localhost:0", "", 0, false},
+		{"localhost:abc", "", 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			t.Parallel()
+			host, port, ok := splitHostPort(tt.addr)
+			if host != tt.wantHost || port != tt.wantPort || ok != tt.wantOK {
+				t.Fatalf("splitHostPort(%q) = %q, %d, %v; want %q, %d, %v",
+					tt.addr, host, port, ok, tt.wantHost, tt.wantPort, tt.wantOK)
+			}
+			if ok {
+				if back := joinHostPort(host, port); back != tt.addr {
+					t.Errorf("round trip of %q gave %q", tt.addr, back)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoveryTarget_AddrIPv6(t *testing.T) {
+	t.Parallel()
+
+	for host, want := range map[string]string{
+		"127.0.0.1": "127.0.0.1:8000",
+		"::1":       "[::1]:8000",
+		"[::1]":     "[::1]:8000",
+	} {
+		if got := (discoveryTarget{host: host, port: 8000}).addr(); got != want {
+			t.Errorf("discoveryTarget{host: %q}.addr() = %q, want %q", host, got, want)
+		}
+	}
+}
+
+// listenIPv6Loopback serves h on [::1] and returns the server's address,
+// skipping the test when the host has no IPv6 loopback.
+func listenIPv6Loopback(t *testing.T, h http.Handler) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(h)
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return addrFromURL(t, srv.URL)
+}
+
+func TestHealthCheck_IPv6Loopback(t *testing.T) {
+	t.Parallel()
+
+	addr := listenIPv6Loopback(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	host, port, ok := splitHostPort(addr)
+	if !ok || host != "::1" {
+		t.Fatalf("splitHostPort(%q) = %q, %d, %v; want ::1", addr, host, port, ok)
+	}
+
+	if err := (&LlamaCpp{}).HealthCheck(joinHostPort(host, port)); err != nil {
+		t.Errorf("HealthCheck over IPv6 loopback: %v", err)
+	}
 }

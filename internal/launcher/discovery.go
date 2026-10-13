@@ -3,9 +3,11 @@ package launcher
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +57,7 @@ func (r *RunningInstance) exited() <-chan struct{} {
 }
 
 func (r *RunningInstance) Addr() string {
-	return fmt.Sprintf("%s:%d", r.Host, r.Port)
+	return joinHostPort(r.Host, r.Port)
 }
 
 func (r *RunningInstance) Uptime() time.Duration {
@@ -161,7 +163,7 @@ type discoveryTarget struct {
 }
 
 func (t discoveryTarget) addr() string {
-	return fmt.Sprintf("%s:%d", t.host, t.port)
+	return joinHostPort(t.host, t.port)
 }
 
 // discoveryTargets derives the distinct (backend, addr) pairs to probe from
@@ -175,7 +177,7 @@ func discoveryTargets(cfg *Config) []discoveryTarget {
 		if err != nil {
 			return
 		}
-		key := fmt.Sprintf("%s|%s:%d", backend, host, port)
+		key := backend + "|" + joinHostPort(host, port)
 		if _, ok := seen[key]; !ok {
 			seen[key] = discoveryTarget{backend: backend, server: server, host: host, port: port}
 		}
@@ -505,9 +507,22 @@ func findManagedLogFile(logDir, backend string) string {
 	return matches[len(matches)-1]
 }
 
+// joinHostPort builds the host:port address the launcher dials and keys
+// instances by. An IPv6 host is bracketed ([::1]:8000); a host already
+// written bracketed in the config ("[::1]") is unwrapped first so it is not
+// bracketed twice. IPv4 and hostname addresses read exactly as host:port.
+func joinHostPort(host string, port int) string {
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// splitHostPort parses a host:port address, bracketed IPv6 included, into
+// its unbracketed host and a positive port.
 func splitHostPort(addr string) (string, int, bool) {
-	host, portStr, ok := strings.Cut(addr, ":")
-	if !ok {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
 		return "", 0, false
 	}
 	var port int

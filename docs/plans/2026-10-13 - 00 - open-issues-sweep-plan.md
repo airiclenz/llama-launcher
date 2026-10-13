@@ -106,7 +106,17 @@ NOTES (2026-10-13): extracted the CLI warning printer into `printConfigWarning` 
 **Acceptance:** `go test ./internal/launcher/ -run 'KeyCommand|Reload|APIKey' -v`
 **Commit:** `fix(config): reuse resolved api_key_cmd keys across reloads`
 
-## 6. Build and parse host:port with net.JoinHostPort / net.SplitHostPort
+## 6. Build and parse host:port with net.JoinHostPort / net.SplitHostPort — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): applyBackendFallbacks parses with net.SplitHostPort directly rather than splitHostPort, so an unparseable port still keeps the host and falls back to the default port as before; splitHostPort would have dropped the host too.
+
+NOTES (2026-10-13): re-derived from the assumption that the producers and splitHostPort were the only address parses: LMStudio.TryStart (backend_lmstudio.go) also cut the addr at the first colon to get --port; it now uses net.SplitHostPort. No unit test, since TryStart needs the lms binary.
+
+NOTES (2026-10-13): consequential edit — internal/launcher/backend_http_test.go: made necessary by joinHostPort/splitHostPort; dropped the TestProbeAddr comment saying IPv6 host addresses are out of scope launcher-wide.
+
+NOTES (2026-10-13): consequential edit — llama-launcher.TDD.md: made necessary by joinHostPort/splitHostPort; §6 instance-identity paragraph now says how addresses are built and parsed, including bracketed IPv6.
+
+NOTES (2026-10-13): CLOSES names ipv6-host-address-format as the plan's Closes line does, but that line says "(with item 7)": the issue should close only once item 7 (the lsof listener filter) lands too.
 
 **What:** fix — an IPv6 host yields `::1:8000`; `splitHostPort` cuts at the first colon.
 **Goal:** every launcher-built address for an IPv6 host is bracketed (`[::1]:8000`), every address parse accepts bracketed IPv6, and IPv4/hostname addresses are byte-identical to before.

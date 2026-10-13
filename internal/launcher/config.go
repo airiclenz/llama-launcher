@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -973,7 +974,7 @@ func (c *Config) ConfiguredBackendAddr(backendName string) string {
 	}
 	params := c.Defaults
 	applyBackendFallbacks(&params, c, backendName, b)
-	return fmt.Sprintf("%s:%d", *params.Host, *params.Port)
+	return joinHostPort(*params.Host, *params.Port)
 }
 
 // ResolveProfile merges a named profile with defaults and resolves its model path.
@@ -1114,8 +1115,8 @@ func applyBackendFallbacks(p *ProfileParams, cfg *Config, backendName string, b 
 		applyFallbacks(p)
 		return
 	}
-	host, portStr, ok := strings.Cut(addr, ":")
-	if !ok {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
 		applyFallbacks(p)
 		return
 	}

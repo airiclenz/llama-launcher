@@ -95,7 +95,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	// process table instead, ADR-0015). Spawning a second server there would
 	// only collide with the first, so the start is refused instead — the
 	// loading server is deliberately left alone.
-	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	addr := joinHostPort(*profile.Host, *profile.Port)
 	if startingUp(mb, addr) {
 		return nil, stillStartingUpErr(cfg, mb, addr)
 	}
@@ -200,7 +200,7 @@ func watchExit(cmd *exec.Cmd) *processExit {
 // started server that misses the wait window is left running, exactly as on
 // the managed arm, and the error wraps ErrStartupTimeout.
 func connectExternalServer(cfg *Config, profile *ResolvedProfile, b LLMServer, wait time.Duration) (*RunningInstance, error) {
-	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	addr := joinHostPort(*profile.Host, *profile.Port)
 	inst := &RunningInstance{
 		Backend: profile.Backend,
 		Host:    *profile.Host,
@@ -629,7 +629,7 @@ func portConflictErr(b LLMServer, addr string, occupants []portOccupant) error {
 
 // EnsureServer returns the running server instance, starting one if needed.
 func EnsureServer(cfg *Config, profile *ResolvedProfile) (*RunningInstance, bool, error) {
-	addr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	addr := joinHostPort(*profile.Host, *profile.Port)
 
 	b, err := GetLLMServer(profile.Backend)
 	if err != nil {
@@ -781,7 +781,7 @@ func LoadProfileNotify(cfg *Config, profile *ResolvedProfile, restart bool, prog
 // every process/health/probe effect through ops (ADR-0009) and carries the
 // single targetAddr derived from the resolved profile.
 func loadProfile(ops activationOps, cfg *Config, profile *ResolvedProfile, restart bool, progress ProgressFunc, notify NoticeFunc) (*RunningInstance, bool, error) {
-	targetAddr := fmt.Sprintf("%s:%d", *profile.Host, *profile.Port)
+	targetAddr := joinHostPort(*profile.Host, *profile.Port)
 
 	b, err := GetLLMServer(profile.Backend)
 	if err != nil {

@@ -681,7 +681,7 @@ Standard library only beyond that. No TUI framework; ANSI escape codes are used 
 
 ## 6. Process and Model Management
 
-The launcher operates on **LLM Server instances**, each identified by its `host:port` address ([ADR-0006](.capcom/knowledge/decisions/adr-0006.md)). Multiple instances of any LLM Server type may run concurrently as long as each binds a distinct address.
+The launcher operates on **LLM Server instances**, each identified by its `host:port` address ([ADR-0006](.capcom/knowledge/decisions/adr-0006.md)). Multiple instances of any LLM Server type may run concurrently as long as each binds a distinct address. Every address is built by `joinHostPort` and parsed by `splitHostPort` (`discovery.go`, over `net.JoinHostPort` / `net.SplitHostPort`): an IPv6 host is written bracketed (`[::1]:8000`), a host already bracketed in the config (`host: "[::1]"`) is not bracketed twice, and IPv4 and hostname addresses read `host:port` unchanged.
 
 ### 6.1 Activating a Profile
 
