@@ -347,6 +347,9 @@ make cross             # Cross-compile gate: build + vet for darwin/linux/window
 make check             # test + cross — run this before committing; starts no process
 make test-integration  # Real-backend integration suite (host only; see below)
 make test-all          # Both test layers (host only)
+make dist              # Build the release archives + SHA256SUMS into dist/
+make release-status    # Release gate and publish-step report [RELEASE=vX.Y.Z]
+make release-smoke     # Verify a published release [RELEASE=vX.Y.Z]
 make clean             # Remove the binaries
 ```
 

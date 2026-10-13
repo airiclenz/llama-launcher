@@ -213,7 +213,9 @@ Depends on item 6.
 **Acceptance:** `go test -count=1 -run 'Publish|Repo' ./cmd/release/...`
 **Commit:** `fix(release): converge a release uploaded without SHA256SUMS`
 
-## 8. Make targets and ignore dist output
+## 8. Make targets and ignore dist output — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): consequential edit — README.md: made necessary by the new make targets (README's Development target list now names dist, release-status and release-smoke)
 
 **What:**
 **Goal:**

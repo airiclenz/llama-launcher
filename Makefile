@@ -9,7 +9,7 @@ MCP_LDFLAGS := -ldflags "-X main.Version=$(VERSION)"
 # here instead of in an importing client's CI.
 GOOSES := darwin linux windows
 
-.PHONY: build build-mcp test test-integration test-all cross check install clean
+.PHONY: build build-mcp test test-integration test-all cross check dist release-status release-smoke install clean
 
 build:
 	go build $(LDFLAGS) -o $(BINARY) .
@@ -38,6 +38,23 @@ cross:
 	done
 
 check: test cross
+
+# Release wrappers over cmd/release. RELEASE= is passed through verbatim and,
+# left empty, the verb defaults to the VERSION file; it is a separate variable
+# because VERSION= on the make line would override the one read above.
+
+# Build the four darwin/linux archives and SHA256SUMS into dist/.
+dist:
+	go run ./cmd/release dist
+
+# Report the release gate, the baseline and each publish step (read-only apart
+# from fetching origin): make release-status [RELEASE=vX.Y.Z]
+release-status:
+	go run ./cmd/release status $(RELEASE)
+
+# Verify a published release from the outside: make release-smoke [RELEASE=vX.Y.Z]
+release-smoke:
+	go run ./cmd/release smoke $(RELEASE)
 
 install:
 	@echo "Install via Homebrew:  brew upgrade llama-launcher"
