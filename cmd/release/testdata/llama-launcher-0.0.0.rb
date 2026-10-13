@@ -33,6 +33,7 @@ class LlamaLauncher < Formula
 
   def install
     bin.install "llama-launcher", "llama-launcher-mcp"
+    generate_completions_from_executable(bin/"llama-launcher", "completions")
   end
 
   test do

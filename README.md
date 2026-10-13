@@ -25,7 +25,7 @@ brew tap airiclenz/tap
 brew install llama-launcher
 ```
 
-The formula installs prebuilt binaries for macOS and Linux on arm64 and amd64, so no Go toolchain is needed. It installs the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it.
+The formula installs prebuilt binaries for macOS and Linux on arm64 and amd64, so no Go toolchain is needed. It installs the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it. The formula also installs bash, zsh and fish completions (see [Shell completions](#shell-completions)).
 
 ### From source
 
