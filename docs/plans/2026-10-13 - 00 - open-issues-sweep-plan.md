@@ -75,7 +75,9 @@ NOTES (2026-10-13): TestStopServerAt_AuthFailedListener carries the same hard-fa
 **Acceptance:** `go test ./internal/launcher/ -run 'TestCmdListJSON|TestRun_ListJSON' -v`
 **Commit:** `test(cli): cover list --json output`
 
-## 4. Preserve CRLF line endings on config rewrite
+## 4. Preserve CRLF line endings on config rewrite — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): followed the Regression guard over the Approach — `splitConfigLines` now splits after "\n" so each line keeps its own ending, `joinConfigLines(lines, newline)` gives only ending-less (rewritten/inserted, or an unclosed last) lines the file's detected newline (`configNewline`); `scalarLineParts` reads the line through `configLineText`. The `configwrite.go` header comment and the TDD §5.2 row now state that line endings are kept.
 
 **What:** fix — `saveServerKeySource` on a CRLF config writes LF-only lines (inserted `plaintext_key_ok` marker, possibly the rewritten `api_key_cmd` line), producing mixed endings.
 **Goal:** after any `saveServerKeySource` edit, a CRLF config file uses CRLF on every line and an LF file uses LF on every line.

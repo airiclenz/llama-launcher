@@ -218,6 +218,115 @@ func TestSaveServerPlaintextKeyOK_AlreadyTrueIsANoOp(t *testing.T) {
 	}
 }
 
+// A config written with CRLF endings stays CRLF on every line after each
+// splice — the rewritten api_key_cmd line, the inserted marker and the
+// rewritten marker alike — rather than gaining LF-only lines beside the rest.
+func TestSaveServerKeySource_KeepsCRLFEndings(t *testing.T) {
+	t.Parallel()
+
+	crlf := func(text string) string { return strings.ReplaceAll(text, "\n", "\r\n") }
+	withFalse := strings.Replace(keySourceFixture,
+		"    api_key: sk-other\n",
+		"    api_key: sk-other\n    plaintext_key_ok: false\n", 1)
+	command := "security find-generic-password -w -s llama-launcher -a llamacpp"
+
+	cases := []struct {
+		name    string
+		fixture string
+		save    func(path string) error
+		want    string
+	}{
+		{
+			name:    "rewrite to api_key_cmd",
+			fixture: keySourceFixture,
+			save:    func(path string) error { return SaveServerKeyCommand(path, "llamacpp", command) },
+			want: strings.Replace(keySourceFixture,
+				"    api_key:   sk-plaintext",
+				"    api_key_cmd:   "+command, 1),
+		},
+		{
+			name:    "insert the marker",
+			fixture: keySourceFixture,
+			save:    func(path string) error { return SaveServerPlaintextKeyOK(path, "lmstudio") },
+			want: strings.Replace(keySourceFixture,
+				"    api_key: sk-other\n",
+				"    api_key: sk-other\n    plaintext_key_ok: true\n", 1),
+		},
+		{
+			name:    "rewrite an existing marker",
+			fixture: withFalse,
+			save:    func(path string) error { return SaveServerPlaintextKeyOK(path, "lmstudio") },
+			want: strings.Replace(withFalse,
+				"    plaintext_key_ok: false", "    plaintext_key_ok: true", 1),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfigFixture(t, crlf(tc.fixture))
+			if err := tc.save(path); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+
+			got := configFileText(t, path)
+			if lf, crlfCount := strings.Count(got, "\n"), strings.Count(got, "\r\n"); lf != crlfCount {
+				t.Errorf("rewritten config has %d bare LF line(s):\n%q", lf-crlfCount, got)
+			}
+			if want := crlf(tc.want); got != want {
+				t.Errorf("rewritten config =\n%q\nwant\n%q", got, want)
+			}
+		})
+	}
+}
+
+// An LF config gains no CR anywhere from an edit.
+func TestSaveServerKeySource_KeepsLFEndings(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfigFixture(t, keySourceFixture)
+	if err := SaveServerPlaintextKeyOK(path, "lmstudio"); err != nil {
+		t.Fatalf("SaveServerPlaintextKeyOK: %v", err)
+	}
+
+	if got := configFileText(t, path); strings.Contains(got, "\r") {
+		t.Errorf("rewritten LF config gained a CR:\n%q", got)
+	}
+}
+
+// A file mixing CRLF and LF lines keeps every untouched line's own ending; only
+// the line the splice writes takes the file's newline, which is CRLF because
+// the file uses it.
+func TestSaveServerKeySource_MixedCRLFKeepsUntouchedEndings(t *testing.T) {
+	t.Parallel()
+
+	config := "# mixed endings\r\n" +
+		"models_dir: ~/models\n" +
+		"\r\n" +
+		"servers:\n" +
+		"  llamacpp:\r\n" +
+		"    enabled: true\n" +
+		"    api_key: sk-plaintext\r\n" +
+		"  lmstudio:\n" +
+		"    api_key: sk-other\n" +
+		"\n" +
+		"profiles:\r\n" +
+		"  small:\n" +
+		"    model: small.gguf\r\n"
+	path := writeConfigFixture(t, config)
+
+	if err := SaveServerPlaintextKeyOK(path, "lmstudio"); err != nil {
+		t.Fatalf("SaveServerPlaintextKeyOK: %v", err)
+	}
+
+	want := strings.Replace(config,
+		"    api_key: sk-other\n",
+		"    api_key: sk-other\n    plaintext_key_ok: true\r\n", 1)
+	if got := configFileText(t, path); got != want {
+		t.Errorf("rewritten config =\n%q\nwant\n%q", got, want)
+	}
+}
+
 // Every shape these edits cannot make surgically is refused with a pointer at
 // the file, and — the half that matters — leaves the file exactly as it was.
 // Guessing at any of them risks writing over a key source the user still needs.

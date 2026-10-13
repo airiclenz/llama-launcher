@@ -22,9 +22,10 @@ import (
 // having to say where its key comes from now, and answering "never, this one
 // stays" leaves it having to say that. Both are ONE line of a file the user
 // owns and llama-launcher only reads, so both are written under the same
-// contract: every comment, every key order and every other entry comes back
-// byte-identical, because a writer that reformats a config the user hand-wrote
-// has taken the file away from them.
+// contract: every comment, every key order, every other entry and every line
+// ending comes back byte-identical — the one line a splice writes takes the
+// file's own newline, CRLF or LF — because a writer that reformats a config
+// the user hand-wrote has taken the file away from them.
 //
 // The shape is: parse for positions, splice text, re-parse the result and
 // compare it against what the edit was supposed to produce, and only then
@@ -208,7 +209,7 @@ func spliceEntryKeyCommand(data []byte, name, text string) ([]byte, error) {
 	}
 	out := slices.Clone(lines)
 	out[keyNode.Line-1] = strings.TrimSuffix(head, apiKeyKey+":") + apiKeyCmdKey + ":" + gap + text + tail
-	return joinConfigLines(out), nil
+	return joinConfigLines(out, configNewline(data)), nil
 }
 
 // spliceEntryPlaintextKeyOK writes the marker into the entry's block: over the
@@ -232,7 +233,7 @@ func spliceEntryPlaintextKeyOK(data []byte, name string) ([]byte, error) {
 		}
 		out := slices.Clone(lines)
 		out[keyNode.Line-1] = head + gap + "true" + tail
-		return joinConfigLines(out), nil
+		return joinConfigLines(out, configNewline(data)), nil
 	}
 	at := maxNodeLine(entry)
 	if at < 1 || at > len(lines) {
@@ -244,7 +245,7 @@ func spliceEntryPlaintextKeyOK(data []byte, name string) ([]byte, error) {
 	out = append(out, lines[:at]...)
 	out = append(out, marker)
 	out = append(out, lines[at:]...)
-	return joinConfigLines(out), nil
+	return joinConfigLines(out, configNewline(data)), nil
 }
 
 // serverEntryNode finds the block mapping of the servers entry named name in
@@ -362,7 +363,7 @@ func scalarLineParts(lines []string, key string, keyNode, valueNode *yaml.Node) 
 	if line < 1 || line > len(lines) {
 		return "", "", "", fmt.Errorf("its %s: sits on line %d, which is outside the file", key, line)
 	}
-	raw := lines[line-1]
+	raw := configLineText(lines[line-1])
 	indent := keyNode.Column - 1
 	if indent < 0 || indent > len(raw) || !strings.HasPrefix(raw[indent:], key+":") {
 		return "", "", "", fmt.Errorf("its %s: line reads unexpectedly at line %d; edit the file by hand", key, line)
@@ -455,20 +456,50 @@ func renderYAMLScalar(v any) (string, error) {
 	return text, nil
 }
 
-// splitConfigLines splits the file into lines without a trailing empty element,
-// so a rejoin plus one closing newline reproduces the file exactly. A blank
-// file has no lines at all.
+// splitConfigLines splits the file into lines that each keep their own ending
+// ("\n", "\r\n", or none on a last line the file does not close), without a
+// trailing empty element, so a plain rejoin reproduces the file exactly. A
+// blank file has no lines at all.
 func splitConfigLines(data []byte) []string {
 	text := string(data)
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	lines := strings.SplitAfter(text, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
-// joinConfigLines rejoins the lines, always ending the file with a newline.
-func joinConfigLines(lines []string) []byte {
-	return []byte(strings.Join(lines, "\n") + "\n")
+// configLineText is one split line without its ending — the text a splice
+// reads and rebuilds.
+func configLineText(line string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+}
+
+// configNewline is the line ending the file is written in: CRLF when it uses
+// CRLF anywhere, LF otherwise. A line a splice rewrites or inserts takes it,
+// so an edit to a CRLF config does not leave LF-only lines behind.
+func configNewline(data []byte) string {
+	if bytes.Contains(data, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// joinConfigLines rejoins the lines. A line without an ending — one a splice
+// rewrote or inserted, or a last line the file never closed — is given
+// newline, so the file always ends with one; every other line keeps its own.
+func joinConfigLines(lines []string, newline string) []byte {
+	var out strings.Builder
+	for _, line := range lines {
+		out.WriteString(line)
+		if !strings.HasSuffix(line, "\n") {
+			out.WriteString(newline)
+		}
+	}
+	return []byte(out.String())
 }
 
 // verifiedEntrySplice is the gate a splice passes before it reaches the disk:
