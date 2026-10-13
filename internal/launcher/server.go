@@ -521,13 +521,9 @@ func findListeningPID(addr string) (int, error) {
 // back to a port-only filter so we still find servers bound to 0.0.0.0 or
 // another interface. The result is never empty when the error is nil.
 func findListeningPIDs(addr string) ([]int, error) {
-	host, port, err := net.SplitHostPort(addr)
+	attempts, err := lsofListenerArgs(addr)
 	if err != nil {
 		return nil, err
-	}
-	attempts := [][]string{
-		{"-nP", "-iTCP@" + host + ":" + port, "-sTCP:LISTEN", "-t"},
-		{"-nP", "-iTCP:" + port, "-sTCP:LISTEN", "-t"},
 	}
 	for _, args := range attempts {
 		out, err := exec.Command("lsof", args...).Output()
@@ -539,6 +535,21 @@ func findListeningPIDs(addr string) ([]int, error) {
 		}
 	}
 	return nil, fmt.Errorf("no process listening on %s (is lsof installed?)", addr)
+}
+
+// lsofListenerArgs returns the lsof argument lists findListeningPIDs tries
+// for host:port, in order: the host-specific filter, then the port-only one.
+// lsof wants an IPv6 host bracketed (-iTCP@[::1]:8000), which
+// net.JoinHostPort supplies while leaving IPv4 and hostnames as they are.
+func lsofListenerArgs(addr string) ([][]string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	return [][]string{
+		{"-nP", "-iTCP@" + net.JoinHostPort(host, port), "-sTCP:LISTEN", "-t"},
+		{"-nP", "-iTCP:" + port, "-sTCP:LISTEN", "-t"},
+	}, nil
 }
 
 // parseListeningPIDs extracts PIDs from `lsof -t` output, discarding

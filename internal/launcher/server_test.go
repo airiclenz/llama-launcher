@@ -3106,6 +3106,46 @@ func TestParseListeningPIDs(t *testing.T) {
 	}
 }
 
+func TestLsofListenerArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		addr       string
+		wantFilter string
+		wantPort   string
+	}{
+		{"ipv4", "127.0.0.1:8000", "-iTCP@127.0.0.1:8000", "-iTCP:8000"},
+		{"hostname", "localhost:8000", "-iTCP@localhost:8000", "-iTCP:8000"},
+		{"ipv6 bracketed", "[::1]:8000", "-iTCP@[::1]:8000", "-iTCP:8000"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := lsofListenerArgs(tc.addr)
+			if err != nil {
+				t.Fatalf("lsofListenerArgs(%q) error = %v", tc.addr, err)
+			}
+			want := [][]string{
+				{"-nP", tc.wantFilter, "-sTCP:LISTEN", "-t"},
+				{"-nP", tc.wantPort, "-sTCP:LISTEN", "-t"},
+			}
+			if !slices.EqualFunc(got, want, slices.Equal[[]string]) {
+				t.Errorf("lsofListenerArgs(%q) = %q, want %q", tc.addr, got, want)
+			}
+		})
+	}
+}
+
+func TestLsofListenerArgs_InvalidAddr(t *testing.T) {
+	t.Parallel()
+
+	if _, err := lsofListenerArgs("no-port"); err == nil {
+		t.Error("lsofListenerArgs(\"no-port\") error = nil, want an error")
+	}
+}
+
 func TestPortConflictErr(t *testing.T) {
 	t.Parallel()
 

@@ -130,7 +130,9 @@ NOTES (2026-10-13): CLOSES names ipv6-host-address-format as the plan's Closes l
 **Acceptance:** `go test ./internal/launcher/ -run 'Addr|HostPort|Discovery|IPv6' -v`; `GOOS=windows go vet ./internal/launcher/`
 **Commit:** `fix(net): bracket IPv6 hosts when building and parsing addresses`
 
-## 7. Bracket IPv6 in the lsof listener filter
+## 7. Bracket IPv6 in the lsof listener filter — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): consequential edit — llama-launcher.TDD.md: made necessary by the bracketed lsof filter (§ stop step 1 now notes the IPv6 spelling)
 
 **What:** fix — `findListeningPIDs` builds `-iTCP@host:port`; lsof needs `-iTCP@[::1]:port`. Depends on item 6.
 **Goal:** `findListeningPIDs` passes lsof a bracketed host for IPv6 and the unchanged spelling for IPv4/hostnames.
