@@ -4,6 +4,7 @@ status: open
 type: chore
 priority: 3
 labels: [docs, from-todo]
+plan: 2026-10-13 - 00 - open-issues-sweep-plan.md
 aliases: [llama-launcher-tdd-file-map-gaps]
 created: 2026-09-24T07:19:49Z
 ---

@@ -4,6 +4,7 @@ status: open
 type: bug
 priority: 3
 labels: [config]
+plan: 2026-10-13 - 00 - open-issues-sweep-plan.md
 aliases: [llama-launcher-ipv6-host-address-format]
 created: 2026-09-24T09:41:49Z
 ---

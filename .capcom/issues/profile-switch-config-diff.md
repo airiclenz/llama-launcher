@@ -4,6 +4,7 @@ status: open
 type: feature
 priority: 3
 labels: [from-todo, menu]
+plan: 2026-10-13 - 00 - open-issues-sweep-plan.md
 aliases: [llama-launcher-profile-switch-config-diff]
 created: 2026-09-24T07:19:43Z
 ---

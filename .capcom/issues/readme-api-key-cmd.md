@@ -4,6 +4,7 @@ status: open
 type: chore
 priority: 3
 labels: [docs, from-todo]
+plan: 2026-10-13 - 00 - open-issues-sweep-plan.md
 aliases: [llama-launcher-readme-api-key-cmd-row]
 created: 2026-09-24T07:19:51Z
 ---

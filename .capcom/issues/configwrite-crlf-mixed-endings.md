@@ -4,6 +4,7 @@ status: open
 type: bug
 priority: 3
 labels: [config, from-todo]
+plan: 2026-10-13 - 00 - open-issues-sweep-plan.md
 aliases: [llama-launcher-configwrite-crlf-mixed-endings]
 created: 2026-09-24T07:19:52Z
 ---
