@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.8.2
+
 ### Added
 
 - **CI tags version bumps:** a push to `main` that changes `VERSION` to a bare `X.Y.Z` now gets an annotated `vX.Y.Z` tag created by the new `tag-on-version-bump` workflow.
