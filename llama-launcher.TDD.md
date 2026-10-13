@@ -71,7 +71,7 @@ When more than one LLM Server is enabled in the config, every Profile row additi
 
 Between the Profile title and that `[server]` tag sits a right-aligned **context-size column** showing the Profile's *effective* context size — `defaults` merged with the Profile's own `context_size`, the same merge `list --json` reports — in compact form: values below a thousand verbatim, then integer floor division into `K` and `M` (`512`, `4K`, `65K`, `131K`, `1M`). The column is shown only when at least one Profile in the listing has a value to show, the same presence gating as the `★` marker ([§4.7](#47-favourite-profiles)); Profiles without one get a blank cell of the column width, so the `[server]` tags and the `★` markers keep their columns. With a single enabled server (no tag column) the cell is the whole row description. Two spaces separate the cell from the `[server]` tag that follows it, and from the padded title column before it — except in the arrow-key menu, which pads its title column one space wider, putting three there.
 
-Which rows can show a value is owned by the backend, not by a name check: a Profile is displayable only when its resolved LLM Server's `ParamSpecs` ([§5.3](#53-llmserver-interface)) carries the context-size spec — the rule that a parameter the server never receives is never displayed, the same one the "Show model config" pop-up follows. Ollama's spec list is empty (its load request carries only the model name and a keep-alive), so Ollama rows render a blank cell; a future Ollama context-size feature would light the column up with no change to the list renderers. A `-c` / `--ctx-size` value passed through a Profile's `extra_args` is deliberately not parsed and never appears — only the `context_size` key is read.
+Which rows can show a value is owned by the backend, not by a name check: a Profile is displayable only when its resolved LLM Server's `ParamSpecs` ([§5.3](#53-llmserver-interface)) carries the context-size spec — the rule that a parameter the server never receives is never displayed, the same one the "Show model config" pop-up follows. Ollama's spec list is empty (its load request carries only the model name and a keep-alive), so Ollama rows render a blank cell; adding the spec to Ollama would light the column up with no change to the list renderers. A `-c` / `--ctx-size` value passed through a Profile's `extra_args` is deliberately not parsed and never appears — only the `context_size` key is read.
 
 After selecting a Profile, the launcher shows a step-by-step progress popup that updates in place as each lifecycle stage completes, then prints a confirmation and exits. With `auto_close: false` the menu comes back instead, and the confirmation is skipped: the popup gains a final `Refreshing menu` step and stays on screen until the menu repaints over it, so the discovery pass before that repaint — seconds on a machine saturated by the model it just loaded — never shows a blank screen:
 
@@ -936,13 +936,7 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 
 ## 11. Future Considerations
 
-These are explicitly out of scope for v1 but noted as natural extensions:
-
-- **Per-instance log file naming**: `{backend}-{port}-{timestamp}.log` rather than `{backend}-{timestamp}.log`. Collisions are already ruled out — the stamp carries milliseconds and the file is created exclusively with a retry (§9) — so this would only make a log's instance readable from its name.
-- **Config reload subcommand**: A `reload` subcommand that restarts the matching instance with the same Profile using updated config values. (Note: automatic config reload in the interactive menu is already implemented — this item covers the CLI subcommand.)
-- **Additional LLM Servers**: vLLM and others — each as a new `backend_<name>.go` file implementing the `LLMServer` interface.
-- **Launchd integration**: Generate a launchd plist for auto-start on login.
-- **Per-Profile log retention**: Today log retention is global; a per-Profile `log_retention` would let chatty debug Profiles keep more history without inflating storage for everything.
+Feature ideas are tracked as capcom issues, not here: `capcom list --type feature`.
 
 ## 12. Testing
 
