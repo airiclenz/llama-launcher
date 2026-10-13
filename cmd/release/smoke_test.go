@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -35,14 +36,19 @@ type smokeFake struct {
 	revision    string
 	modified    string
 	isUnstamped bool
-	// binaryVersion is the bare version a released binary reports.
+	// binaryVersion and mcpVersion are what a released llama-launcher prints for `version` and a
+	// released llama-launcher-mcp for `--version`: the bare version.
 	binaryVersion string
+	mcpVersion    string
 	// brew is "missing" (not installed), "absent" (llama-launcher not installed through it) or
 	// "installed"; brewReports is what its llama-launcher prints for `llama-launcher version`.
 	brew        string
 	brewReports string
 	// failing makes a command line fail with the error.
 	failing map[string]error
+	// ranStubs is the stub each released binary run held, by binary name, so a test can tell
+	// which platform's build ran.
+	ranStubs map[string]string
 }
 
 // newSmokeFake is a release published in full: the annotated tag is on origin and fetched, the
@@ -57,9 +63,11 @@ func newSmokeFake(t *testing.T) *smokeFake {
 		revision:      smokeTagCommit,
 		modified:      "false",
 		binaryVersion: strings.TrimPrefix(publishVersion, "v"),
+		mcpVersion:    strings.TrimPrefix(publishVersion, "v"),
 		brew:          "installed",
-		brewReports:   "llama-launcher " + strings.TrimPrefix(publishVersion, "v"),
+		brewReports:   strings.TrimPrefix(publishVersion, "v"),
 		failing:       map[string]error{},
+		ranStubs:      map[string]string{},
 	}
 }
 
@@ -146,16 +154,23 @@ func (f *smokeFake) respond(call recordedCall) (string, error) {
 		return smokeBrewPrefix + "\n", nil
 	case line == filepath.Join(smokeBrewPrefix, "bin", "llama-launcher")+" "+versionArgument:
 		return f.brewReports + "\n", nil
-	case len(args) == 1 && args[0] == versionArgument:
-		// A binary extracted from an archive: report the version and the stub it holds, so a
-		// test can tell which platform's binary ran.
-		stub, err := os.ReadFile(call.name)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("llama-launcher %s (%s)\n", f.binaryVersion, strings.TrimSpace(string(stub))), nil
+	case filepath.Base(call.name) == binaryName && len(args) == 1 && args[0] == versionArgument:
+		return f.releasedBinaryReports(call.name, f.binaryVersion)
+	case filepath.Base(call.name) == mcpBinaryName && len(args) == 1 && args[0] == mcpVersionArgument:
+		return f.releasedBinaryReports(call.name, f.mcpVersion)
 	}
 	return "", fmt.Errorf("unexpected command %q", line)
+}
+
+// releasedBinaryReports answers a binary extracted from an archive: it records the stub the
+// binary holds and prints version, as both binaries do, bare on a line of its own.
+func (f *smokeFake) releasedBinaryReports(path, version string) (string, error) {
+	stub, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	f.ranStubs[filepath.Base(path)] = strings.TrimSpace(string(stub))
+	return version + "\n", nil
 }
 
 // readBuildInfo is the fake build-stamp reader: every binary carries the fake's stamp.
@@ -234,46 +249,47 @@ func TestSmokeChecks(t *testing.T) {
 				{"PASS", "SHA256SUMS in"},
 				{"PASS", "4 assets downloaded, all checksums match"},
 				{"PASS", "4 assets carry vcs.revision 81eec1b3ac7d = the tag"},
-				{"PASS", "the released binary reports \"llama-launcher 0.24.11"},
-				{"PASS", "brew's llama-launcher reports \"llama-launcher 0.24.11\""},
+				{"PASS", "the released llama-launcher reports \"0.24.11\""},
+				{"PASS", "the released llama-launcher-mcp reports \"0.24.11\""},
+				{"PASS", "brew's llama-launcher reports \"0.24.11\""},
 			},
-			wantTally: "6 passed, 0 failed, 0 skipped",
+			wantTally: "7 passed, 0 failed, 0 skipped",
 		},
 		"no tag on origin": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.repo.remoteTags = map[string]string{} },
 			wantResults: [][2]string{{"FAIL", "origin has no tag v0.24.11"}},
-			wantTally:   "5 passed, 1 failed, 0 skipped",
+			wantTally:   "6 passed, 1 failed, 0 skipped",
 		},
 		"lightweight tag": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.repo.remoteTags[publishVersion] = "commit" },
 			wantResults: [][2]string{{"FAIL", "v0.24.11 on origin is a lightweight tag"}},
-			wantTally:   "5 passed, 1 failed, 0 skipped",
+			wantTally:   "6 passed, 1 failed, 0 skipped",
 		},
 		"origin's tags cannot be listed": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
 				fake.repo.failures[methodRemoteHasTag] = errors.New("not a git repository")
 			},
 			wantResults: [][2]string{{"SKIP", "could not list origin's tags"}},
-			wantTally:   "5 passed, 0 failed, 1 skipped",
+			wantTally:   "6 passed, 0 failed, 1 skipped",
 		},
 		"tag type unreadable": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
 				fake.repo.failures[methodRemoteTagType] = errors.New("gh: authentication required")
 			},
 			wantResults: [][2]string{{"SKIP", "gh could not read its type"}},
-			wantTally:   "5 passed, 0 failed, 1 skipped",
+			wantTally:   "6 passed, 0 failed, 1 skipped",
 		},
 		"no local build to compare": {
 			adjust:      func(_ *smokeFake, options *smokeOptions) { options.distDir = "" },
 			wantResults: [][2]string{{"SKIP", "no --dist-dir"}},
-			wantTally:   "5 passed, 0 failed, 1 skipped",
+			wantTally:   "6 passed, 0 failed, 1 skipped",
 		},
 		"local build differs from the published sums": {
 			adjust: func(fake *smokeFake, options *smokeOptions) {
 				options.distDir = otherBuild(t, fake.releaseDir, "llama-launcher_0.24.11_linux_arm64.tar.gz")
 			},
 			wantResults: [][2]string{{"FAIL", "differs from the published one for llama-launcher_0.24.11_linux_arm64.tar.gz"}},
-			wantTally:   "5 passed, 1 failed, 0 skipped",
+			wantTally:   "6 passed, 1 failed, 0 skipped",
 		},
 		"an asset does not match SHA256SUMS": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
@@ -282,9 +298,10 @@ func TestSmokeChecks(t *testing.T) {
 			wantResults: [][2]string{
 				{"FAIL", "asset llama-launcher_0.24.11_darwin_arm64.tar.gz hashes to"},
 				{"SKIP", "the assets did not all download and verify"},
-				{"PASS", "the released binary reports"},
+				{"PASS", "the released llama-launcher reports"},
+				{"PASS", "the released llama-launcher-mcp reports"},
 			},
-			wantTally: "4 passed, 1 failed, 1 skipped",
+			wantTally: "5 passed, 1 failed, 1 skipped",
 		},
 		"the release has no SHA256SUMS": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) {
@@ -308,7 +325,7 @@ func TestSmokeChecks(t *testing.T) {
 		"tag not fetched into the local clone": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { delete(fake.repo.tagCommits, publishVersion) },
 			wantResults: [][2]string{{"SKIP", "tag v0.24.11 is not in the local clone"}},
-			wantTally:   "5 passed, 0 failed, 1 skipped",
+			wantTally:   "6 passed, 0 failed, 1 skipped",
 		},
 		"binaries built from another commit": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) { fake.revision = "0123456789abcdef0123456789abcdef01234567" },
@@ -316,17 +333,17 @@ func TestSmokeChecks(t *testing.T) {
 				{"FAIL", "asset llama-launcher_0.24.11_linux_amd64.tar.gz was built from 0123456789abcdef"},
 				{"FAIL", "asset llama-launcher_0.24.11_darwin_arm64.tar.gz was built from 0123456789abcdef"},
 			},
-			wantTally: "5 passed, 4 failed, 0 skipped",
+			wantTally: "6 passed, 4 failed, 0 skipped",
 		},
 		"binaries without a revision": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.revision = "" },
 			wantResults: [][2]string{{"FAIL", "carries no vcs.revision"}},
-			wantTally:   "5 passed, 4 failed, 0 skipped",
+			wantTally:   "6 passed, 4 failed, 0 skipped",
 		},
 		"binaries without build information": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.isUnstamped = true },
 			wantResults: [][2]string{{"FAIL", "carries no build information"}},
-			wantTally:   "5 passed, 4 failed, 0 skipped",
+			wantTally:   "6 passed, 4 failed, 0 skipped",
 		},
 		"binaries built from a modified tree": {
 			adjust: func(fake *smokeFake, _ *smokeOptions) { fake.modified = "true" },
@@ -334,12 +351,17 @@ func TestSmokeChecks(t *testing.T) {
 				{"warning", "asset llama-launcher_0.24.11_darwin_amd64.tar.gz was built from a modified tree"},
 				{"PASS", "4 assets carry vcs.revision"},
 			},
-			wantTally: "6 passed, 0 failed, 0 skipped",
+			wantTally: "7 passed, 0 failed, 0 skipped",
 		},
-		"the host's binary reports another version": {
+		"the host's llama-launcher reports another version": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.binaryVersion = "0.24.10" },
-			wantResults: [][2]string{{"FAIL", "the released binary reports \"llama-launcher 0.24.10"}},
-			wantTally:   "5 passed, 1 failed, 0 skipped",
+			wantResults: [][2]string{{"FAIL", "the released llama-launcher reports \"0.24.10\", not \"0.24.11\""}},
+			wantTally:   "6 passed, 1 failed, 0 skipped",
+		},
+		"the host's llama-launcher-mcp reports another version": {
+			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.mcpVersion = "0.24.10" },
+			wantResults: [][2]string{{"FAIL", "the released llama-launcher-mcp reports \"0.24.10\", not \"0.24.11\""}},
+			wantTally:   "6 passed, 1 failed, 0 skipped",
 		},
 		"no release archive for the host": {
 			adjust:      func(_ *smokeFake, options *smokeOptions) { options.goos = "freebsd" },
@@ -349,17 +371,17 @@ func TestSmokeChecks(t *testing.T) {
 		"Homebrew is not installed": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brew = "missing" },
 			wantResults: [][2]string{{"SKIP", "Homebrew is not installed on this host"}},
-			wantTally:   "5 passed, 0 failed, 1 skipped",
+			wantTally:   "6 passed, 0 failed, 1 skipped",
 		},
 		"llama-launcher is not installed through Homebrew": {
 			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brew = "absent" },
 			wantResults: [][2]string{{"SKIP", "llama-launcher is not installed through Homebrew here"}},
-			wantTally:   "5 passed, 0 failed, 1 skipped",
+			wantTally:   "6 passed, 0 failed, 1 skipped",
 		},
 		"brew upgrade leaves the old version": {
-			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brewReports = "llama-launcher 0.24.10" },
-			wantResults: [][2]string{{"FAIL", "brew's llama-launcher reports \"llama-launcher 0.24.10\", not \"llama-launcher 0.24.11\""}},
-			wantTally:   "5 passed, 1 failed, 0 skipped",
+			adjust:      func(fake *smokeFake, _ *smokeOptions) { fake.brewReports = "0.24.10" },
+			wantResults: [][2]string{{"FAIL", "brew's llama-launcher reports \"0.24.10\", not \"0.24.11\""}},
+			wantTally:   "6 passed, 1 failed, 0 skipped",
 		},
 	}
 	for name, tc := range cases {
@@ -406,10 +428,10 @@ func otherBuild(t *testing.T, releaseDir, name string) string {
 	return dir
 }
 
-// TestSmokeRunsTheHostsOwnLauncherBinary pins the host path: the binary run is the llama-launcher
-// inside the host's own archive — the darwin/arm64 build of the root package, not another
-// platform's and not llama-launcher-mcp beside it.
-func TestSmokeRunsTheHostsOwnLauncherBinary(t *testing.T) {
+// TestSmokeRunsTheHostsOwnBinaries pins the host path: the binaries run are llama-launcher and
+// llama-launcher-mcp inside the host's own archive — the darwin/arm64 builds of their packages,
+// not another platform's — each asked for its version the way it reports it.
+func TestSmokeRunsTheHostsOwnBinaries(t *testing.T) {
 	t.Parallel()
 	fake := newSmokeFake(t)
 
@@ -421,17 +443,23 @@ func TestSmokeRunsTheHostsOwnLauncherBinary(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("smoke failed: %v\n%s", result.err, result.output)
 	}
-	if !hasResult(result.output, "PASS", "stub binary . [CGO_ENABLED=0 GOOS=darwin GOARCH=arm64]") {
-		t.Errorf("the host check did not run the darwin/arm64 llama-launcher binary:\n%s", result.output)
+	wantStubs := map[string]string{
+		binaryName:    "stub binary . [CGO_ENABLED=0 GOOS=darwin GOARCH=arm64]",
+		mcpBinaryName: "stub binary ./cmd/llama-launcher-mcp [CGO_ENABLED=0 GOOS=darwin GOARCH=arm64]",
+	}
+	for name, want := range wantStubs {
+		if got := fake.ranStubs[name]; got != want {
+			t.Errorf("the host check ran %s holding %q, want %q", name, got, want)
+		}
 	}
 	var ran []string
 	for _, call := range result.commands.calls {
-		if len(call.args) == 1 && call.args[0] == versionArgument && !strings.HasPrefix(call.name, filepath.FromSlash(smokeBrewPrefix)) {
-			ran = append(ran, call.name)
+		if !strings.HasPrefix(call.name, filepath.FromSlash(smokeBrewPrefix)) && filepath.IsAbs(call.name) {
+			ran = append(ran, filepath.Base(call.name)+" "+strings.Join(call.args, " "))
 		}
 	}
-	if len(ran) != 1 || filepath.Base(ran[0]) != "llama-launcher" {
-		t.Errorf("ran %q version, want the one llama-launcher from the archive", ran)
+	if want := []string{binaryName + " " + versionArgument, mcpBinaryName + " " + mcpVersionArgument}; !slices.Equal(ran, want) {
+		t.Errorf("ran %q from the archive, want %q", ran, want)
 	}
 }
 

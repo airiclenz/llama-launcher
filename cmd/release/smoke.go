@@ -27,8 +27,15 @@ const gitObjectTag = "tag"
 var nonInteractiveEnv = []string{"GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1"}
 
 // versionArgument is the subcommand a llama-launcher binary reports its version under; it prints
-// "llama-launcher X.Y.Z" with the bare version.
+// the bare version, X.Y.Z, and nothing else.
 const versionArgument = "version"
+
+// mcpBinaryName is the control-plane adapter every archive carries beside llama-launcher, and
+// mcpVersionArgument the flag it reports its version under; it too prints the bare version.
+const (
+	mcpBinaryName      = "llama-launcher-mcp"
+	mcpVersionArgument = "--version"
+)
 
 // The build settings `-buildvcs` stamps into every release binary: the commit it was built from
 // and whether that tree was dirty. They — not the archive bytes — tie a published asset to the tag.
@@ -94,11 +101,11 @@ func newSmokeCommand(commands runner, openRepo repoOpener) *cobra.Command {
 		Long: "smoke proves a published release is usable: the tag is on origin and annotated;\n" +
 			"with --dist-dir, that build's SHA256SUMS equals the published one; the four archives\n" +
 			"download and match SHA256SUMS; every binary's build stamp names the tagged commit; the\n" +
-			"host's archive holds a binary reporting the version; where llama-launcher is installed with\n" +
-			"Homebrew, `brew upgrade llama-launcher` moves it onto the version. A check whose tool or\n" +
-			"input is missing prints SKIP and never counts as a pass. The version defaults to\n" +
-			"VERSION; a bare X.Y.Z reads as vX.Y.Z. It exits 1 when any check fails. publish runs\n" +
-			"it as its last step.",
+			"host's archive holds llama-launcher and llama-launcher-mcp, each reporting the bare version;\n" +
+			"where llama-launcher is installed with Homebrew, `brew upgrade llama-launcher` moves it\n" +
+			"onto the version. A check whose tool or input is missing prints SKIP and never counts as\n" +
+			"a pass. The version defaults to VERSION; a bare X.Y.Z reads as vX.Y.Z. It exits 1 when\n" +
+			"any check fails. publish runs it as its last step.",
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) > 1 {
 				return fmt.Errorf("smoke takes at most one version, got %d arguments", len(args))
@@ -322,7 +329,7 @@ func (r *smokeRun) checkBuildStamps(ctx context.Context) {
 	stamped := 0
 	for _, target := range distTargets {
 		name := target.archiveName(bareRelease(r.version))
-		binary, err := r.extractBinary(target, filepath.Join(r.workDir, "stamp", name))
+		binary, err := r.extractBinary(target, binaryName, filepath.Join(r.workDir, "stamp", name))
 		if err != nil {
 			r.fail("asset %s: %v", name, err)
 			continue
@@ -351,10 +358,10 @@ func (r *smokeRun) checkBuildStamps(ctx context.Context) {
 	}
 }
 
-// checkHostBinary runs the binary from the host's own archive and requires it to report the
-// version.
+// checkHostBinary runs llama-launcher and llama-launcher-mcp from the host's own archive and
+// requires each to report the bare version.
 func (r *smokeRun) checkHostBinary(ctx context.Context) {
-	r.step("the host's archive holds a binary reporting %s", r.version)
+	r.step("the host's archive holds binaries reporting %s", r.version)
 	host := distTarget{goos: r.options.goos, goarch: r.options.goarch}
 	if !slices.Contains(distTargets, host) {
 		r.skip("no release archive is built for this host (%s/%s)", host.goos, host.goarch)
@@ -365,12 +372,17 @@ func (r *smokeRun) checkHostBinary(ctx context.Context) {
 		r.skip("the host's archive %s did not download", name)
 		return
 	}
-	binary, err := r.extractBinary(host, filepath.Join(r.workDir, "host"))
-	if err != nil {
-		r.fail("asset %s: %v", name, err)
-		return
+	for _, check := range []struct{ binary, argument string }{
+		{binary: binaryName, argument: versionArgument},
+		{binary: mcpBinaryName, argument: mcpVersionArgument},
+	} {
+		binary, err := r.extractBinary(host, check.binary, filepath.Join(r.workDir, "host"))
+		if err != nil {
+			r.fail("asset %s: %v", name, err)
+			continue
+		}
+		r.checkReportsVersion(ctx, binary, check.argument, "the released "+check.binary)
 	}
-	r.checkReportsVersion(ctx, binary, "the released binary")
 }
 
 // checkHomebrew upgrades a Homebrew-installed llama-launcher and requires it to report the version; a
@@ -396,20 +408,19 @@ func (r *smokeRun) checkHomebrew(ctx context.Context) {
 		r.fail("brew --prefix: %v", err)
 		return
 	}
-	r.checkReportsVersion(ctx, filepath.Join(strings.TrimSpace(prefix), "bin", binaryName), "brew's llama-launcher")
+	r.checkReportsVersion(ctx, filepath.Join(strings.TrimSpace(prefix), "bin", binaryName), versionArgument, "brew's llama-launcher")
 }
 
-// checkReportsVersion runs `binary version` and requires its output to open with
-// "llama-launcher X.Y.Z", the bare version.
-func (r *smokeRun) checkReportsVersion(ctx context.Context, binary, label string) {
-	reported, err := r.commands.run(ctx, r.options.dir, nil, binary, versionArgument)
+// checkReportsVersion runs `binary argument` and requires its trimmed output to be the bare
+// version, X.Y.Z.
+func (r *smokeRun) checkReportsVersion(ctx context.Context, binary, argument, label string) {
+	reported, err := r.commands.run(ctx, r.options.dir, nil, binary, argument)
 	if err != nil {
-		r.fail("%s %s: %v", label, versionArgument, err)
+		r.fail("%s %s: %v", label, argument, err)
 		return
 	}
 	reported = strings.TrimSpace(reported)
-	want := binaryName + " " + bareRelease(r.version)
-	if fields := strings.Fields(reported); len(fields) < 2 || fields[0]+" "+fields[1] != want {
+	if want := bareRelease(r.version); reported != want {
 		r.fail("%s reports %q, not %q", label, reported, want)
 		return
 	}
@@ -435,17 +446,16 @@ func (r *smokeRun) archiveNames() []string {
 	return names
 }
 
-// extractBinary copies the target's llama-launcher binary out of its downloaded archive — the
-// entry <stem>/llama-launcher that the package channels read — into destDir, executable, and
-// returns its path.
-func (r *smokeRun) extractBinary(target distTarget, destDir string) (string, error) {
+// extractBinary copies the target's binary named name out of its downloaded archive — the entry
+// <stem>/<name> that the package channels read — into destDir, executable, and returns its path.
+func (r *smokeRun) extractBinary(target distTarget, name, destDir string) (string, error) {
 	bare := bareRelease(r.version)
 	archivePath := filepath.Join(r.workDir, target.archiveName(bare))
-	entry := target.stem(bare) + "/" + binaryName
+	entry := target.stem(bare) + "/" + name
 	if err := os.MkdirAll(destDir, directoryMode); err != nil {
 		return "", fmt.Errorf("create %s: %w", destDir, err)
 	}
-	binary := filepath.Join(destDir, binaryName)
+	binary := filepath.Join(destDir, name)
 
 	if err := extractTarGzEntry(archivePath, entry, binary); err != nil {
 		return "", fmt.Errorf("read %s from the archive: %w", entry, err)

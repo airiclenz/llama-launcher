@@ -6,8 +6,8 @@ class LlamaLauncher < Formula
   version "0.0.0"
   license "MIT"
 
-  # Installs the prebuilt binary for this platform rather than compiling, so no Go
-  # toolchain is needed. The tree is CGO-free, so all six release targets come off
+  # Installs the prebuilt binaries for this platform rather than compiling, so no Go
+  # toolchain is needed. The tree is CGO-free, so all four release targets come off
   # one `cmd/release dist` in the project repo.
   on_macos do
     on_arm do
@@ -32,11 +32,12 @@ class LlamaLauncher < Formula
   end
 
   def install
-    bin.install "llama-launcher"
+    bin.install "llama-launcher", "llama-launcher-mcp"
   end
 
   test do
-    # `llama-launcher version` prints "llama-launcher X.Y.Z".
+    # `llama-launcher version` and `llama-launcher-mcp --version` each print the bare X.Y.Z.
     assert_match version.to_s, shell_output("#{bin}/llama-launcher version")
+    assert_match version.to_s, shell_output("#{bin}/llama-launcher-mcp --version")
   end
 end

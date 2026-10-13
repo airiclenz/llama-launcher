@@ -166,7 +166,12 @@ Depends on item 3.
 **Acceptance:** `go test -count=1 -run 'Prepare|Gate' ./cmd/release/...`
 **Commit:** `feat(release): roll up the Unreleased changelog section`
 
-## 6. Prebuilt Homebrew formula and version smoke
+## 6. Prebuilt Homebrew formula and version smoke — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): re-derived from the assumption that the template still needed a rewrite onto apogee's shape — item 2's port already rendered the prebuilt on_macos/on_linux × on_arm/on_intel blocks; this item adds the MCP binary to `bin.install` and `test do`, and corrects the "six release targets" comment to four
+NOTES (2026-10-13): render.go and render_test.go needed no change — the existing TestRenderFormulaMatchesTheGoldenFormula is the formula golden; only the golden file was regenerated
+NOTES (2026-10-13): smoke's host check now reports one PASS/FAIL per binary ("the released llama-launcher", "the released llama-launcher-mcp"), so every tally where the host check runs gains one pass; a new case covers llama-launcher-mcp reporting another version; TestSmokeRunsTheHostsOwnLauncherBinary is renamed TestSmokeRunsTheHostsOwnBinaries and checks both binaries' darwin/arm64 stubs via the fake's ranStubs record
+NOTES (2026-10-13): `mcpBinaryName` is a new constant in smoke.go; dist.go's distBuilds still spells "llama-launcher-mcp" as a literal (left untouched, outside this item's files)
 
 **What:**
 **Goal:**
