@@ -1,12 +1,14 @@
 ---
 title: TDD file map omits cli.go and frame.go
-status: open
+status: done
 type: chore
 priority: 3
 labels: [docs, from-todo]
 plan: 2026-10-13 - 00 - open-issues-sweep-plan.md
 aliases: [llama-launcher-tdd-file-map-gaps]
 created: 2026-09-24T07:19:49Z
+closed: 2026-10-13T10:02:43Z
+reason: Resolved by plan 2026-10-13 - 00 - open-issues-sweep-plan (archived in c081cb7)
 ---
 
 The TDD §5.2 file map omits `cli.go` and `frame.go` (pre-existing gap) (`llama-launcher.TDD.md:444`).
