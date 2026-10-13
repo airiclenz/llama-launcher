@@ -265,7 +265,12 @@ Depends on items 6, 7 and 8.
 - `! grep -nE 'source tarball|Homebrew \(macOS\)|only platform the Homebrew formula ships' README.md llama-launcher.TDD.md`
 **Commit:** `docs: record the in-repo release pipeline`
 
-## 10. Repo release skills
+## 10. Repo release skills — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): the shared repo-facts prompt `_capcom.md` is renamed `_llama-launcher.md` and its dispatch key `CAPCOM:` is renamed `PROJECT:`. Its changelog, commit-convention and user-surface sections were rewritten for this repo: `## Unreleased` / `## X.Y.Z` headings, bold-lead entries, the internal/launcher, cmd/llama-launcher-mcp and launcher/ surfaces.
+NOTES (2026-10-13): the version proposal and the implied-bump statement follow semver past 1.0 (breaking → major, features → minor, else patch), not capcom's 0.x rule (breaking/features → minor), because llama-launcher is already at 1.8.1.
+NOTES (2026-10-13): the example issue id `release-pipeline` became `api-key-cmd-reruns`, an id that exists in this repo's `.capcom/issues/`. The `capcom` mentions that remain refer to the issue tracker this repo uses (`capcom know show`, capcom issue ids), not to the capcom repo or its skills.
+NOTES (2026-10-13): consequential edit — docs/releasing.md: made necessary by placing the skills under the tracked `skills/` directory. The runbook named the canonical file as `.agents/skills/release-llama-launcher/SKILL.md`; it now reads `skills/release-llama-launcher/SKILL.md`.
 
 **What:**
 **Goal:** `skills/release-llama-launcher/SKILL.md` cuts a release by driving `go run ./cmd/release status|prepare|publish|smoke`. `skills/release-notes-llama-launcher/` (SKILL.md plus prompts/) drafts the notes file that `publish --notes-file` takes. Neither names the capcom repo, its skills, Scoop or winget.

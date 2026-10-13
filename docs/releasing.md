@@ -42,7 +42,7 @@ installing needs no Go toolchain. There is no Windows archive and no Scoop or wi
 ## Cutting a release
 
 Ask an agent to cut the release: the `release-llama-launcher` skill (`/release-llama-launcher` in
-Claude Code; canonical file `.agents/skills/release-llama-launcher/SKILL.md`) checks the gate,
+Claude Code; canonical file `skills/release-llama-launcher/SKILL.md`) checks the gate,
 drafts the notes with `release-notes-llama-launcher`, has you approve them and confirm the
 version, runs `prepare`, shows you a dry run, and runs `publish` after one explicit confirmation.
 To only see what shipped, run `release-notes-llama-launcher`; it never publishes.
