@@ -55,7 +55,7 @@ NOTES (2026-10-13): TestStopServerAt_AuthFailedListener carries the same hard-fa
 - `PATH=/usr/bin:$(dirname $(command -v go)) go test ./internal/launcher/ -run TestStopServerAt_StartingOccupant -v` reports SKIP with the lsof skip text (not "nc not available"), not FAIL
 **Commit:** `fix(test): skip starting-occupant stop test when lsof cannot see nc`
 
-## 2. Test keystore entry names containing a single quote
+## 2. Test keystore entry names containing a single quote — ✅ DONE (2026-10-13)
 
 **What:** test-only. Add cases with an entry name containing `'` (e.g. `bob's key`) to `TestReadCmdIsTheDocumentedSpelling` (expected spelling `'bob'\''s key'` for keychain and secret service) and to `TestReadCmdReadsBackWhatWriteStored` (round-trip through `readKeyThroughShell` via `useFakeTools`), in `internal/keystore/keystore_test.go`. If a case exposes a `shellWord` bug, fix it in `internal/keystore/keystore.go` and note it in the commit body.
 **Files:** internal/keystore/keystore_test.go; internal/keystore/keystore.go

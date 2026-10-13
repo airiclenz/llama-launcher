@@ -656,6 +656,18 @@ func TestReadCmdIsTheDocumentedSpelling(t *testing.T) {
 			want:  "secret-tool lookup service llama-launcher entry 'work laptop'",
 		},
 		{
+			name:  "keychain, an entry name with a single quote closes, escapes and reopens the quoting",
+			store: Store{kind: kindKeychain},
+			entry: "bob's key",
+			want:  `security find-generic-password -s llama-launcher -a 'bob'\''s key' -w`,
+		},
+		{
+			name:  "secret service, an entry name with a single quote closes, escapes and reopens the quoting",
+			store: Store{kind: kindSecretService},
+			entry: "bob's key",
+			want:  `secret-tool lookup service llama-launcher entry 'bob'\''s key'`,
+		},
+		{
 			name:  "no store, no command",
 			store: Store{},
 			entry: "prod",
@@ -690,6 +702,8 @@ func TestReadCmdReadsBackWhatWriteStored(t *testing.T) {
 		{name: "macOS keychain, entry name with a space", goos: "darwin", entry: "work laptop", key: secret},
 		{name: "secret service", goos: "linux", entry: "prod", key: secret},
 		{name: "secret service, entry name with a space", goos: "linux", entry: "work laptop", key: secret},
+		{name: "macOS keychain, entry name with a single quote", goos: "darwin", entry: "bob's key", key: secret},
+		{name: "secret service, entry name with a single quote", goos: "linux", entry: "bob's key", key: secret},
 		{
 			// The keychain refuses these characters; secret-tool is handed the key on stdin, where no
 			// parser reads it, so it keeps storing them.
