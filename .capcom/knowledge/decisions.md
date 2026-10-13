@@ -25,3 +25,4 @@ The records:
 - `adr-0014`: A Splash Model must already be installed; the launcher never downloads one
 - `adr-0015`: A loading Splash is found by its process, not by its address
 - `adr-0016`: api_key_cmd runs only from a config the user owns
+- `adr-0017`: The repo owns its release pipeline: cmd/release publishes prebuilt archives and a prebuilt Homebrew formula

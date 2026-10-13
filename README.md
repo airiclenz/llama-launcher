@@ -18,14 +18,14 @@ A terminal tool for managing local LLM servers through named configuration profi
 
 ## Install
 
-### Homebrew (macOS)
+### Homebrew (macOS and Linux)
 
 ```bash
 brew tap airiclenz/tap
 brew install llama-launcher
 ```
 
-This installs the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it.
+The formula installs prebuilt binaries for macOS and Linux on arm64 and amd64, so no Go toolchain is needed. It installs the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (see [Remote control from a container](#remote-control-from-a-container-mcp)). The adapter is inert until you start it.
 
 ### From source
 
@@ -356,6 +356,8 @@ make clean             # Remove the binaries
 `make cross` is the platform contract as a check ([ADR-0012](.capcom/knowledge/decisions/adr-0012.md)): it builds and vets the whole tree — test files included — for macOS, Linux and Windows, so a portability regression fails here instead of in an importing client's CI.
 
 GitHub Actions runs `make check` on macOS and Linux for every push to `main` and every pull request (`.github/workflows/ci.yml`).
+
+Releases are cut locally with `go run ./cmd/release` ([ADR-0017](.capcom/knowledge/decisions/adr-0017.md)); the maintainer runbook is [`docs/releasing.md`](docs/releasing.md).
 
 `make test-integration` starts and stops **real** servers (llama-server, Ollama, LM Studio, Splash) on the machine running it — run it manually on the host, never in CI or a container. Each test skips when its backend binary is not on `PATH`. Set `INTEGRATION_MODEL_LLAMACPP` (absolute `.gguf` path), `INTEGRATION_MODEL_OLLAMA`, and/or `INTEGRATION_MODEL_LMSTUDIO` to exercise the model load/unload steps. The Splash tests (`TestSplashLifecycle`, `TestSplashStopWhileLoading`, and `TestSplashWildcardHost`, which binds Splash to `0.0.0.0`) run only with `INTEGRATION_MODEL_SPLASH` set to an already-installed `owner/repo`.
 

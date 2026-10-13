@@ -3,7 +3,7 @@
 The architectural source of truth for `llama-launcher` lives in two places:
 
 - **[glossary](.capcom/knowledge/glossary.md)** — domain language as a capcom Knowledge Note tree (LLM Server, Model, Profile; Activate, Load/Unload, Start/Stop).
-- **[decisions](.capcom/knowledge/decisions.md)** — numbered Architectural Decision Records (ADRs 0001–0016, one capcom Knowledge Note tree each) that pin down behaviour.
+- **[decisions](.capcom/knowledge/decisions.md)** — numbered Architectural Decision Records (ADRs 0001–0017, one capcom Knowledge Note tree each) that pin down behaviour.
 
 This document explains how those decisions are realised in code. Where this document and an ADR appear to conflict, the ADR wins; please file a doc fix.
 
@@ -17,7 +17,7 @@ The architecture is server-agnostic: an `LLMServer` interface (see [§5.3](#53-l
 
 The CLI is not the only front end: since v1.6.0 the same core is importable as a Go library through the curated `launcher/` facade (`github.com/airiclenz/llama-launcher/launcher`), so another program can load a Profile, discover what is running, and stop or unload it in-process instead of shelling out — see [ADR-0011](.capcom/knowledge/decisions/adr-0011.md) and [§16](#16-public-library-facade).
 
-Design target: macOS (Apple Silicon) — the only platform the Homebrew formula ships and the only one the menu's memory/GPU readout can read. Since v1.6.1 that is no longer the same thing as the only platform the code *builds* on: the package compiles on darwin, linux and windows, and each verb works wherever its mechanism exists ([ADR-0012](.capcom/knowledge/decisions/adr-0012.md), [§16.6](#166-platform-contract)) — importing the library pulls in the whole core, so portability became the library's obligation rather than each client's. The compiled binary is the only artifact — no runtime dependencies.
+Design target: macOS (Apple Silicon) — the only platform the menu's memory/GPU readout can read. The Homebrew formula ships prebuilt binaries for macOS and Linux ([ADR-0017](.capcom/knowledge/decisions/adr-0017.md)), but shipping a platform does not make it a design target. Since v1.6.1 that is no longer the same thing as the only platform the code *builds* on: the package compiles on darwin, linux and windows, and each verb works wherever its mechanism exists ([ADR-0012](.capcom/knowledge/decisions/adr-0012.md), [§16.6](#166-platform-contract)) — importing the library pulls in the whole core, so portability became the library's obligation rather than each client's. The compiled binary is the only artifact — no runtime dependencies.
 
 ## 2. Goals and Non-Goals
 
@@ -39,7 +39,7 @@ Design target: macOS (Apple Silicon) — the only platform the Homebrew formula 
 - Persistent TUI or dashboard (contradicts the memory-freeing goal).
 - Model downloading or GGUF management.
 - HTTP server, API proxying, or request routing **in the `llama-launcher` binary** (see [ADR-0002](.capcom/knowledge/decisions/adr-0002.md)). Remote *control* (not inference) is available through a separate, optional adapter — see [§15](#15-optional-mcp-control-plane-adapter).
-- Feature parity outside macOS. [ADR-0012](.capcom/knowledge/decisions/adr-0012.md) puts *compilation* on darwin, linux and windows under contract and makes every verb work where its mechanism exists ([§16.6](#166-platform-contract)) — but Linux and Windows are not design targets: the memory/GPU readout is macOS-only and omits itself elsewhere, Homebrew remains the only distribution, and Windows gets no process control and no interactive menu.
+- Feature parity outside macOS. [ADR-0012](.capcom/knowledge/decisions/adr-0012.md) puts *compilation* on darwin, linux and windows under contract and makes every verb work where its mechanism exists ([§16.6](#166-platform-contract)) — but Linux and Windows are not design targets: the memory/GPU readout is macOS-only and omits itself elsewhere, Homebrew (macOS and Linux) remains the only distribution, and Windows gets no process control and no interactive menu.
 
 ## 3. User Experience
 
@@ -531,6 +531,20 @@ The top-level boolean `sort_alphabetically` selects the ordering rule. The defau
 | `discovery_test.go` | httptest-based tests for `DiscoverRunningInstances` (reachable / unreachable, hostile model names sanitised, over-long ids bounded), `boundModelID`, `LlamaCpp.ListRunningModels` (including the oversized-body cap), `LlamaCpp.QueryLiveParams` (`/props` populated and 404 fallback), and `findManagedLogFile` (most-recent picker by lexicographic timestamp). |
 | `menu_test.go` | Tests for `parseChoice`, `formatUptime`, `profileDisplayName`, the Profile-list context-size column (`formatContextSize`'s number format plus direct coverage of `buildProfileItems` and `buildSimpleProfileLines`: merged values, right-alignment, the blank Ollama cell, the presence gate's byte-identical pre-column shape, the single-enabled-server case, and the still-rightmost `★`), and `formatProfileParams` (`TestFormatProfileParams_LMStudio` asserts LM Studio profiles omit GPU offload — it is not part of the load request — while showing the params the load request does send; `TestFormatProfileParams_RendersBackendOwnedSpec` registers a stub backend and asserts the pop-up renders exactly its `ParamSpecs`, in order, proving a new backend needs no menu edit; API-key redaction and the empty Ollama spec are covered separately). `TestWaitStillLoading_*` drive the still-loading loop with scripted probes and keys (healthy on the third poll, gone on two polls in a row, Esc/Ctrl+C/q leaving the server), and `TestDoLoadProfile_RoutesStartupTimeout` pins that only a terminal-mode managed timeout reaches the waiter — the external timeout and non-terminal errors pass through unchanged. |
 | `helpers_test.go` | Shared test helpers: `addrFromURL` for extracting `host:port` from httptest server URLs, `deadAddr` for a loopback address nothing listens on, and `pinConfiguredTargets` for setting the process-global configured-address snapshot (§6.5) from a `Config` and restoring it at cleanup — its callers are non-parallel top-level tests. |
+| `cmd/release/main.go` | Entry point of the maintainer-only release program (`go run ./cmd/release <verb>`, never a release asset, [ADR-0017](.capcom/knowledge/decisions/adr-0017.md), §13): the cobra root command wiring the five verbs over the `runner` and `repo` seams, and the exit code that tells a mistyped invocation from a run that started and failed. |
+| `cmd/release/dist.go` | The `dist` verb: `CGO_ENABLED=0 go build -trimpath` of `llama-launcher` and `llama-launcher-mcp` for darwin/linux × amd64/arm64, each with its `-X` version ldflag, packed with `LICENSE.md` and `README.md` into byte-reproducible `llama-launcher_<version>_<os>_<arch>.tar.gz` archives plus `SHA256SUMS`. Its fixed archive and binary names are what the formula installs from. |
+| `cmd/release/status.go` | The read-only `status` verb: the release gate, the baseline release and the commits since, the highest tag, and each publish step's probe, as text or `--json` (a contract the release skills read). |
+| `cmd/release/prepare.go` | The `prepare` verb: two local commits, the `## Unreleased` → `## X.Y.Z` CHANGELOG rollup (no brackets, no date) and the bare `VERSION` bump, refusing on a dirty tree, an empty `## Unreleased` or a version not above the highest tag. |
+| `cmd/release/publish.go` | The `publish` verb: refuses unless the gate clears, pushes `HEAD` to `main`, waits for the CI-made tag, then converges each step its probe does not report done — the GitHub release built in a fresh clone at the tag (uploading only missing assets, after checking the rebuilt sums against the release's `SHA256SUMS` or, without one, its uploaded archives), the formula, and smoke. `--dry-run` prints the plan. |
+| `cmd/release/smoke.go` | The `smoke` verb: checks a published release from the outside — annotated tag, archives against `SHA256SUMS`, each binary's `vcs.revision` against the tagged commit, the host binaries' bare version, and `brew upgrade llama-launcher` where Homebrew has it; a missing tool prints `SKIP`. |
+| `cmd/release/gate.go` | The release gate: `HEAD` with its trailing `CHANGELOG.md`/`VERSION`-only commits peeled off must be on `origin/main`, `origin/main` contained in `HEAD`, the tree clean, and `ci.yml` green on the gate commit or a peeled one. No bypass. |
+| `cmd/release/probes.go` | The remote probes behind `status` and `publish` (tag, release, homebrew, smoke → done / pending / setup-pending / unknown) and the fixed repositories they read: `airiclenz/llama-launcher`, `airiclenz/homebrew-tap`, `Formula/llama-launcher.rb`. |
+| `cmd/release/channels.go` | The homebrew step: renders the formula from the release's `SHA256SUMS`, clones the tap with `gh`, and commits `llama-launcher X.Y.Z` straight to it, pushing only when the file changed. |
+| `cmd/release/render.go` | Renders `templates/llama-launcher.rb.tmpl` (embedded) with the version and each darwin/linux archive's URL and SHA-256, so the formula installs prebuilt binaries; `testdata/` holds the golden render. |
+| `cmd/release/repo.go` | The semantic `repo` seam over the checkout and its GitHub repository (fetch, cleanliness, tags, CI runs, releases), with `execRepo` as the git/gh adapter; the verbs' tests hold the same answers as plain state in `memRepo` (`memrepo_test.go`). |
+| `cmd/release/runner.go` | The `runner` seam every other external command goes through (`go`, `git` and `gh` against the tap, `brew`); tests use a recording fake, so no verb test reaches the network or a real toolchain. |
+| `cmd/release/version.go` | Release-version parsing and ordering: the bare `X.Y.Z` in `VERSION`, `v` + VERSION as the tag, and the highest `vX.Y.Z` tag. |
+| `cmd/release/*_test.go` | Hermetic tests of every verb over `memRepo` and the fake runner; `versionbump_test.go` is the one test that runs real `git`, driving `.github/scripts/version-bump.sh` against a throwaway repository in `t.TempDir()`. |
 
 ### 5.3 LLMServer Interface
 
@@ -1046,6 +1060,9 @@ make cross             # cross-compile gate: build + vet for GOOS darwin/linux/w
 make check             # test + cross — the pre-commit aggregate; starts no process
 make test-integration  # real-backend suite, host only (Layer 2, §12.5)
 make test-all          # both test layers, host only
+make dist              # release archives + SHA256SUMS into dist/ (go run ./cmd/release dist)
+make release-status    # release gate and publish-step report [RELEASE=vX.Y.Z]
+make release-smoke     # check a published release from the outside [RELEASE=vX.Y.Z]
 make clean             # removes binaries
 
 go test ./internal/launcher/ -run TestMergeParams  # run a single test
@@ -1058,7 +1075,11 @@ The binary is statically linked (default for Go on macOS with CGO_ENABLED=0) and
 
 ### Homebrew
 
-The published formula (`airiclenz/tap/llama-launcher`) builds from the release source tarball and installs **both** binaries: the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (§15). The two builds inject the version with different `ldflags` targets — `internal/launcher.Version` for the CLI and `main.Version` for the adapter — because the adapter lives in `package main` under `cmd/llama-launcher-mcp/`. Packaging-only changes that don't bump `VERSION` (e.g. starting to ship the adapter from an already-tagged release) are released as a formula `revision` bump rather than a new tag.
+The published formula (`airiclenz/tap/llama-launcher`) installs prebuilt binaries for macOS and Linux on amd64 and arm64 — no Go toolchain is needed — and installs **both** of them: the `llama-launcher` CLI and the optional `llama-launcher-mcp` control-plane adapter (§15). The binaries come from the release's `llama-launcher_<version>_<os>_<arch>.tar.gz` archives, which `go run ./cmd/release dist` cross-builds with `CGO_ENABLED=0`; the two builds inject the version with different `ldflags` targets — `internal/launcher.Version` for the CLI and `main.Version` for the adapter — because the adapter lives in `package main` under `cmd/llama-launcher-mcp/`. The formula is generated: `cmd/release publish` renders it whole from `cmd/release/templates/llama-launcher.rb.tmpl` with the release's `SHA256SUMS` and commits it to `airiclenz/homebrew-tap`, so a hand edit there is overwritten at the next release. A packaging-only change ships as a new `VERSION` and tag, never as a formula `revision` bump ([ADR-0017](.capcom/knowledge/decisions/adr-0017.md)).
+
+### Releasing
+
+A release is cut locally by `cmd/release`, a maintainer-only Go program that is never a release asset ([ADR-0017](.capcom/knowledge/decisions/adr-0017.md)). `prepare vX.Y.Z` makes the CHANGELOG rollup and `VERSION` bump commits; the `tag-on-version-bump` workflow tags the `VERSION` bump on `main` as `v` + VERSION; `publish vX.Y.Z --notes-file F` refuses unless the gate clears (a clean tree and a green `ci.yml` run on the gated commit), pushes `HEAD` to `main`, waits for that tag, creates the GitHub release with the four darwin/linux archives and `SHA256SUMS`, updates the formula and runs `smoke`, converging when rerun. The runbook — prerequisites, the verbs, recovery — is [`docs/releasing.md`](docs/releasing.md).
 
 ## 14. Coding Standards
 

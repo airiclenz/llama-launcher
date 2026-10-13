@@ -237,7 +237,11 @@ Depends on item 4.
 - `make dist && git check-ignore -q dist/`
 **Commit:** `build: add dist and release make targets`
 
-## 9. Decision record and release runbook
+## 9. Decision record and release runbook — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): ADR-0017 has decision/why/consequences children only (no -amend or -rejected Notes); the rejected options sit in `adr-0017-why`, matching the plan's named children.
+NOTES (2026-10-13): beyond the named sentences, the TDD §13 make block gained the `make dist`/`release-status`/`release-smoke` lines, §13 gained a short "Releasing" subsection pointing to docs/releasing.md, TDD §1 non-goals line now reads "Homebrew (macOS and Linux)", and README's build section links the runbook.
+NOTES (2026-10-13): docs/releasing.md names the `release-llama-launcher` / `release-notes-llama-launcher` skills at `.agents/skills/<id>/SKILL.md`, which item 10 adds; until then those paths do not exist.
 
 **What:**
 **Goal:**
