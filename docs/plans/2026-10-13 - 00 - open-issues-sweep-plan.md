@@ -230,7 +230,9 @@ NOTES (2026-10-13): Requirements table also lists `ioreg` (macOS GPU fields of t
 **Acceptance:** `grep -n '^## Requirements' README.md`; `awk '/^## Requirements/,/^## [^R]/' README.md | grep -c 'lsof\|open\|secret-tool'` is at least 3; `grep -n 'api_key_cmd.*same effect as.*api_key' README.md`
 **Commit:** `docs(readme): add Requirements section and api_key_cmd note`
 
-## 13. TDD §5.2 Source Files: missing rows
+## 13. TDD §5.2 Source Files: missing rows — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): `cli.go`, `cmd/llama-launcher-mcp/main.go` and `config.go` already matched the Acceptance check (by basename via the `main.go` row and `cmd/release/main.go`), so no separate `cli.go` row was added; the grouped MCP row still names all four adapter files as the plan asks.
 
 **What:**
 **Goal:** every non-test `.go` file in the repo appears in TDD `### 5.2 Source Files`.
