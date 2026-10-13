@@ -141,7 +141,10 @@ Depends on item 3.
 - On darwin/arm64, the extracted `llama-launcher version` prints `cat VERSION`.
 **Commit:** `feat(release): pack both binaries for darwin and linux`
 
-## 5. Prepare rolls up the existing changelog format
+## 5. Prepare rolls up the existing changelog format — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): gate.go needed no change — peelBumps peels by path set (CHANGELOG.md, VERSION), so prepare's CHANGELOG-only rollup and VERSION-only bump are both peeled; gate_test gains a preparedHistory covering that order.
+NOTES (2026-10-13): prepareOptions.now and the rollup's date parameter were removed, since the bare `## X.Y.Z` heading carries no date; the Keep a Changelog first-release fixture was replaced by the literal real-top-of-CHANGELOG.md snapshot (prepare v1.9.0 over `## Unreleased` / `### Changed` / `## 1.8.1`).
 
 **What:**
 **Goal:** `go run ./cmd/release prepare vX.Y.Z` makes two local commits and pushes nothing:

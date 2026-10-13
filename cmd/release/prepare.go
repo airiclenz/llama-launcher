@@ -8,20 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 )
 
-// The paths and headings prepare edits. The rollup heading's shape — `## [X.Y.Z] - YYYY-MM-DD`,
-// the version without its `v`, a hyphen, the local date — is the one Keep a Changelog, the format
-// CHANGELOG.md declares, gives every release.
+// The paths and headings prepare edits. The rollup heading's shape — `## X.Y.Z`, the version
+// without its `v`, no brackets and no date — is the one CHANGELOG.md gives every release.
 const (
-	changelogFile        = "CHANGELOG.md"
-	unreleasedHeading    = "## [Unreleased]"
-	releaseHeadingLead   = "## ["
-	releaseHeadingFormat = "%s%s] - %s"
-	releaseDateLayout    = "2006-01-02"
+	changelogFile      = "CHANGELOG.md"
+	unreleasedHeading  = "## Unreleased"
+	releaseHeadingLead = "## "
 )
 
 // prepareOptions is what the prepare verb was asked to do.
@@ -31,26 +27,24 @@ type prepareOptions struct {
 	// version is the release to cut, as typed: prepare parses it itself, so a malformed one is
 	// a refused run (exit 1) rather than a usage error.
 	version string
-	// now is the clock the rollup heading's date is read from.
-	now func() time.Time
 	// openRepo opens the checkout's repo; nil opens the execRepo over the run's runner.
 	openRepo repoOpener
 }
 
 // newPrepareCommand builds the prepare verb.
 func newPrepareCommand(commands runner, openRepo repoOpener) *cobra.Command {
-	options := prepareOptions{dir: ".", now: time.Now, openRepo: openRepo}
+	options := prepareOptions{dir: ".", openRepo: openRepo}
 
 	cmd := &cobra.Command{
 		Use:   "prepare vX.Y.Z",
 		Short: "Make the CHANGELOG rollup and VERSION bump commits for a release",
-		Long: "prepare makes exactly two local commits and pushes nothing: \"chore(release): cut vX.Y.Z\",\n" +
-			"which gives every bullet under ## [Unreleased] in CHANGELOG.md its own\n" +
-			"## [X.Y.Z] - YYYY-MM-DD heading (today's local date), then\n" +
-			"\"chore(version): bump version to vX.Y.Z\", which writes the bare X.Y.Z to\n" +
+		Long: "prepare makes exactly two local commits and pushes nothing:\n" +
+			"\"docs(changelog): roll up X.Y.Z\", which moves everything under ## Unreleased in\n" +
+			"CHANGELOG.md under a new ## X.Y.Z heading and leaves ## Unreleased empty above it, then\n" +
+			"\"chore(version): bump version to X.Y.Z\", which writes the bare X.Y.Z to\n" +
 			"VERSION. It refuses, writing nothing, when the version is malformed or not above the\n" +
 			"highest vX.Y.Z tag (with no such tag, any version is above it), VERSION already reads\n" +
-			"it, the working tree is not clean, ## [Unreleased] is missing or holds no bullet, or\n" +
+			"it, the working tree is not clean, ## Unreleased is missing or holds no bullet, or\n" +
 			"CHANGELOG.md already has a heading for the version. It fetches origin's main and its\n" +
 			"tags first, so the version is judged against the published tags, and refuses when that\n" +
 			"fetch fails. A bare X.Y.Z reads as vX.Y.Z.",
@@ -72,17 +66,17 @@ func runPrepare(ctx context.Context, commands runner, output io.Writer, options 
 	}
 
 	checkout := options.openRepo.open(commands, options.dir)
-	rollup, err := checkPrepare(ctx, checkout, options.dir, version, options.now())
+	rollup, err := checkPrepare(ctx, checkout, options.dir, version)
 	if err != nil {
 		return err
 	}
 
-	rollupSubject := "chore(release): cut " + version.String()
+	bare := strings.TrimPrefix(version.String(), "v")
+	rollupSubject := "docs(changelog): roll up " + bare
 	if err := checkout.CommitFile(ctx, changelogFile, rollup, rollupSubject); err != nil {
 		return err
 	}
-	bumpSubject := "chore(version): bump version to " + version.String()
-	bare := strings.TrimPrefix(version.String(), "v")
+	bumpSubject := "chore(version): bump version to " + bare
 	if err := checkout.CommitFile(ctx, versionFile, []byte(bare+"\n"), bumpSubject); err != nil {
 		return fmt.Errorf("%w (the rollup commit %q was made)", err, rollupSubject)
 	}
@@ -96,7 +90,7 @@ func runPrepare(ctx context.Context, commands runner, output io.Writer, options 
 // It fetches origin's main and its tags first, so the version is judged against the published
 // tags rather than stale local ones, then asks checkout for the tree's state and the tags, and
 // reads CHANGELOG.md and VERSION from dir.
-func checkPrepare(ctx context.Context, checkout repo, dir string, version releaseVersion, today time.Time) ([]byte, error) {
+func checkPrepare(ctx context.Context, checkout repo, dir string, version releaseVersion) ([]byte, error) {
 	var refusals []error
 
 	if err := checkout.FetchMain(ctx); err != nil {
@@ -128,7 +122,7 @@ func checkPrepare(ctx context.Context, checkout repo, dir string, version releas
 	changelog, err := os.ReadFile(filepath.Join(dir, changelogFile))
 	if err != nil {
 		refusals = append(refusals, fmt.Errorf("read %s: %w", changelogFile, err))
-	} else if rollup, err = rollUpChangelog(changelog, version, today); err != nil {
+	} else if rollup, err = rollUpChangelog(changelog, version); err != nil {
 		refusals = append(refusals, err)
 	}
 
@@ -168,13 +162,14 @@ func checkVersionFile(dir string, version releaseVersion) error {
 		versionFile, strings.TrimPrefix(version.String(), "v"), next)
 }
 
-// rollUpChangelog returns changelog with a `## [X.Y.Z] - YYYY-MM-DD` heading inserted directly
-// under `## [Unreleased]`, one blank line on each side, so every bullet that sat under
+// rollUpChangelog returns changelog with a `## X.Y.Z` heading inserted directly under
+// `## Unreleased`, one blank line on each side, so every bullet and `### Section` that sat under
 // Unreleased now sits under the release. It refuses a changelog with no Unreleased heading, an
 // Unreleased section with no bullet, or a heading for the version already, each refusal naming
-// the file and the line. The file's own line ending is kept, so a CRLF checkout gains a CRLF
-// heading.
-func rollUpChangelog(changelog []byte, version releaseVersion, today time.Time) ([]byte, error) {
+// the file and the line. The version heading is matched as a whole trimmed line, so `## 1.8.10`
+// is never taken for `## 1.8.1`. The file's own line ending is kept, so a CRLF checkout gains a
+// CRLF heading.
+func rollUpChangelog(changelog []byte, version releaseVersion) ([]byte, error) {
 	text := string(changelog)
 	newline := "\n"
 	if strings.Contains(text, "\r\n") {
@@ -183,11 +178,11 @@ func rollUpChangelog(changelog []byte, version releaseVersion, today time.Time) 
 	lines := strings.SplitAfter(text, "\n")
 
 	bare := strings.TrimPrefix(version.String(), "v")
-	versionHeading := releaseHeadingLead + bare + "]"
+	versionHeading := releaseHeadingLead + bare
 	unreleased := -1
 	for index, line := range lines {
 		content := strings.TrimRight(line, "\r\n")
-		if strings.HasPrefix(content, versionHeading) {
+		if strings.TrimSpace(content) == versionHeading {
 			return nil, fmt.Errorf("%s:%d: already has a %s heading", changelogFile, index+1, versionHeading)
 		}
 		if unreleased < 0 && content == unreleasedHeading {
@@ -198,8 +193,8 @@ func rollUpChangelog(changelog []byte, version releaseVersion, today time.Time) 
 		return nil, fmt.Errorf("%s has no %s heading", changelogFile, unreleasedHeading)
 	}
 
-	// The Unreleased section runs to the next release heading; its body starts at its first
-	// non-blank line.
+	// The Unreleased section runs to the next release heading (`## `, never a `### ` section
+	// heading); its body starts at its first non-blank line.
 	body := unreleased + 1
 	for body < len(lines) && strings.TrimSpace(lines[body]) == "" {
 		body++
@@ -218,12 +213,11 @@ func rollUpChangelog(changelog []byte, version releaseVersion, today time.Time) 
 		return nil, fmt.Errorf("%s:%d: no bullet under %s to release", changelogFile, unreleased+1, unreleasedHeading)
 	}
 
-	heading := fmt.Sprintf(releaseHeadingFormat, releaseHeadingLead, bare, today.Format(releaseDateLayout))
 	var rollup strings.Builder
 	for _, line := range lines[:unreleased] {
 		rollup.WriteString(line)
 	}
-	rollup.WriteString(unreleasedHeading + newline + newline + heading + newline + newline)
+	rollup.WriteString(unreleasedHeading + newline + newline + versionHeading + newline + newline)
 	for _, line := range lines[body:] {
 		rollup.WriteString(line)
 	}

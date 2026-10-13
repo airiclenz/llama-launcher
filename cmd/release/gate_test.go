@@ -16,14 +16,16 @@ const (
 	rollupCommit  = "4000000000000000000000000000000000000000"
 	sideCommit    = "5000000000000000000000000000000000000000"
 	mergeCommit   = "6000000000000000000000000000000000000000"
+	prepareCommit = "7000000000000000000000000000000000000000"
 )
 
 // The paths the test commits change against their first parent.
 var (
-	bumpPaths    = []string{"VERSION"}
-	rollupPaths  = []string{"CHANGELOG.md", "VERSION"}
-	featurePaths = []string{"cmd/release/dist.go", "cmd/release/dist_test.go"}
-	mixedPaths   = []string{"CHANGELOG.md", "README.md"}
+	bumpPaths      = []string{"VERSION"}
+	changelogPaths = []string{"CHANGELOG.md"}
+	rollupPaths    = []string{"CHANGELOG.md", "VERSION"}
+	featurePaths   = []string{"cmd/release/dist.go", "cmd/release/dist_test.go"}
+	mixedPaths     = []string{"CHANGELOG.md", "README.md"}
 )
 
 // fakeCommit is one commit of a test history: its parents, and the paths it changes against its
@@ -40,6 +42,17 @@ func linearHistory() map[string]fakeCommit {
 		featureCommit: {parents: []string{rootCommit}, changed: featurePaths},
 		bumpCommit:    {parents: []string{featureCommit}, changed: bumpPaths},
 		rollupCommit:  {parents: []string{bumpCommit}, changed: rollupPaths},
+	}
+}
+
+// preparedHistory is root ← feature ← prepare's changelog rollup ← prepare's VERSION bump: the
+// two commits `release prepare` makes, each touching its one path.
+func preparedHistory() map[string]fakeCommit {
+	return map[string]fakeCommit{
+		rootCommit:    {},
+		featureCommit: {parents: []string{rootCommit}, changed: featurePaths},
+		prepareCommit: {parents: []string{featureCommit}, changed: changelogPaths},
+		bumpCommit:    {parents: []string{prepareCommit}, changed: bumpPaths},
 	}
 }
 
@@ -70,14 +83,16 @@ func TestGatePeelsOnlyTrailingChangelogAndVersionCommits(t *testing.T) {
 		head    string
 		want    string
 	}{
-		"a feature commit at HEAD is the gate":   {commits: linearHistory(), head: featureCommit, want: featureCommit},
-		"a VERSION-only bump is peeled":          {commits: linearHistory(), head: bumpCommit, want: featureCommit},
-		"a rollup and a bump are both peeled":    {commits: linearHistory(), head: rollupCommit, want: featureCommit},
-		"the peel stops at another path":         {commits: mixedHistory, head: rollupCommit, want: sideCommit},
-		"a merge at HEAD is never peeled":        {commits: mergeHistory, head: mergeCommit, want: mergeCommit},
-		"a root commit at HEAD is the gate":      {commits: linearHistory(), head: rootCommit, want: rootCommit},
-		"a bump onto the root stops at the root": {commits: map[string]fakeCommit{rootCommit: {}, bumpCommit: {parents: []string{rootCommit}, changed: bumpPaths}}, head: bumpCommit, want: rootCommit},
-		"an empty commit is not peeled":          {commits: map[string]fakeCommit{rootCommit: {}, bumpCommit: {parents: []string{rootCommit}}}, head: bumpCommit, want: bumpCommit},
+		"a feature commit at HEAD is the gate":      {commits: linearHistory(), head: featureCommit, want: featureCommit},
+		"a VERSION-only bump is peeled":             {commits: linearHistory(), head: bumpCommit, want: featureCommit},
+		"a rollup and a bump are both peeled":       {commits: linearHistory(), head: rollupCommit, want: featureCommit},
+		"prepare's rollup and bump are both peeled": {commits: preparedHistory(), head: bumpCommit, want: featureCommit},
+		"prepare's rollup alone is peeled":          {commits: preparedHistory(), head: prepareCommit, want: featureCommit},
+		"the peel stops at another path":            {commits: mixedHistory, head: rollupCommit, want: sideCommit},
+		"a merge at HEAD is never peeled":           {commits: mergeHistory, head: mergeCommit, want: mergeCommit},
+		"a root commit at HEAD is the gate":         {commits: linearHistory(), head: rootCommit, want: rootCommit},
+		"a bump onto the root stops at the root":    {commits: map[string]fakeCommit{rootCommit: {}, bumpCommit: {parents: []string{rootCommit}, changed: bumpPaths}}, head: bumpCommit, want: rootCommit},
+		"an empty commit is not peeled":             {commits: map[string]fakeCommit{rootCommit: {}, bumpCommit: {parents: []string{rootCommit}}}, head: bumpCommit, want: bumpCommit},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

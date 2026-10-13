@@ -9,41 +9,37 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
-// preparedOn is the local date the tests cut their release on.
-var preparedOn = time.Date(2026, time.October, 11, 23, 30, 0, 0, time.Local)
-
 // The fixture changelog: an intro, two Unreleased bullets and the release before them, each
-// release under a Keep a Changelog `## [X.Y.Z] - YYYY-MM-DD` heading.
+// release under a bare `## X.Y.Z` heading.
 const (
 	unreleasedChangelog = "# Changelog\n" +
 		"\n" +
 		"All notable changes.\n" +
 		"\n" +
-		"## [Unreleased]\n" +
+		"## Unreleased\n" +
 		"\n" +
 		"- **First.** One.\n" +
 		"\n" +
 		"- **Second.** Two.\n" +
 		"\n" +
-		"## [0.24.11] - 2026-10-08\n" +
+		"## 0.24.11\n" +
 		"\n" +
 		"- **Old.** Three.\n"
 	rolledUpChangelog = "# Changelog\n" +
 		"\n" +
 		"All notable changes.\n" +
 		"\n" +
-		"## [Unreleased]\n" +
+		"## Unreleased\n" +
 		"\n" +
-		"## [0.25.0] - 2026-10-11\n" +
+		"## 0.25.0\n" +
 		"\n" +
 		"- **First.** One.\n" +
 		"\n" +
 		"- **Second.** Two.\n" +
 		"\n" +
-		"## [0.24.11] - 2026-10-08\n" +
+		"## 0.24.11\n" +
 		"\n" +
 		"- **Old.** Three.\n"
 )
@@ -109,7 +105,7 @@ func (c *prepareCheckout) prepare(t *testing.T, version string) (string, error) 
 func (c *prepareCheckout) prepareWith(t *testing.T, openRepo repoOpener, version string) (string, error) {
 	t.Helper()
 	var output bytes.Buffer
-	options := prepareOptions{dir: c.dir, version: version, now: func() time.Time { return preparedOn }, openRepo: openRepo}
+	options := prepareOptions{dir: c.dir, version: version, openRepo: openRepo}
 	err := runPrepare(t.Context(), refusingRunner(), &output, options)
 	return output.String(), err
 }
@@ -122,8 +118,9 @@ func refusingRunner() *fakeRunner {
 }
 
 // TestPrepareMakesTheRollupThenTheBumpCommit pins the verb's whole effect: two commits with the
-// exact subjects, each of its one path — the rollup recording the new heading, the bump a fresh
-// bare `X.Y.Z\n` in VERSION — with nothing pushed. A bare version reads as its `v` form.
+// exact subjects llama-launcher's history uses, each of its one path — the rollup recording the
+// new heading, the bump a fresh bare `X.Y.Z\n` in VERSION — with nothing pushed. A bare version
+// reads as its `v` form.
 func TestPrepareMakesTheRollupThenTheBumpCommit(t *testing.T) {
 	t.Parallel()
 
@@ -138,8 +135,8 @@ func TestPrepareMakesTheRollupThenTheBumpCommit(t *testing.T) {
 				t.Fatalf("prepare %s: %v", typed, err)
 			}
 			wantCommits := []memCommit{
-				{subject: "chore(release): cut v0.25.0", path: changelogFile, content: rolledUpChangelog},
-				{subject: "chore(version): bump version to v0.25.0", path: versionFile, content: "0.25.0\n"},
+				{subject: "docs(changelog): roll up 0.25.0", path: changelogFile, content: rolledUpChangelog},
+				{subject: "chore(version): bump version to 0.25.0", path: versionFile, content: "0.25.0\n"},
 			}
 			if !slices.Equal(checkout.commits, wantCommits) {
 				t.Errorf("commits =\n%+v\nwant\n%+v", checkout.commits, wantCommits)
@@ -151,55 +148,59 @@ func TestPrepareMakesTheRollupThenTheBumpCommit(t *testing.T) {
 	}
 }
 
-// The fixture of llama-launcher's own CHANGELOG.md before its first release: the Keep a Changelog
-// header, an `### Added` group under Unreleased, and no release heading yet.
+// The fixture of the real top of llama-launcher's CHANGELOG.md, a literal snapshot never read
+// from the working tree: `### Changed` under Unreleased, then the `## 1.8.1` release.
 const (
-	firstReleaseChangelog = "# Changelog\n" +
+	realTopChangelog = "# Changelog\n" +
 		"\n" +
-		"All notable changes to this project are documented in this file.\n" +
+		"## Unreleased\n" +
 		"\n" +
-		"The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n" +
-		"and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n" +
+		"### Changed\n" +
 		"\n" +
-		"## [Unreleased]\n" +
+		"- **Issue register:** open defects and parked ideas now live in capcom (`.capcom/issues/`, one markdown file per issue) instead of beads (`bd`). All 22 beads issues moved, closed ones included; each keeps its old `llama-launcher-…` id as an alias, so existing citations still resolve with `capcom show`. `.beads/` and its `.gitignore` block are gone, and `AGENTS.md` carries the capcom managed block in place of the beads section.\n" +
+		"- **Glossary:** the domain glossary moved from `CONTEXT.md` into capcom Knowledge as the `glossary` Note tree: one Note per term under the Language and Verbs sections, plus the flagged ambiguities (`capcom know tree glossary`, `capcom know show \"<Term>\"`). `CONTEXT.md` is now a short pointer to it.\n" +
+		"- **Decision records:** ADR-0001 to ADR-0016 and the Gateway decision brief moved from `docs/adr/` into capcom Knowledge as Note trees under `.capcom/knowledge/decisions/` (`capcom know show adr-0006`), one Note per record with its sections as verbatim children. `docs/adr/README.md` is now a short pointer, and the TDD, README and `AGENTS.md` link to the Notes.\n" +
+		"- **Working rules:** the issue-filing rules (spoken ids, plan linking, labels, closing alongside `CHANGELOG.md`) and the docs layout are now Knowledge Notes `issue-conventions` and `docs-layout`; `AGENTS.md` tells agents to open the Knowledge tree (`capcom know tree --depth 2`) before starting work.\n" +
+		"- Claude Code sessions in this repository are now briefed by `capcom prime` on start, resume, clear and compaction (`.claude/settings.json`, now tracked).\n" +
 		"\n" +
-		"### Added\n" +
+		"## 1.8.1\n" +
 		"\n" +
-		"- `llama-launcher` binary with a `version` command.\n" +
-		"- `llama-launcher init` creates the store.\n"
-	firstReleaseRolledUp = "# Changelog\n" +
+		"### Fixed\n"
+	realTopRolledUp = "# Changelog\n" +
 		"\n" +
-		"All notable changes to this project are documented in this file.\n" +
+		"## Unreleased\n" +
 		"\n" +
-		"The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n" +
-		"and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n" +
+		"## 1.9.0\n" +
 		"\n" +
-		"## [Unreleased]\n" +
+		"### Changed\n" +
 		"\n" +
-		"## [0.1.0] - 2026-10-11\n" +
+		"- **Issue register:** open defects and parked ideas now live in capcom (`.capcom/issues/`, one markdown file per issue) instead of beads (`bd`). All 22 beads issues moved, closed ones included; each keeps its old `llama-launcher-…` id as an alias, so existing citations still resolve with `capcom show`. `.beads/` and its `.gitignore` block are gone, and `AGENTS.md` carries the capcom managed block in place of the beads section.\n" +
+		"- **Glossary:** the domain glossary moved from `CONTEXT.md` into capcom Knowledge as the `glossary` Note tree: one Note per term under the Language and Verbs sections, plus the flagged ambiguities (`capcom know tree glossary`, `capcom know show \"<Term>\"`). `CONTEXT.md` is now a short pointer to it.\n" +
+		"- **Decision records:** ADR-0001 to ADR-0016 and the Gateway decision brief moved from `docs/adr/` into capcom Knowledge as Note trees under `.capcom/knowledge/decisions/` (`capcom know show adr-0006`), one Note per record with its sections as verbatim children. `docs/adr/README.md` is now a short pointer, and the TDD, README and `AGENTS.md` link to the Notes.\n" +
+		"- **Working rules:** the issue-filing rules (spoken ids, plan linking, labels, closing alongside `CHANGELOG.md`) and the docs layout are now Knowledge Notes `issue-conventions` and `docs-layout`; `AGENTS.md` tells agents to open the Knowledge tree (`capcom know tree --depth 2`) before starting work.\n" +
+		"- Claude Code sessions in this repository are now briefed by `capcom prime` on start, resume, clear and compaction (`.claude/settings.json`, now tracked).\n" +
 		"\n" +
-		"### Added\n" +
+		"## 1.8.1\n" +
 		"\n" +
-		"- `llama-launcher` binary with a `version` command.\n" +
-		"- `llama-launcher init` creates the store.\n"
+		"### Fixed\n"
 )
 
-// TestPrepareCutsTheFirstReleaseOfAKeepAChangelogFile pins the cut llama-launcher's own checkout makes
-// first: no `v*` tag exists, so any version is above the highest one; VERSION reads `0.0.0`; and
-// the `### Added` group moves under the new release heading with Unreleased left empty above it.
-func TestPrepareCutsTheFirstReleaseOfAKeepAChangelogFile(t *testing.T) {
+// TestPrepareRollsUpTheRealChangelogTop pins the cut over llama-launcher's own changelog shape:
+// the `### Changed` group moves under the new `## 1.9.0` heading with Unreleased left empty above
+// it, and `## 1.8.1` stays where it was.
+func TestPrepareRollsUpTheRealChangelogTop(t *testing.T) {
 	t.Parallel()
-	checkout := newPrepareCheckout(t, firstReleaseChangelog, "0.0.0\n")
-	checkout.repo.tags = nil
+	checkout := newPrepareCheckout(t, realTopChangelog, "1.8.1\n")
+	checkout.repo.tags = []string{"v1.8.0", "v1.8.1"}
 
-	_, err := checkout.prepare(t, "v0.1.0")
+	_, err := checkout.prepare(t, "v1.9.0")
 
 	if err != nil {
-		t.Fatalf("prepare v0.1.0: %v", err)
+		t.Fatalf("prepare v1.9.0: %v", err)
 	}
 	wantCommits := []memCommit{
-		{subject: "chore(release): cut v0.1.0", path: changelogFile, content: firstReleaseRolledUp},
-		{subject: "chore(version): bump version to v0.1.0", path: versionFile, content: "0.1.0\n"},
+		{subject: "docs(changelog): roll up 1.9.0", path: changelogFile, content: realTopRolledUp},
+		{subject: "chore(version): bump version to 1.9.0", path: versionFile, content: "1.9.0\n"},
 	}
 	if !slices.Equal(checkout.commits, wantCommits) {
 		t.Errorf("commits =\n%+v\nwant\n%+v", checkout.commits, wantCommits)
@@ -208,37 +209,52 @@ func TestPrepareCutsTheFirstReleaseOfAKeepAChangelogFile(t *testing.T) {
 
 // TestRollUpChangelog pins the rollup's bytes: the heading goes directly under Unreleased with
 // one blank line on each side however many blank lines stood there, and a CRLF changelog keeps
-// its line ending.
+// its line ending. A longer version that shares the release's prefix is not its heading.
 func TestRollUpChangelog(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
 		changelog string
+		version   releaseVersion
 		want      string
 	}{
 		"the house layout": {changelog: unreleasedChangelog, want: rolledUpChangelog},
 		"no blank line under Unreleased": {
-			changelog: "## [Unreleased]\n- **First.** One.\n",
-			want:      "## [Unreleased]\n\n## [0.25.0] - 2026-10-11\n\n- **First.** One.\n",
+			changelog: "## Unreleased\n- **First.** One.\n",
+			want:      "## Unreleased\n\n## 0.25.0\n\n- **First.** One.\n",
 		},
 		"several blank lines under Unreleased": {
-			changelog: "## [Unreleased]\n\n\n\n- **First.** One.\n",
-			want:      "## [Unreleased]\n\n## [0.25.0] - 2026-10-11\n\n- **First.** One.\n",
+			changelog: "## Unreleased\n\n\n\n- **First.** One.\n",
+			want:      "## Unreleased\n\n## 0.25.0\n\n- **First.** One.\n",
 		},
 		"a CRLF changelog": {
-			changelog: "# Changelog\r\n\r\n## [Unreleased]\r\n\r\n- **First.** One.\r\n",
-			want:      "# Changelog\r\n\r\n## [Unreleased]\r\n\r\n## [0.25.0] - 2026-10-11\r\n\r\n- **First.** One.\r\n",
+			changelog: "# Changelog\r\n\r\n## Unreleased\r\n\r\n- **First.** One.\r\n",
+			want:      "# Changelog\r\n\r\n## Unreleased\r\n\r\n## 0.25.0\r\n\r\n- **First.** One.\r\n",
 		},
 		"a newer patch beside an older one": {
-			changelog: "## [Unreleased]\n\n- **First.** One.\n\n## [0.25.1] - 2026-10-09\n",
-			want:      "## [Unreleased]\n\n## [0.25.0] - 2026-10-11\n\n- **First.** One.\n\n## [0.25.1] - 2026-10-09\n",
+			changelog: "## Unreleased\n\n- **First.** One.\n\n## 0.25.1\n",
+			want:      "## Unreleased\n\n## 0.25.0\n\n- **First.** One.\n\n## 0.25.1\n",
+		},
+		"a sub-section under Unreleased": {
+			changelog: "## Unreleased\n\n### Fixed\n\n- **First.** One.\n\n## 0.24.11\n",
+			want:      "## Unreleased\n\n## 0.25.0\n\n### Fixed\n\n- **First.** One.\n\n## 0.24.11\n",
+		},
+		"a longer version sharing the release's prefix": {
+			changelog: "## Unreleased\n\n- **First.** One.\n\n## 1.8.10\n\n- **Old.** Three.\n",
+			version:   releaseVersion{major: 1, minor: 8, patch: 1},
+			want:      "## Unreleased\n\n## 1.8.1\n\n- **First.** One.\n\n## 1.8.10\n\n- **Old.** Three.\n",
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := rollUpChangelog([]byte(tc.changelog), releaseVersion{minor: 25}, preparedOn)
+			version := tc.version
+			if version == (releaseVersion{}) {
+				version = releaseVersion{minor: 25}
+			}
+
+			got, err := rollUpChangelog([]byte(tc.changelog), version)
 
 			if err != nil {
 				t.Fatalf("rollUpChangelog: %v", err)
@@ -292,20 +308,20 @@ func TestPrepareRefuses(t *testing.T) {
 			wantError: "VERSION already reads 0.25.0, an unpushed version bump: cut the next patch, v0.25.1, instead",
 		},
 		"no Unreleased heading": {
-			changelog: "# Changelog\n\n## [0.24.11] - 2026-10-08\n\n- **Old.** Three.\n",
-			wantError: "CHANGELOG.md has no ## [Unreleased] heading",
+			changelog: "# Changelog\n\n## 0.24.11\n\n- **Old.** Three.\n",
+			wantError: "CHANGELOG.md has no ## Unreleased heading",
 		},
 		"no bullet under Unreleased": {
-			changelog: "## [Unreleased]\n\nProse, not a bullet.\n\n## [0.24.11] - 2026-10-08\n\n- **Old.** Three.\n",
-			wantError: "CHANGELOG.md:1: no bullet under ## [Unreleased] to release",
+			changelog: "## Unreleased\n\nProse, not a bullet.\n\n## 0.24.11\n\n- **Old.** Three.\n",
+			wantError: "CHANGELOG.md:1: no bullet under ## Unreleased to release",
 		},
 		"an empty Unreleased at the end of the file": {
-			changelog: "## [0.24.11] - 2026-10-08\n\n- **Old.** Three.\n\n## [Unreleased]\n\n",
-			wantError: "CHANGELOG.md:5: no bullet under ## [Unreleased] to release",
+			changelog: "## 0.24.11\n\n- **Old.** Three.\n\n## Unreleased\n\n",
+			wantError: "CHANGELOG.md:5: no bullet under ## Unreleased to release",
 		},
 		"a heading for the version already": {
-			changelog: "## [Unreleased]\n\n- **First.** One.\n\n## [0.25.0] - 2026-10-01\n\n- **Old.** Three.\n",
-			wantError: "CHANGELOG.md:5: already has a ## [0.25.0] heading",
+			changelog: "## Unreleased\n\n- **First.** One.\n\n## 0.25.0\n\n- **Old.** Three.\n",
+			wantError: "CHANGELOG.md:5: already has a ## 0.25.0 heading",
 		},
 	}
 	for name, tc := range cases {
@@ -361,7 +377,7 @@ func TestPrepareNamesEveryRefusal(t *testing.T) {
 		"the working tree is not clean",
 		"not above the highest release tag",
 		"VERSION already reads 0.24.9",
-		"has no ## [Unreleased] heading",
+		"has no ## Unreleased heading",
 	} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to contain %q", err, want)
@@ -438,7 +454,7 @@ func TestPrepareReportsAFailedBumpCommit(t *testing.T) {
 
 	_, err := checkout.prepareWith(t, openRepo, "v0.25.0")
 
-	if err == nil || !strings.Contains(err.Error(), `the rollup commit "chore(release): cut v0.25.0" was made`) {
+	if err == nil || !strings.Contains(err.Error(), `the rollup commit "docs(changelog): roll up 0.25.0" was made`) {
 		t.Errorf("error = %v, want it to name the rollup commit already made", err)
 	}
 	if len(checkout.commits) != 1 || checkout.commits[0].path != changelogFile {
