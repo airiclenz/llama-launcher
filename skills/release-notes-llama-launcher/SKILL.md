@@ -172,8 +172,8 @@ left a partial OUT. Discard anything incomplete and start clean."
    per-tag row counts, what verify dropped or rewrote, the trace result, the
    output path and the inventory path (`<RUN>/inventory.md`, not pasted).
 3. State the implied bump **as a fact**, never a proposal: llama-launcher is
-   past 1.0, so a breaking change implies a **major** bump, a new feature
-   (an `Added` row, or a feature-heavy inventory) a **minor** bump and
+   past 1.0, so a breaking change implies a **major** bump, any new feature
+   (an `Added` row) a **minor** bump and
    anything else a **patch**. With no release published yet, say instead
    that these notes cover llama-launcher's first release. Choosing and
    applying a version is `release-llama-launcher`'s work.

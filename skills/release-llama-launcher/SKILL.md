@@ -97,9 +97,8 @@ From `highestTag` `vM.N.P` — an empty `highestTag` (no tag yet) reads as
 `v0.0.0`:
 
 - **major** `v(M+1).0.0` when the notes carry a Breaking section;
-- **minor** `vM.(N+1).0` when the inventory is feature-heavy (new features are
-  the bulk of the rows), and always for the first release (no tag yet:
-  `v0.1.0`);
+- **minor** `vM.(N+1).0` when the notes carry any new feature (an `Added`
+  row), and always for the first release (no tag yet: `v0.1.0`);
 - otherwise **patch** `vM.N.(P+1)` — also the fallback when the inventory
   gives no clear answer.
 
