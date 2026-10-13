@@ -2605,6 +2605,9 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 		if _, err := exec.LookPath("nc"); err != nil {
 			t.Skip("nc not available")
 		}
+		if _, err := exec.LookPath("lsof"); err != nil {
+			t.Skipf("lsof not available: %v", err)
+		}
 
 		// A real child process listening at the target address stands in for
 		// the loading llama-server: the PID path (lsof + SIGTERM) is what the
@@ -2632,7 +2635,7 @@ func TestStopServerAt_StartingOccupant(t *testing.T) {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("nc (PID %d) never showed up listening on %s", cmd.Process.Pid, addr)
+				t.Skipf("lsof cannot see nc (PID %d) listening on %s", cmd.Process.Pid, addr)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}

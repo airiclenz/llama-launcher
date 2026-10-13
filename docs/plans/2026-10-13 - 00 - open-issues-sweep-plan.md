@@ -38,7 +38,9 @@
 - 10: guard folded (decision, re-check round): no key resolution in `__complete`; Approach failure wording; dispatch before `--config` filter; bash-3.2 builtins only
 - 13: rejected — add `defaults/embed.go` to the §5.2 rows; §5.2 already has the `defaults/embed.go` row (llama-launcher.TDD.md:490)
 
-## 1. Skip TestStopServerAt_StartingOccupant when lsof cannot see the listener
+## 1. Skip TestStopServerAt_StartingOccupant when lsof cannot see the listener — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): TestStopServerAt_AuthFailedListener carries the same hard-fail `t.Fatalf("nc (PID %d) never showed up listening…")` after its findListeningPID poll; left unchanged as outside this item's named test.
 
 **What:**
 **Goal:** `TestStopServerAt_StartingOccupant` skips (never fails) on a host where `lsof` is missing or cannot see the `nc` listener; it still runs and passes where it can.
