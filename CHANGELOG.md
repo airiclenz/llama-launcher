@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.0
+
 ### Fixed
 
 - Recording a key source in a config written with CRLF line endings (a key migration's `api_key_cmd` rewrite, or the `plaintext_key_ok: true` marker) no longer leaves LF-only lines in the file: the written line takes the file's own line ending and every other line keeps its own.
