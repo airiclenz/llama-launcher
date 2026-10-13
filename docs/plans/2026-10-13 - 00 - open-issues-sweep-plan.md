@@ -161,7 +161,10 @@ NOTES (2026-10-13): the blackholed-address case uses fakes whose probes sleep `h
 **Acceptance:** `go test ./internal/launcher/ -run 'IdentifyBackend|StopInstance' -race -v`
 **Commit:** `perf(server): run identifyBackend health checks concurrently`
 
-## 9. Show a parameter diff before switching models
+## 9. Show a parameter diff before switching models — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): simple-mode tests cover the cancel paths ("1\nn\n", "1\n\n", "1\n") through doSwitchSimple; the "y" answer of a single piped "1\ny\n" is pinned at readLine (TestSwitchSimple_ReadLineKeepsPipedAnswer), since a confirmed switch would run a real doLoadProfile.
+NOTES (2026-10-13): drawPopupAndWait keeps its signature; its frame rendering moved into a shared drawPopup that drawConfirmPopup also uses. Description is left out of the delta (the plan lists Backend, Model, specs, Extra args only).
 
 **What:**
 **Goal:** picking a profile in Switch model shows only the parameters that change (current → target) and loads only on confirmation, in both TTY and simple modes.

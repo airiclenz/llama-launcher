@@ -126,3 +126,55 @@ func TestDrawPopupAndWaitRestoresCursor(t *testing.T) {
 		}
 	})
 }
+
+// TestSwitchModel_ConfirmPopup pins the switch confirmation keys: enter
+// confirms; q, esc, an unreadable key and a raw-mode failure cancel;
+// navigation keys are ignored. Every path clears the popup and restores the
+// cursor.
+func TestSwitchModel_ConfirmPopup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		keys []keyCode
+		err  error
+		want bool
+	}{
+		{name: "enter confirms", keys: []keyCode{keyEnter}, want: true},
+		{name: "q cancels", keys: []keyCode{keyQ}},
+		{name: "esc cancels", keys: []keyCode{keyEscape}},
+		{name: "unreadable key cancels", keys: []keyCode{keyNone}},
+		{name: "navigation is ignored", keys: []keyCode{keyUp, keyDown, keyEnter}, want: true},
+		{name: "raw mode failure cancels", err: errors.New("raw mode unavailable")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+			var atWait string
+			next := 0
+			got := drawConfirmPopup(&out, "Big", []string{"row"}, func() (keyCode, error) {
+				atWait = out.String()
+				if tt.err != nil {
+					return keyNone, tt.err
+				}
+				key := tt.keys[next]
+				next++
+				return key, nil
+			})
+
+			if got != tt.want {
+				t.Errorf("drawConfirmPopup = %v, want %v", got, tt.want)
+			}
+			if !strings.Contains(atWait, "enter switch · q cancel") {
+				t.Errorf("popup drawn without the confirm footer: %q", atWait)
+			}
+			tail := strings.TrimPrefix(out.String(), atWait)
+			if !strings.Contains(tail, escCursorShow) || !strings.Contains(tail, escClear) {
+				t.Errorf("popup not cleared or cursor not restored: %q", tail)
+			}
+		})
+	}
+}

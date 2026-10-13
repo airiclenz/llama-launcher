@@ -345,8 +345,63 @@ func waitForAnyKey() error {
 func drawPopupAndWait(w io.Writer, title string, lines []string, wait func() error) {
 	defer fmt.Fprint(w, escClear+escCursorShow)
 
+	drawPopup(w, title, lines, "press any key to close")
+
+	if err := wait(); err != nil {
+		return // raw mode unavailable: close the popup without waiting
+	}
+}
+
+// confirmPopup shows a popup asking to confirm a model switch and reports
+// whether enter was pressed. Outside a terminal it confirms nothing.
+func confirmPopup(title string, lines []string) bool {
+	if !isTerminal() {
+		return false
+	}
+	return drawConfirmPopup(os.Stdout, title, lines, readKeyRaw)
+}
+
+// readKeyRaw reads one key with stdin in raw mode, restoring the previous
+// terminal state afterwards. It fails when raw mode cannot be entered.
+func readKeyRaw() (keyCode, error) {
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return keyNone, err
+	}
+	defer term.Restore(fd, oldState)
+	return readKey(), nil
+}
+
+// drawConfirmPopup renders a popup with an "enter switch · q cancel" footer
+// to w and reads keys with wait until one decides: enter confirms; q, esc,
+// ctrl-c, an unreadable key and a wait failure (raw mode unavailable) all
+// cancel; navigation and digit keys are ignored. Like drawPopupAndWait it
+// clears the popup and restores the cursor on every return path.
+func drawConfirmPopup(w io.Writer, title string, lines []string, wait func() (keyCode, error)) bool {
+	defer fmt.Fprint(w, escClear+escCursorShow)
+
+	drawPopup(w, title, lines, "enter switch · q cancel")
+
+	for {
+		key, err := wait()
+		if err != nil {
+			return false
+		}
+		switch key {
+		case keyEnter:
+			return true
+		case keyQ, keyEscape, keyCtrlC, keyNone:
+			return false
+		}
+	}
+}
+
+// drawPopup renders the popup frame — lines, a blank row and the dimmed
+// footer — centred on the last menu (or the terminal) and hides the cursor.
+func drawPopup(w io.Writer, title string, lines []string, footer string) {
 	body := append([]string{}, lines...)
-	body = append(body, "", fmt.Sprintf("%spress any key to close%s", cDim, cReset))
+	body = append(body, "", fmt.Sprintf("%s%s%s", cDim, footer, cReset))
 
 	f := Frame{Title: title, Padding: 2, BorderColor: cLightGray}
 	rendered := f.Render(body)
@@ -377,8 +432,4 @@ func drawPopupAndWait(w io.Writer, title string, lines []string, wait func() err
 		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
 	}
 	fmt.Fprint(w, buf.String())
-
-	if err := wait(); err != nil {
-		return // raw mode unavailable: close the popup without waiting
-	}
 }

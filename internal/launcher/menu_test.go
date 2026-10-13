@@ -1252,3 +1252,176 @@ func TestDoLoadProfile_RoutesStartupTimeout(t *testing.T) {
 		})
 	}
 }
+
+// TestProfileParamsDelta pins the Switch model confirmation body: only the
+// rows whose displayed value changes, as "old → new", with a side that does
+// not set a parameter shown as "—".
+func TestProfileParamsDelta(t *testing.T) {
+	t.Parallel()
+
+	intPtr := func(v int) *int { return &v }
+	base := func() *ResolvedProfile {
+		return &ResolvedProfile{
+			Name:      "base",
+			Backend:   "llamacpp",
+			ModelPath: "/models/a.gguf",
+			ProfileParams: ProfileParams{
+				ContextSize: intPtr(4096),
+				GPULayers:   intPtr(99),
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		cur     func() *ResolvedProfile
+		target  func() *ResolvedProfile
+		want    []string
+		notWant []string
+		count   int
+	}{
+		{
+			name:   "identical profiles",
+			cur:    base,
+			target: base,
+			want:   []string{"No parameter changes"},
+			count:  1,
+		},
+		{
+			name: "backend change",
+			cur:  base,
+			target: func() *ResolvedProfile {
+				p := base()
+				p.Backend = "lmstudio"
+				return p
+			},
+			want:    []string{"Backend", "LLaMA.cpp → ", "GPU layers", "99 → —"},
+			notWant: []string{"Model", "Context size"},
+			count:   2,
+		},
+		{
+			name: "gpu_layers and context_size change",
+			cur:  base,
+			target: func() *ResolvedProfile {
+				p := base()
+				p.ContextSize = intPtr(8192)
+				p.GPULayers = intPtr(20)
+				return p
+			},
+			want:    []string{"4096 → 8192", "99 → 20"},
+			notWant: []string{"Backend", "Model"},
+			count:   2,
+		},
+		{
+			name: "param only the target sets",
+			cur: func() *ResolvedProfile {
+				p := base()
+				p.GPULayers = nil
+				return p
+			},
+			target: base,
+			want:   []string{"GPU layers", "— → 99"},
+			count:  1,
+		},
+		{
+			name: "extra args redacted",
+			cur:  base,
+			target: func() *ResolvedProfile {
+				p := base()
+				p.ExtraArgs = []string{"--api-key", "sk-secret"}
+				return p
+			},
+			want:    []string{"Extra args", "— → "},
+			notWant: []string{"sk-secret"},
+			count:   1,
+		},
+		{
+			name:    "nil current lists the target in full",
+			cur:     func() *ResolvedProfile { return nil },
+			target:  base,
+			want:    []string{"Backend", "Model", "Context size", "GPU layers"},
+			notWant: []string{"→"},
+			count:   len(formatProfileParams(base())),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := profileParamsDelta(tt.cur(), tt.target())
+			joined := strings.Join(lines, "\n")
+			if len(lines) != tt.count {
+				t.Errorf("got %d rows, want %d:\n%s", len(lines), tt.count, joined)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(joined, want) {
+					t.Errorf("rows lack %q:\n%s", want, joined)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(joined, notWant) {
+					t.Errorf("rows contain %q:\n%s", notWant, joined)
+				}
+			}
+		})
+	}
+}
+
+// TestSwitchSimple_ReadLineKeepsPipedAnswer pins that the selection and the
+// y/N answer can arrive in one piped write: readLine must not swallow the
+// second line into a buffer it then discards.
+func TestSwitchSimple_ReadLineKeepsPipedAnswer(t *testing.T) {
+	withStdin(t, "1\ny\n")
+
+	if got := readLine(); got != "1" {
+		t.Errorf("first readLine = %q, want 1", got)
+	}
+	if got := readLine(); got != "y" {
+		t.Errorf("second readLine = %q, want y", got)
+	}
+	if got := readLine(); got != "" {
+		t.Errorf("readLine at EOF = %q, want empty", got)
+	}
+}
+
+// TestSwitchSimple_ShowsDeltaAndAsks pins the simple-mode switch: after the
+// pick it prints only the changed parameters and asks y/N, and anything but
+// yes leaves the current model loaded. Not parallel: it registers a backend
+// and swaps os.Stdin.
+func TestSwitchSimple_ShowsDeltaAndAsks(t *testing.T) {
+	stub := &specStubServer{name: "switchstub", specs: []ProfileParamSpec{specContextSize}}
+	RegisterLLMServer(stub)
+	t.Cleanup(func() { delete(llmServers, stub.name) })
+
+	small, big := 4096, 8192
+	cfg := &Config{
+		Servers: map[string]ServerConfig{stub.name: {Enabled: true}},
+		Profiles: map[string]Profile{
+			"small": {Model: "m", ProfileParams: ProfileParams{Server: strPtrLocal(stub.name), ContextSize: &small}},
+			"big":   {Model: "m", ProfileParams: ProfileParams{Server: strPtrLocal(stub.name), ContextSize: &big}},
+		},
+	}
+	current := &RunningInstance{Backend: stub.name, ActiveProfile: "small"}
+
+	for _, input := range []string{"1\nn\n", "1\n\n", "1\n"} {
+		t.Run(strings.ReplaceAll(input, "\n", `\n`), func(t *testing.T) {
+			withStdin(t, input)
+
+			var err error
+			out := captureStdout(t, func() { err = doSwitchSimple(cfg, current, []string{"big"}) })
+
+			if err != nil {
+				t.Fatalf("doSwitchSimple = %v", err)
+			}
+			for _, want := range []string{"Context size", "4096 → 8192", "Switch? [y/N]: "} {
+				if !strings.Contains(out, want) {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(out, "Loading") || strings.Contains(out, "Model ") {
+				t.Errorf("output shows a load or an unchanged row:\n%s", out)
+			}
+		})
+	}
+}

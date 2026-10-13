@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -405,7 +404,7 @@ func doSwitchModel(cfg *Config, current *RunningInstance) error {
 	}
 
 	if !isTerminal() {
-		return doSwitchSimple(cfg, available)
+		return doSwitchSimple(cfg, current, available)
 	}
 
 	items := buildProfileItems(cfg, available)
@@ -417,7 +416,28 @@ func doSwitchModel(cfg *Config, current *RunningInstance) error {
 		return nil
 	}
 
+	target, err := cfg.ResolveProfile(available[idx])
+	if err != nil {
+		return err
+	}
+	if !confirmPopup(target.DisplayName(), profileParamsDelta(activeResolvedProfile(cfg, current), target)) {
+		return nil
+	}
 	return doLoadProfile(cfg, available[idx])
+}
+
+// activeResolvedProfile resolves the profile the running instance has loaded,
+// or returns nil when the instance matches no profile or it no longer
+// resolves — the switch confirmation then lists the target's full parameters.
+func activeResolvedProfile(cfg *Config, inst *RunningInstance) *ResolvedProfile {
+	if inst == nil || inst.ActiveProfile == "" {
+		return nil
+	}
+	profile, err := cfg.ResolveProfile(inst.ActiveProfile)
+	if err != nil {
+		return nil
+	}
+	return profile
 }
 
 func doLoadProfile(cfg *Config, name string) error {
@@ -866,30 +886,118 @@ func doEditConfig(cfg *Config) error {
 // never applies is never displayed and a new backend needs no change here.
 func formatProfileParams(profile *ResolvedProfile) []string {
 	var lines []string
-
-	add := func(label, value string) {
-		lines = append(lines, fmt.Sprintf("%s%-18s%s %s", cDim, label, cReset, value))
-	}
-
 	if profile.Description != "" {
-		add("Description", profile.Description)
+		lines = append(lines, formatParamLine("Description", profile.Description))
 	}
-	add("Backend", backendDisplayName(profile.Backend))
-	add("Model", profile.ModelPath)
+	for _, p := range profileParamPairs(profile, profileParamSpecs(profile.Backend)) {
+		lines = append(lines, formatParamLine(p.label, p.value))
+	}
+	return lines
+}
 
-	if srv, err := GetLLMServer(profile.Backend); err == nil {
-		for _, spec := range srv.ParamSpecs() {
-			if value, ok := spec.Format(&profile.ProfileParams); ok {
-				add(spec.Label, value)
-			}
+// profileParam is one labelled, display-formatted profile parameter.
+type profileParam struct {
+	label, value string
+}
+
+// noParamValue stands for a parameter one side of a switch does not set.
+const noParamValue = "—"
+
+// formatParamLine renders one parameter row of a profile pop-up.
+func formatParamLine(label, value string) string {
+	return fmt.Sprintf("%s%-18s%s %s", cDim, label, cReset, value)
+}
+
+// profileParamSpecs returns the display specs of the named backend, or none
+// when it is not registered.
+func profileParamSpecs(backend string) []ProfileParamSpec {
+	srv, err := GetLLMServer(backend)
+	if err != nil {
+		return nil
+	}
+	return srv.ParamSpecs()
+}
+
+// profileParamPairs returns the profile's parameters in display order —
+// Backend, Model, each of specs the profile sets, then Extra args with API
+// keys redacted. Description is left to the caller.
+func profileParamPairs(profile *ResolvedProfile, specs []ProfileParamSpec) []profileParam {
+	pairs := []profileParam{
+		{"Backend", backendDisplayName(profile.Backend)},
+		{"Model", profile.ModelPath},
+	}
+	for _, spec := range specs {
+		if value, ok := spec.Format(&profile.ProfileParams); ok {
+			pairs = append(pairs, profileParam{spec.Label, value})
+		}
+	}
+	if len(profile.ExtraArgs) > 0 {
+		pairs = append(pairs, profileParam{"Extra args", strings.Join(redactAPIKeyArgs(profile.ExtraArgs), " ")})
+	}
+	return pairs
+}
+
+// profileParamsDelta renders the Switch model confirmation body: one
+// "label  old → new" row per parameter whose displayed value differs between
+// cur and target, over the union of both backends' param specs, with a side
+// that does not set a parameter shown as "—". Identical profiles yield the
+// single row "No parameter changes"; a nil cur (no resolvable active
+// profile) yields target's full formatProfileParams rows.
+func profileParamsDelta(cur, target *ResolvedProfile) []string {
+	if cur == nil {
+		return formatProfileParams(target)
+	}
+
+	specs := profileParamSpecs(cur.Backend)
+	seen := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		seen[spec.Label] = true
+	}
+	for _, spec := range profileParamSpecs(target.Backend) {
+		if !seen[spec.Label] {
+			seen[spec.Label] = true
+			specs = append(specs, spec)
 		}
 	}
 
-	if len(profile.ExtraArgs) > 0 {
-		add("Extra args", strings.Join(redactAPIKeyArgs(profile.ExtraArgs), " "))
-	}
+	// Each side is formatted against the union, but only through its own
+	// backend's specs, so a parameter its backend never applies reads "—".
+	curValues := paramValues(profileParamPairs(cur, profileParamSpecs(cur.Backend)))
+	targetValues := paramValues(profileParamPairs(target, profileParamSpecs(target.Backend)))
 
+	labels := []string{"Backend", "Model"}
+	for _, spec := range specs {
+		labels = append(labels, spec.Label)
+	}
+	labels = append(labels, "Extra args")
+
+	var lines []string
+	for _, label := range labels {
+		oldValue, newValue := curValues[label], targetValues[label]
+		if oldValue == newValue {
+			continue
+		}
+		if oldValue == "" {
+			oldValue = noParamValue
+		}
+		if newValue == "" {
+			newValue = noParamValue
+		}
+		lines = append(lines, formatParamLine(label, oldValue+" → "+newValue))
+	}
+	if len(lines) == 0 {
+		return []string{"No parameter changes"}
+	}
 	return lines
+}
+
+// paramValues indexes pairs by label.
+func paramValues(pairs []profileParam) map[string]string {
+	values := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		values[p.label] = p.value
+	}
+	return values
 }
 
 func profileDisplayName(cfg *Config, profileName string) string {
@@ -1412,7 +1520,7 @@ func runIdleMenuSimple(cfg *Config, inst *RunningInstance, names []string) error
 	return doLoadProfile(cfg, names[idx])
 }
 
-func doSwitchSimple(cfg *Config, available []string) error {
+func doSwitchSimple(cfg *Config, current *RunningInstance, available []string) error {
 	fmt.Println()
 	fmt.Println("  Switch to:")
 	fmt.Println()
@@ -1430,6 +1538,19 @@ func doSwitchSimple(cfg *Config, available []string) error {
 	if idx < 0 {
 		return fmt.Errorf("invalid selection: %s", choice)
 	}
+
+	target, err := cfg.ResolveProfile(available[idx])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n  %s\n", target.DisplayName())
+	for _, line := range profileParamsDelta(activeResolvedProfile(cfg, current), target) {
+		fmt.Printf("    %s\n", line)
+	}
+	fmt.Print("\n  Switch? [y/N]: ")
+	if answer := strings.ToLower(readLine()); answer != "y" && answer != "yes" {
+		return nil
+	}
 	return doLoadProfile(cfg, available[idx])
 }
 
@@ -1440,12 +1561,25 @@ func showInstanceLog(cfg *Config, inst *RunningInstance, follow bool) error {
 	return TailLog(inst.LogFile, follow, []string{cfg.APIKeyFor(inst.Backend)})
 }
 
+// readLine reads one line from stdin, trimmed. It reads a byte at a time,
+// unbuffered, so a later readLine sees the next line of piped input instead
+// of losing it to a buffer discarded with the previous call.
 func readLine() string {
-	scanner := bufio.NewScanner(os.Stdin)
-	if scanner.Scan() {
-		return strings.TrimSpace(scanner.Text())
+	var line []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n == 1 {
+			if buf[0] == '\n' {
+				break
+			}
+			line = append(line, buf[0])
+		}
+		if err != nil {
+			break
+		}
 	}
-	return ""
+	return strings.TrimSpace(string(line))
 }
 
 func parseChoice(s string, max int) int {
