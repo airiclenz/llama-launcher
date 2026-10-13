@@ -181,6 +181,16 @@ func TestExecRepoRunsEachMethodsArgv(t *testing.T) {
 			wantCall: recordedCall{env: nonInteractiveEnv, name: "gh",
 				args: []string{"release", "view", "v0.24.11", "--repo", "airiclenz/llama-launcher", "--json", "assets"}},
 		},
+		"AssetDigests keeps every asset's digest by name": {
+			call: func(ctx context.Context, checkout execRepo) (any, error) {
+				return checkout.AssetDigests(ctx, "v0.24.11")
+			},
+			output: `{"assets":[{"name":"llama-launcher_0.24.11_linux_amd64.tar.gz","digest":"sha256:abc"},` +
+				`{"name":"SHA256SUMS","digest":null}]}` + "\n",
+			want: map[string]string{"llama-launcher_0.24.11_linux_amd64.tar.gz": "sha256:abc", "SHA256SUMS": ""},
+			wantCall: recordedCall{env: nonInteractiveEnv, name: "gh",
+				args: []string{"api", "repos/airiclenz/llama-launcher/releases/tags/v0.24.11"}},
+		},
 		"PushMain": {
 			call: func(ctx context.Context, checkout execRepo) (any, error) {
 				return nil, checkout.PushMain(ctx)
@@ -326,6 +336,17 @@ func TestExecRepoTellsANoFromABrokenCommand(t *testing.T) {
 		}
 	})
 
+	t.Run("AssetDigests 404 is no digest", func(t *testing.T) {
+		t.Parallel()
+		checkout := execRepo{commands: answering("", errors.New(ghNotFound)), dir: "."}
+
+		digests, err := checkout.AssetDigests(t.Context(), "v0.24.11")
+
+		if err != nil || digests == nil || len(digests) != 0 {
+			t.Errorf("AssetDigests = %q, %v; want an empty map, nil", digests, err)
+		}
+	})
+
 	cases := map[string]struct {
 		call      func(ctx context.Context, checkout execRepo) error
 		output    string
@@ -402,6 +423,22 @@ func TestExecRepoTellsANoFromABrokenCommand(t *testing.T) {
 			},
 			output:    "not json",
 			wantError: "parse gh release view output",
+		},
+		"AssetDigests with output that is not JSON": {
+			call: func(ctx context.Context, checkout execRepo) error {
+				_, err := checkout.AssetDigests(ctx, "v0.24.11")
+				return err
+			},
+			output:    "not json",
+			wantError: "parse gh api release output",
+		},
+		"AssetDigests when gh fails otherwise": {
+			call: func(ctx context.Context, checkout execRepo) error {
+				_, err := checkout.AssetDigests(ctx, "v0.24.11")
+				return err
+			},
+			err:       errors.New("gh: HTTP 500"),
+			wantError: "HTTP 500",
 		},
 		"LastCommitTouching finding no commit": {
 			call: func(ctx context.Context, checkout execRepo) error {

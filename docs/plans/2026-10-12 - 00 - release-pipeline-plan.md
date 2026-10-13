@@ -192,7 +192,12 @@ Depends on items 4 and 5.
 - `! grep -n 'depends_on "go"' cmd/release/templates/llama-launcher.rb.tmpl`
 **Commit:** `feat(release): render a prebuilt Homebrew formula`
 
-## 7. Publish recovers a release with archives but no SHA256SUMS
+## 7. Publish recovers a release with archives but no SHA256SUMS — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): the new `repo.AssetDigests` returns GitHub's digests raw by asset name (404 → empty map); the `sha256:` prefix check, lower-casing and hex validation stay in publish.go's `readAssetDigests`, alongside the ported `sha256DigestPrefix`
+NOTES (2026-10-13): publish's `--help` text now says the release step checks the archives a release carries when it has no SHA256SUMS; convergeRelease's doc comment updated to match
+NOTES (2026-10-13): besides the converge and mismatch tests, apogee's TestPublishHashesUploadedArchivesWithoutADigest is ported too (empty/non-SHA-256/unlisted digest and draft-release cases, downloads into the build directory's `published` subdirectory); publish_test.go gains `rebuiltAssets` and `sumsDigests` helpers, `rebuiltSums` now reads through `rebuiltAssets`
+
 
 **What:**
 **Goal:** `publish` on a release that has archives uploaded but no SHA256SUMS verifies the uploaded archives against a fresh dist build and uploads SHA256SUMS, instead of failing.

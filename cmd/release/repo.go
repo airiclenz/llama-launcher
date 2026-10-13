@@ -52,6 +52,10 @@ type repo interface {
 	// any other state is a failed or unfinished upload, not one the release carries — and false
 	// when there is no release for tag.
 	ReleaseAssets(ctx context.Context, tag string) ([]string, bool, error)
+	// AssetDigests returns GitHub's digest of each asset of tag's release by asset name, as
+	// GitHub serves it (`sha256:<hex>`; empty while it has none). It is empty for a release the
+	// tags endpoint answers 404 for: no release, or a draft, which only `gh release view` serves.
+	AssetDigests(ctx context.Context, tag string) (map[string]string, error)
 	// PushMain pushes HEAD to origin's main branch.
 	PushMain(ctx context.Context) error
 	// FetchTag fetches origin's tag into the checkout's tag of the same name.
@@ -316,6 +320,33 @@ func (r execRepo) ReleaseAssets(ctx context.Context, tag string) ([]string, bool
 		}
 	}
 	return uploaded, true, nil
+}
+
+// AssetDigests reads the release's assets and their digests from the GitHub API's tags endpoint,
+// which `gh release view` does not serve digests from.
+func (r execRepo) AssetDigests(ctx context.Context, tag string) (map[string]string, error) {
+	output, err := r.remote(ctx, "gh", "api", "repos/"+launcherRepo+"/releases/tags/"+tag)
+	if isNotFound(err) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var release struct {
+		Assets []struct {
+			Name   string `json:"name"`
+			Digest string `json:"digest"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal([]byte(output), &release); err != nil {
+		return nil, fmt.Errorf("parse gh api release output: %w", err)
+	}
+
+	digests := make(map[string]string, len(release.Assets))
+	for _, asset := range release.Assets {
+		digests[asset.Name] = asset.Digest
+	}
+	return digests, nil
 }
 
 // PushMain pushes with `git push origin HEAD:main`.

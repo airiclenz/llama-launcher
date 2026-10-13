@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,6 +28,7 @@ const (
 	methodRemoteHasTag       = "RemoteHasTag"
 	methodRemoteTagType      = "RemoteTagType"
 	methodReleaseAssets      = "ReleaseAssets"
+	methodAssetDigests       = "AssetDigests"
 	methodPushMain           = "PushMain"
 	methodFetchTag           = "FetchTag"
 	methodIsAnnotated        = "IsAnnotated"
@@ -76,6 +78,9 @@ type memRepo struct {
 	// assetContent is what ReadAsset reads, and DownloadAsset writes, of a release asset, by
 	// name, whatever the release.
 	assetContent map[string]string
+	// assetDigests is what AssetDigests reads: GitHub's digest of a release asset, as GitHub
+	// serves it, by name, whatever the release; an asset it lacks has no digest.
+	assetDigests map[string]string
 	// files are the checkout's files at HEAD by path, for ShowFile.
 	files map[string]string
 	// publish is what a publish run changes; nil for a memRepo that refuses PushMain, FetchTag,
@@ -93,10 +98,9 @@ type memRepo struct {
 // the CI workflow made after the push, and the tags fetched into the checkout.
 type memPublish struct {
 	// log is the runner whose ordered call record PushMain, FetchTag and the release step's
-	// CloneAt, CreateRelease, UploadAssets, ReadAsset and DownloadAsset join, as calls named
-	// repoCallName, so a
-	// test reads the repo's calls and the commands the runner ran in one order; nil records
-	// nothing.
+	// CloneAt, CreateRelease, UploadAssets, AssetDigests, ReadAsset and DownloadAsset join, as
+	// calls named repoCallName, so a test reads the repo's calls and the commands the runner ran
+	// in one order; nil records nothing.
 	log *fakeRunner
 	// tagAfterPush is the post-PushMain hook, the tag-on-version-bump workflow: asked on each
 	// RemoteHasTag poll after the push with how many polls that makes, it returns the tag origin
@@ -282,6 +286,15 @@ func (r memRepo) ReleaseAssets(_ context.Context, tag string) ([]string, bool, e
 	}
 	assets, isFound := r.releases[tag]
 	return slices.Clone(assets), isFound, nil
+}
+
+// AssetDigests records the read in publish's log, when there is one, and returns assetDigests.
+func (r memRepo) AssetDigests(_ context.Context, tag string) (map[string]string, error) {
+	if err := r.failure(methodAssetDigests); err != nil {
+		return nil, err
+	}
+	r.publish.note(methodAssetDigests, tag)
+	return maps.Clone(r.assetDigests), nil
 }
 
 // PushMain records the push in publish and its log; from then on origin/main is HEAD.

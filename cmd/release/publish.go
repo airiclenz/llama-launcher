@@ -23,6 +23,13 @@ const (
 	tagPollInterval   = 10 * time.Second
 )
 
+// sha256DigestPrefix opens a GitHub release asset's digest when it is a SHA-256: `sha256:<hex>`.
+const sha256DigestPrefix = "sha256:"
+
+// publishedAssetsDir is the build directory's subdirectory that release assets are downloaded to
+// for hashing.
+const publishedAssetsDir = "published"
+
 // publishOptions is what the publish verb was asked to do.
 type publishOptions struct {
 	// dir is the checkout publish pushes from and reads origin through.
@@ -107,7 +114,8 @@ func newPublishCommand(commands runner, openRepo repoOpener) *cobra.Command {
 			"then pushes HEAD to main and waits (--tag-timeout) for the CI-made annotated tag — it\n" +
 			"never creates one. The release step builds the archives in a fresh clone at the tag\n" +
 			"and creates the GitHub release, or uploads only the assets it lacks after checking the\n" +
-			"rebuilt sums against its SHA256SUMS. The homebrew step renders the formula from the\n" +
+			"rebuilt sums against its SHA256SUMS, or, when it has none, against the archives it\n" +
+			"carries. The homebrew step renders the formula from the\n" +
 			"release's SHA256SUMS and commits `llama-launcher X.Y.Z` straight to the tap, pushing\n" +
 			"only when the file changes. While its one-time setup is pending — a missing tap\n" +
 			"repository — the step is skipped and named, and the run still succeeds. Last, the\n" +
@@ -373,9 +381,9 @@ func describeRelease(run *publishRun) string {
 
 // convergeRelease builds the release's assets from the tag and creates the GitHub release, or,
 // when the release exists, uploads only the assets it lacks — after checking the rebuilt sums
-// against the SHA256SUMS it already carries, so a rebuild never mixes with assets it does not
-// match. A release without SHA256SUMS has nothing to check against; the rebuild is
-// byte-identical to any earlier one from the same tag, so its own sums are uploaded.
+// against the SHA256SUMS it already carries, or, on a release without SHA256SUMS, against the
+// hashes of the archives it already carries — so a rebuild never mixes with assets it does not
+// match.
 func convergeRelease(ctx context.Context, run *publishRun) error {
 	tag := run.version.String()
 	uploaded, isFound, err := run.repo.ReleaseAssets(ctx, tag)
@@ -408,6 +416,8 @@ func convergeRelease(ctx context.Context, run *publishRun) error {
 		if err := checkPublishedSums(ctx, run, outDir, uploaded); err != nil {
 			return err
 		}
+	} else if err := checkUploadedArchives(ctx, run, outDir, uploaded); err != nil {
+		return err
 	}
 	missing := missingAssets(releaseAssetNames(run.version), uploaded)
 	// UploadAssets replaces an asset of the same name, which here is only one left in a failed
@@ -474,6 +484,82 @@ func checkPublishedSums(ctx context.Context, run *publishRun, outDir string, upl
 			strings.Join(mismatched, ", "), tag, checksumsFile, tag, strings.Join(mismatched, ", "))
 	}
 	return nil
+}
+
+// checkUploadedArchives requires every archive a release without SHA256SUMS already carries to
+// hash to the rebuilt sum for it, naming the way out when one does not. An archive's hash is
+// GitHub's digest for the asset; one without a digest is downloaded into the run's build
+// directory, never the checkout, and hashed there.
+func checkUploadedArchives(ctx context.Context, run *publishRun, outDir string, uploaded []string) error {
+	tag := run.version.String()
+	digests, err := readAssetDigests(ctx, run)
+	if err != nil {
+		return err
+	}
+	rebuilt, err := os.ReadFile(filepath.Join(outDir, checksumsFile))
+	if err != nil {
+		return fmt.Errorf("read the rebuilt %s: %w", checksumsFile, err)
+	}
+
+	var mismatched []string
+	for _, name := range releaseAssetNames(run.version) {
+		if name == checksumsFile || !slices.Contains(uploaded, name) {
+			continue
+		}
+		want, err := checksumFor(string(rebuilt), name)
+		if err != nil {
+			return fmt.Errorf("read the rebuilt %s: %w", checksumsFile, err)
+		}
+		got, hasDigest := digests[name]
+		if !hasDigest {
+			if got, err = downloadAssetSHA256(ctx, run, name); err != nil {
+				return err
+			}
+		}
+		if got != want {
+			mismatched = append(mismatched, name)
+		}
+	}
+	if len(mismatched) > 0 {
+		return fmt.Errorf("the rebuilt %s does not match what release %s already carries; remove the stale assets with "+
+			"`gh release delete-asset %s <name>` (%s), then run publish again",
+			strings.Join(mismatched, ", "), tag, tag, strings.Join(mismatched, ", "))
+	}
+	return nil
+}
+
+// readAssetDigests reads GitHub's SHA-256 digest of each asset of the release, lower-cased and
+// keyed by asset name. An asset whose digest is absent, empty or not a SHA-256 is left out, and so
+// is every asset of a release the tags endpoint answers 404 for — a draft, as a failed
+// `gh release create` leaves — so the caller hashes those itself instead of failing the run.
+func readAssetDigests(ctx context.Context, run *publishRun) (map[string]string, error) {
+	tag := run.version.String()
+	served, err := run.repo.AssetDigests(ctx, tag)
+	if err != nil {
+		return nil, fmt.Errorf("read the asset digests of GitHub release %s: %w", tag, err)
+	}
+	digests := make(map[string]string, len(served))
+	for name, digest := range served {
+		hash, isSHA256 := strings.CutPrefix(strings.ToLower(digest), sha256DigestPrefix)
+		if isSHA256 && checksumPattern.MatchString(hash) {
+			digests[name] = hash
+		}
+	}
+	return digests, nil
+}
+
+// downloadAssetSHA256 downloads the release's asset name into the build directory's published
+// subdirectory and returns its SHA-256.
+func downloadAssetSHA256(ctx context.Context, run *publishRun, name string) (string, error) {
+	tag := run.version.String()
+	downloadDir := filepath.Join(run.buildDir, publishedAssetsDir)
+	if err := os.MkdirAll(downloadDir, directoryMode); err != nil {
+		return "", fmt.Errorf("create the download directory: %w", err)
+	}
+	if err := run.repo.DownloadAsset(ctx, tag, name, downloadDir); err != nil {
+		return "", fmt.Errorf("download %s from GitHub release %s: %w", name, tag, err)
+	}
+	return fileSHA256(filepath.Join(downloadDir, name))
 }
 
 // removeBuildDir removes the release step's build directory, if this run made one.

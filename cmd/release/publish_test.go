@@ -147,13 +147,36 @@ func requireFiles(args []string) error {
 // across runs over the same tree, so a release published from an earlier run carries exactly it.
 func rebuiltSums(t *testing.T) string {
 	t.Helper()
+	return readTestFile(t, filepath.Join(rebuiltAssets(t), checksumsFile))
+}
+
+// rebuiltAssets builds publishVersion's assets as a rebuild does and returns the directory
+// holding them: a release published from an earlier run carries exactly these archives.
+func rebuiltAssets(t *testing.T) string {
+	t.Helper()
 	sourceDir := t.TempDir()
 	if err := writeReleaseTree(sourceDir); err != nil {
 		t.Fatal(err)
 	}
-	outDir := runTestDist(t, fakeToolchain(), sourceDir)
-	return readTestFile(t, filepath.Join(outDir, checksumsFile))
+	return runTestDist(t, fakeToolchain(), sourceDir)
 }
+
+// sumsDigests maps every archive sums lists to its GitHub digest, `sha256:<hex>`.
+func sumsDigests(t *testing.T, sums string) map[string]string {
+	t.Helper()
+	digests := map[string]string{}
+	for _, name := range releaseAssetsV02411[:4] {
+		hash, err := checksumFor(sums, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digests[name] = sha256DigestPrefix + hash
+	}
+	return digests
+}
+
+// digestReadLine is the call record's line for publish reading the release's asset digests.
+const digestReadLine = repoCallName + " " + methodAssetDigests + " " + publishVersion
 
 // publishRunResult is what one publish run did: the error main would turn into an exit code,
 // everything it printed, every command it ran, how many times it paused, and its notes file.
@@ -529,18 +552,22 @@ func TestPublishPartialReleaseUploadsOnlyTheMissingAssets(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
-		uploaded     []string
-		wantUploads  []string
-		wantDownload bool
+		uploaded       []string
+		wantUploads    []string
+		wantDownload   bool
+		wantDigestRead bool
 	}{
 		"two archives missing": {
 			uploaded:     slices.Delete(slices.Clone(releaseAssetsV02411), 2, 4),
 			wantUploads:  []string{"llama-launcher_0.24.11_linux_amd64.tar.gz", "llama-launcher_0.24.11_linux_arm64.tar.gz"},
 			wantDownload: true,
 		},
+		// The archives are checked against GitHub's digests of them, as the release has no
+		// SHA256SUMS to check them against.
 		"SHA256SUMS missing": {
-			uploaded:    releaseAssetsV02411[:4],
-			wantUploads: []string{checksumsFile},
+			uploaded:       releaseAssetsV02411[:4],
+			wantUploads:    []string{checksumsFile},
+			wantDigestRead: true,
 		},
 	}
 	for name, tc := range cases {
@@ -549,7 +576,9 @@ func TestPublishPartialReleaseUploadsOnlyTheMissingAssets(t *testing.T) {
 			fake := newPublishFake()
 			fake.tagged()
 			fake.repo.releases[publishVersion] = tc.uploaded
-			fake.repo.assetContent[checksumsFile] = rebuiltSums(t)
+			sums := rebuiltSums(t)
+			fake.repo.assetContent[checksumsFile] = sums
+			fake.repo.assetDigests = sumsDigests(t, sums)
 
 			result := runTestPublish(t, fake, false)
 
@@ -578,6 +607,143 @@ func TestPublishPartialReleaseUploadsOnlyTheMissingAssets(t *testing.T) {
 			isDownloaded := lineIndex(commandLines(result.commands), "repo ReadAsset "+publishVersion+" "+checksumsFile) >= 0
 			if isDownloaded != tc.wantDownload {
 				t.Errorf("downloaded SHA256SUMS = %t, want %t", isDownloaded, tc.wantDownload)
+			}
+			isDigestRead := lineIndex(commandLines(result.commands), digestReadLine) >= 0
+			if isDigestRead != tc.wantDigestRead {
+				t.Errorf("read the asset digests = %t, want %t", isDigestRead, tc.wantDigestRead)
+			}
+		})
+	}
+}
+
+// TestPublishHashesUploadedArchivesWithoutADigest pins the fallback of the check on a release
+// without SHA256SUMS: an archive GitHub serves no SHA-256 digest for — its digest empty or of
+// another kind, the archive missing from the tags endpoint's assets, or the whole release a draft
+// the endpoint answers 404 for — is downloaded into the build directory, never the checkout,
+// hashed there, in the order the release names its assets, and on a match only SHA256SUMS is
+// uploaded.
+func TestPublishHashesUploadedArchivesWithoutADigest(t *testing.T) {
+	t.Parallel()
+
+	uploaded := releaseAssetsV02411[:4]
+	cases := map[string]struct {
+		// digests changes the archives' digests into what GitHub serves.
+		digests       func(digests map[string]string) map[string]string
+		wantDownloads []string
+	}{
+		"an empty, a non-SHA-256 and an unlisted digest": {
+			digests: func(digests map[string]string) map[string]string {
+				digests["llama-launcher_0.24.11_darwin_amd64.tar.gz"] = ""
+				digests["llama-launcher_0.24.11_darwin_arm64.tar.gz"] = "md5:0123456789abcdef"
+				delete(digests, "llama-launcher_0.24.11_linux_arm64.tar.gz")
+				return digests
+			},
+			wantDownloads: []string{
+				"llama-launcher_0.24.11_linux_arm64.tar.gz",
+				"llama-launcher_0.24.11_darwin_amd64.tar.gz",
+				"llama-launcher_0.24.11_darwin_arm64.tar.gz",
+			},
+		},
+		"a draft release": {
+			digests: func(map[string]string) map[string]string { return nil },
+			wantDownloads: []string{
+				"llama-launcher_0.24.11_linux_amd64.tar.gz",
+				"llama-launcher_0.24.11_linux_arm64.tar.gz",
+				"llama-launcher_0.24.11_darwin_amd64.tar.gz",
+				"llama-launcher_0.24.11_darwin_arm64.tar.gz",
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fake := newPublishFake()
+			fake.tagged()
+			fake.repo.releases[publishVersion] = uploaded
+			archiveDir := rebuiltAssets(t)
+			for _, archive := range uploaded {
+				fake.repo.assetContent[archive] = readTestFile(t, filepath.Join(archiveDir, archive))
+			}
+			fake.repo.assetDigests = tc.digests(sumsDigests(t, readTestFile(t, filepath.Join(archiveDir, checksumsFile))))
+
+			result := runTestPublish(t, fake, false)
+
+			if result.err != nil {
+				t.Fatalf("publish failed: %v\n%s", result.err, result.output)
+			}
+			var downloads []string
+			var uploads []recordedCall
+			for _, call := range result.commands.recorded(repoCallName) {
+				switch call.args[0] {
+				case methodDownloadAsset:
+					name, downloadDir := call.args[2], call.args[3]
+					downloads = append(downloads, name)
+					if filepath.Base(downloadDir) != publishedAssetsDir ||
+						!strings.HasPrefix(filepath.Base(filepath.Dir(downloadDir)), "llama-launcher-publish-") {
+						t.Errorf("downloaded %s to %s, want the build directory's %s subdirectory", name, downloadDir, publishedAssetsDir)
+					}
+				case methodUploadAssets:
+					uploads = append(uploads, call)
+				}
+			}
+			if !slices.Equal(downloads, tc.wantDownloads) {
+				t.Errorf("downloaded %q, want %q", downloads, tc.wantDownloads)
+			}
+			if len(uploads) != 1 || !slices.Equal(assetNames(uploads[0].args[2:]), []string{checksumsFile}) {
+				t.Errorf("uploads = %v, want one upload of %s alone", uploads, checksumsFile)
+			}
+		})
+	}
+}
+
+// TestPublishRefusesUploadedArchivesThatDoNotMatchTheRebuild pins the check on a release without
+// SHA256SUMS: an uploaded archive whose digest, or downloaded copy, hashes to anything but the
+// rebuilt sum stops the run before any upload, and the failure names the archive and the way out
+// — and no SHA256SUMS to delete, as the release has none.
+func TestPublishRefusesUploadedArchivesThatDoNotMatchTheRebuild(t *testing.T) {
+	t.Parallel()
+
+	stale := "llama-launcher_0.24.11_linux_amd64.tar.gz"
+	uploaded := releaseAssetsV02411[:4]
+	cases := map[string]struct {
+		change func(fake *publishFake)
+	}{
+		"a digest differs": {
+			change: func(fake *publishFake) {
+				fake.repo.assetDigests[stale] = sha256DigestPrefix + strings.Repeat("0", 64)
+			},
+		},
+		"a downloaded archive differs": {
+			change: func(fake *publishFake) {
+				delete(fake.repo.assetDigests, stale)
+				fake.repo.assetContent[stale] = "a stale archive"
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fake := newPublishFake()
+			fake.tagged()
+			fake.repo.releases[publishVersion] = uploaded
+			fake.repo.assetDigests = sumsDigests(t, rebuiltSums(t))
+			tc.change(fake)
+
+			result := runTestPublish(t, fake, false)
+
+			if result.err == nil {
+				t.Fatalf("publish succeeded over a mismatched archive:\n%s", result.output)
+			}
+			for _, want := range []string{stale + " ", "gh release delete-asset v0.24.11 <name>` (" + stale + ")"} {
+				if !strings.Contains(result.err.Error(), want) {
+					t.Errorf("publish error = %v, want it to name %q", result.err, want)
+				}
+			}
+			if strings.Contains(result.err.Error(), checksumsFile) {
+				t.Errorf("publish error = %v, want it not to name %s, which the release lacks", result.err, checksumsFile)
+			}
+			if index := lineIndex(commandLines(result.commands), repoCallName+" "+methodUploadAssets); index >= 0 {
+				t.Errorf("uploaded assets over a mismatched archive")
 			}
 		})
 	}
