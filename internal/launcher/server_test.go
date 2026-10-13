@@ -2122,6 +2122,106 @@ func TestIdentifyBackend_AuthPassNeedsConfiguredAddress(t *testing.T) {
 	}
 }
 
+// probeTimedServer is a registry fake whose health check and startup probe
+// are scripted per test, so a probe can be made slow or fast.
+type probeTimedServer struct {
+	*startingStopServer
+	health func(addr string) error
+}
+
+func (s probeTimedServer) HealthCheck(addr string) error { return s.health(addr) }
+
+// registerProbeTimedServer registers a probeTimedServer under name and
+// removes it from the registry when the test ends.
+func registerProbeTimedServer(
+	t *testing.T,
+	name string,
+	health func(string) error,
+	starting func(string) bool,
+) {
+	t.Helper()
+	RegisterLLMServer(probeTimedServer{
+		startingStopServer: &startingStopServer{name: name, starting: starting},
+		health:             health,
+	})
+	t.Cleanup(func() { delete(llmServers, name) })
+}
+
+// delayed returns a probe answer that arrives after delay.
+func delayed[T any](delay time.Duration, answer T) func(string) T {
+	return func(string) T {
+		time.Sleep(delay)
+		return answer
+	}
+}
+
+// TestIdentifyBackend_ConcurrentProbes pins identifyBackend's concurrent
+// passes: the sort-first matching backend still wins when its probe answers
+// last, and a dead address costs about one healthCheckTimeout per pass, not
+// one per backend. Not parallel: it registers fakes in the global llmServers
+// registry, which TestIdentifyBackend's parallel subtests iterate.
+func TestIdentifyBackend_ConcurrentProbes(t *testing.T) {
+	const slowProbe = 300 * time.Millisecond
+	errUnhealthy := errors.New("unhealthy: status 503")
+
+	tests := []struct {
+		name         string
+		slowHealth   error
+		fastHealth   error
+		slowStarting bool
+		fastStarting bool
+	}{
+		{"health pass: slow sort-first match wins", nil, nil, false, false},
+		{"startup pass: slow sort-first match wins", errUnhealthy, errUnhealthy, true, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			registerProbeTimedServer(
+				t,
+				"identify-a-slow",
+				delayed(slowProbe, tc.slowHealth),
+				delayed(slowProbe, tc.slowStarting),
+			)
+			registerProbeTimedServer(
+				t,
+				"identify-b-fast",
+				delayed(0, tc.fastHealth),
+				delayed(0, tc.fastStarting),
+			)
+
+			backend, err := identifyBackend(deadAddr(t))
+
+			if err != nil || backend != "identify-a-slow" {
+				t.Errorf("identifyBackend = %q, %v; want identify-a-slow", backend, err)
+			}
+		})
+	}
+
+	t.Run("blackholed address costs one timeout per pass", func(t *testing.T) {
+		const blackholedBackends = 3
+		for i := range blackholedBackends {
+			registerProbeTimedServer(
+				t,
+				fmt.Sprintf("identify-blackholed-%d", i),
+				delayed(healthCheckTimeout, errUnhealthy),
+				delayed(healthCheckTimeout, false),
+			)
+		}
+		addr := deadAddr(t)
+
+		start := time.Now()
+		_, err := identifyBackend(addr)
+		elapsed := time.Since(start)
+
+		if !errors.Is(err, ErrNotRunning) {
+			t.Errorf("err = %v, want ErrNotRunning", err)
+		}
+		if limit := 3 * healthCheckTimeout; elapsed >= limit {
+			t.Errorf("identifyBackend took %v, want under %v (two passes of one timeout each)", elapsed, limit)
+		}
+	})
+}
+
 // TestStopInstance covers the decision layer ahead of any signalling: bad
 // input and nothing-running both fail before a PID is ever looked up.
 func TestStopInstance(t *testing.T) {

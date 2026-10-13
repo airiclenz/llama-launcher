@@ -144,7 +144,10 @@ NOTES (2026-10-13): consequential edit — llama-launcher.TDD.md: made necessary
 **Acceptance:** `go test ./internal/launcher/ -run 'ListeningPID|Lsof' -v`
 **Commit:** `fix(server): bracket IPv6 hosts in the lsof listener filter`
 
-## 8. Parallelise identifyBackend health checks
+## 8. Parallelise identifyBackend health checks — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): pass 1 and pass 2 share one generic helper, `probeConcurrently` (server.go), using `sync.WaitGroup.Go`; pass 2 still runs only after pass 1 finds no healthy backend, as in the serial code.
+NOTES (2026-10-13): the blackholed-address case uses fakes whose probes sleep `healthCheckTimeout` (three backends; bound 3×timeout vs 12s serial) rather than a real blackholed IP, so it does not depend on the network; the subtest takes ~4s.
 
 **What:** perf — `identifyBackend` health-checks backends serially (2s timeout each).
 **Goal:** `identifyBackend` returns exactly the same result as before for every input (sorted-name priority across the three passes is preserved), and a dead address costs about one `healthCheckTimeout`, not one per backend.

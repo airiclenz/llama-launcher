@@ -269,8 +269,10 @@ func StopInstance(addr string, progress ProgressFunc) (*RunningInstance, error) 
 // identifyBackend asks each registered backend whether it owns the server
 // reachable at addr. Used by stop and unload paths that have an address but
 // no caller-supplied backend name. Three passes, each in sorted-name order
-// so the answer is deterministic (map iteration is random): first the
-// backends' discriminating health checks, then the startup probes of
+// so the answer is deterministic (map iteration is random); the probes of
+// each of the first two passes run concurrently and are then scanned in
+// that order, so a dead address costs about one healthCheckTimeout per
+// pass: first the backends' discriminating health checks, then the startup probes of
 // backends that implement StartupProber or LoadingProcessFinder — a
 // Starting instance fails its health check for the whole model load but
 // must still be identifiable so it can be stopped (ADR-0010, ADR-0015) —
@@ -290,26 +292,47 @@ func identifyBackend(addr string) (string, error) {
 	}
 	sort.Strings(names)
 
+	servers := make([]LLMServer, len(names))
+	for i, name := range names {
+		servers[i] = llmServers[name]
+	}
+
 	configured := configuredBackendsAt(addr)
 	authName, authErr := "", error(nil)
-	for _, name := range names {
-		healthErr := llmServers[name].HealthCheck(addr)
+	healthErrs := probeConcurrently(servers, func(b LLMServer) error { return b.HealthCheck(addr) })
+	for i, healthErr := range healthErrs {
 		if healthErr == nil {
-			return name, nil
+			return names[i], nil
 		}
-		if authErr == nil && errors.Is(healthErr, ErrAuthFailed) && slices.Contains(configured, name) {
-			authName, authErr = name, healthErr
+		if authErr == nil && errors.Is(healthErr, ErrAuthFailed) && slices.Contains(configured, names[i]) {
+			authName, authErr = names[i], healthErr
 		}
 	}
-	for _, name := range names {
-		if startingUp(llmServers[name], addr) {
-			return name, nil
+
+	starting := probeConcurrently(servers, func(b LLMServer) bool { return startingUp(b, addr) })
+	for i, isStarting := range starting {
+		if isStarting {
+			return names[i], nil
 		}
 	}
 	if authErr != nil {
 		return authName, fmt.Errorf("server at %s: %w", addr, authErr)
 	}
 	return "", ErrNotRunning
+}
+
+// probeConcurrently runs probe once per server, all at once, and returns the
+// answers indexed like servers. It returns only after every probe has
+// finished, so a dead address costs one probe timeout rather than one per
+// server, and the caller still scans the answers in its own (sorted) order.
+func probeConcurrently[T any](servers []LLMServer, probe func(LLMServer) T) []T {
+	results := make([]T, len(servers))
+	var wg sync.WaitGroup
+	for i, server := range servers {
+		wg.Go(func() { results[i] = probe(server) })
+	}
+	wg.Wait()
+	return results
 }
 
 // startingUp reports whether a still-starting (Starting, ADR-0010) server
