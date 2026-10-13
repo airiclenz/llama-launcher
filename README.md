@@ -37,6 +37,26 @@ make build      # => ./llama-launcher, for local testing
 
 Installation is deliberately Homebrew-only; `make install` just points you there.
 
+## Requirements
+
+Building from source needs Go 1.26+; the Homebrew binaries need no toolchain. At run time the launcher shells out to these programs, looked up on `PATH`. Only the backend binaries you actually start are needed, and a missing helper disables the one feature that uses it rather than the whole launcher.
+
+| Program | OS | Used for | Without it |
+|---------|----|----------|------------|
+| `llama-server`, `ollama`, `lms`, `splash` | all | Starting the backend a profile names (`lms` also stops LM Studio) | Starting that backend fails with `server binary not found` |
+| `lsof` | macOS, Linux | Finding the process listening on the shared port: `stop`, and the port-conflict check before a start | `stop` cannot find the server by its port, and a taken port is not reported with its holder |
+| `ps` | macOS, Linux | Naming a port's occupant, a server's uptime, finding a Splash that is still loading | Occupants go unnamed, uptime shows `0s`, a loading Splash is not found |
+| `tail` | macOS, Linux | `llama-launcher logs` and the menu's *Show log* | The log cannot be shown |
+| `sysctl`, `vm_stat`, `ioreg` | macOS | The TUI's [memory readout](#memory-readout) | The readout is left out (`ioreg` only feeds the GPU fields) |
+| `security` | macOS | Moving a literal `api_key` into the Keychain | The secret-store offer is not made |
+| `secret-tool` | Linux | Moving a literal `api_key` into the Secret Service | The secret-store offer is not made |
+| `sh` / `cmd /C` | macOS, Linux / Windows | Running an [`api_key_cmd`](#api-keys) | The key cannot be resolved |
+| `open` | macOS | The menu's *Edit config* (opens the file in your default app) | — |
+| `$VISUAL`, else `$EDITOR` | Linux, Windows | The menu's *Edit config* | *Edit config* is not offered |
+| `llama-launcher` | all | `llama-launcher-mcp` runs the CLI for every tool call (`--llama-launcher-bin`) | The adapter refuses to start |
+
+On Windows the launcher has no unix process control, so it neither starts nor stops `llama-server`, `ollama serve` or `splash` (see [Supported platforms](#supported-platforms)).
+
 ## Quick start
 
 ```bash
@@ -140,6 +160,8 @@ The launcher is not a proxy, so what the key does depends on the backend:
 | `lmstudio` | LM Studio manages its own token: enable *Require API token* in its Server Settings, generate a token there, and paste it here so the launcher's health checks and model loads keep working. |
 | `ollama` | Ollama has no native authentication. Set a key only when the instance sits behind an authenticating reverse proxy; the launcher then sends it with its own requests. |
 | `splash` | Exported as `SPLASH_API_KEY` into the launched server's environment — Splash then rejects client requests without `Authorization: Bearer <key>`. Never put on the command line. |
+
+`api_key_cmd` has the same effect as `api_key` for every backend: the key it prints is used exactly as a literal `api_key` would be.
 
 In all cases the launcher attaches the key as a `Bearer` header to the HTTP calls it makes itself (health checks, model load/unload, model listing). The config file is created with mode 0600. For `llamacpp`, an `extra_args` `--api-key` does not replace the configured key: llama-server appends it, so *both* keys are accepted (observed on llama.cpp b10851) — and that literal extra key *is* visible in `ps`. To change the key, change `api_key` rather than adding an override.
 

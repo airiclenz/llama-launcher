@@ -215,7 +215,9 @@ internal/launcher/cli_test.go — TestRun_ExitCodes
 **Acceptance:** `go test ./cmd/release/ -v -run Render`
 **Commit:** `build(release): install shell completions from the Homebrew formula`
 
-## 12. README: Requirements section and api_key_cmd note
+## 12. README: Requirements section and api_key_cmd note — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): Requirements table also lists `ioreg` (macOS GPU fields of the memory readout) and the `llama-launcher` binary the MCP adapter runs — both found by the exec.Command/LookPath grep the regression guard prescribes.
 
 **What:**
 **Goal:** README has a `## Requirements` section listing every runtime host binary the code executes, and the `### API keys` section states that `api_key_cmd` has the same per-backend effect as `api_key`.
