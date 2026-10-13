@@ -175,6 +175,7 @@ For scripting, automation, and quick access:
 | `llama-launcher config validate` | Parse config and report all validation problems at once (deprecated fields, unknown/disabled servers, missing models, Profiles missing `server:` with no defensible fallback). Uses `parseConfig` + `validateAll` to collect errors without stopping at the first. Exit 0 if valid, 2 if invalid. |
 | `llama-launcher config init [--force]` | Generate the example config file at the configured path. Refuses to overwrite an existing file unless `--force` (or `-f`) is passed. Exit 0 on success, 2 on error or if the file already exists. |
 | `llama-launcher config reset` | Overwrite the config file with the example config unconditionally. Provides a quick way to return to a known-good starting point. Exit 0 on success, 2 on error. |
+| `llama-launcher completions bash\|zsh\|fish` | Print a completion script for the named shell; a missing or unknown shell is a usage error (exit 2). Dispatched in `Run` before the `--config` filter and before any config load: it never reads, creates or writes a config file (the Homebrew install runs it under a throwaway HOME). Each script calls the hidden `__complete` subcommand, which is not listed in the usage text: its arguments are the words typed after the program name, the word under the cursor last, and it prints one candidate per line — subcommands; flags when the word starts with `-`; Profile names (`ProfileNames`) after `load`, `unload`, `start --profile`/`-p`; enabled backend names after `stop` and `logs`. It honours `--config` among those words, then `LLAMA_LAUNCHER_CONFIG`, then the default path, and loads the config with `parseConfig` + `validate` only — never `resolveKeyCommands`, so a tab press runs no `api_key_cmd`. A missing or invalid config drops the Profile and backend candidates only. `__complete` always exits 0 and writes nothing to stderr. The bash script uses only bash-3.2 builtins (macOS `/bin/bash`). |
 
 All subcommands except `logs --follow` exit immediately after completing their action.
 
@@ -933,7 +934,6 @@ Both paths use `cleanupLogs()`, which determines file age from the filename time
 These are explicitly out of scope for v1 but noted as natural extensions:
 
 - **Per-instance log file naming**: `{backend}-{port}-{timestamp}.log` rather than `{backend}-{timestamp}.log`. Collisions are already ruled out — the stamp carries milliseconds and the file is created exclusively with a retry (§9) — so this would only make a log's instance readable from its name.
-- **Shell completions**: Generate bash/zsh/fish completions for subcommands and Profile names.
 - **Config reload subcommand**: A `reload` subcommand that restarts the matching instance with the same Profile using updated config values. (Note: automatic config reload in the interactive menu is already implemented — this item covers the CLI subcommand.)
 - **Additional LLM Servers**: vLLM and others — each as a new `backend_<name>.go` file implementing the `LLMServer` interface.
 - **Launchd integration**: Generate a launchd plist for auto-start on login.

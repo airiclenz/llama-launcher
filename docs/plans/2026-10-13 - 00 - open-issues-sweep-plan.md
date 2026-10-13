@@ -178,7 +178,11 @@ NOTES (2026-10-13): drawPopupAndWait keeps its signature; its frame rendering mo
 **Acceptance:** `go test ./internal/launcher/ -run 'ProfileParams|SwitchModel|SwitchSimple' -v`
 **Commit:** `feat(menu): show parameter changes before switching models`
 
-## 10. Shell completions subcommand
+## 10. Shell completions subcommand — ✅ DONE (2026-10-13)
+
+NOTES (2026-10-13): `completions` is dispatched twice in Run: before the `--config` filter (as the plan says) and again right after it, beside `version`, so `--config x completions bash` also prints the script without loading or creating a config. `__complete` is dispatched only before the filter, because the scripts always call it as the first word.
+NOTES (2026-10-13): the `__complete` protocol takes the words after the program name with the word under the cursor last. It offers flags only when that word starts with `-` and positional values otherwise, and it prints nothing when the word is the path after `--config`, so the shell completes file names there (bash through `-o default`, zsh through `_files`, fish through `-l config -r -F`).
+NOTES (2026-10-13): the README tells bash users to `eval "$(llama-launcher completions bash)"`, because `source <(…)` silently loads nothing in macOS bash 3.2 (checked by hand). The fish `--no-execute` syntax check skips here because fish is not on PATH.
 
 **What:** Recast at the regression check (2026-10-13).
 **Goal:** `llama-launcher completions bash|zsh|fish` prints a working completion script, and the hidden `__complete` subcommand returns live subcommand, flag, profile and backend candidates.

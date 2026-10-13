@@ -14,6 +14,18 @@ var Version = "dev"
 
 // Run is the CLI entry point. It parses args and dispatches subcommands.
 func Run(args []string) int {
+	// The completion commands are dispatched before the --config filter: a tab
+	// press can leave a bare trailing --config, which __complete must take as
+	// the word being typed, not as an error. Neither creates a config file.
+	if len(args) >= 1 {
+		switch args[0] {
+		case "completions":
+			return cmdCompletions(args[1:])
+		case completeCommand:
+			return cmdComplete(args[1:])
+		}
+	}
+
 	configPath := ""
 
 	var filtered []string
@@ -34,6 +46,10 @@ func Run(args []string) int {
 	if len(args) == 1 && args[0] == "version" {
 		fmt.Println(Version)
 		return 0
+	}
+
+	if len(args) >= 1 && args[0] == "completions" {
+		return cmdCompletions(args[1:])
 	}
 
 	if configPath == "" {
@@ -943,6 +959,7 @@ Commands:
   config init [--force]   Generate example config (overwrite if --force)
   config reset           Reset config to example (overwrite)
   version               Print version and exit
+  completions <shell>   Print a completion script (bash, zsh or fish)
 
 Run without arguments for interactive mode.
 `)

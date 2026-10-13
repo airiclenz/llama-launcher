@@ -242,6 +242,22 @@ llama-launcher config validate              # Check config file for errors
 llama-launcher config init [--force]        # Generate example config (--force overwrites)
 llama-launcher config reset                 # Reset config to the example (overwrites)
 llama-launcher version                      # Print version
+llama-launcher completions bash|zsh|fish    # Print a shell completion script
+```
+
+#### Shell completions
+
+`completions` prints a script that completes subcommands, flags, profile names (after `load`, `unload` and `start --profile`) and enabled backend names (after `stop` and `logs`). The names are read from your config on every tab press, so new profiles complete without regenerating the script; with no config, only subcommands and flags complete. A tab press never runs an `api_key_cmd`.
+
+```bash
+# bash (~/.bashrc) — eval rather than source <(…), which the bash 3.2 that ships with macOS ignores
+eval "$(llama-launcher completions bash)"
+
+# zsh (~/.zshrc, after compinit)
+source <(llama-launcher completions zsh)
+
+# fish
+llama-launcher completions fish > ~/.config/fish/completions/llama-launcher.fish
 ```
 
 A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](.capcom/knowledge/decisions/adr-0010.md)). Splash binds its port only once the model has loaded, so the launcher finds a loading Splash server by its process instead (a Splash launch for that host and port with nothing listening yet) and treats it the same way ([ADR-0015](.capcom/knowledge/decisions/adr-0015.md)). Windows is the exception: the launcher cannot read the process table there, so a loading Splash stays hidden until it is ready. When a load started from the interactive menu outlasts the startup wait, the menu does not report an error: it keeps watching in a `Still loading` popup that ticks the elapsed time, prints the usual confirmation once the server is ready, and reports an error only if the server stops running. Press Esc to return to the menu and leave the server loading.
