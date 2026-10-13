@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+
+- Recording a key source in a config written with CRLF line endings (a key migration's `api_key_cmd` rewrite, or the `plaintext_key_ok: true` marker) no longer leaves LF-only lines in the file: the written line takes the file's own line ending and every other line keeps its own.
+- The interactive menu no longer re-runs every `api_key_cmd` on each config reload (before every menu and on every header refresh). A resolved key is kept while the entry's command is unchanged; a new or changed command runs once, and a failing one is retried on the next reload.
+- A server configured with an IPv6 host (such as `::1`) is now addressed as `[::1]:8000` instead of the unusable `::1:8000`, so it can be probed, loaded, stopped and listed. A host already written bracketed in the config (`"[::1]"`) works too. IPv4 and hostname addresses are unchanged.
+- Stopping or identifying a server configured on an IPv6 host (such as `::1`) now finds its listener — the lsof lookup brackets the IPv6 host (`-iTCP@[::1]:port`).
+
+### Added
+
+- **Switch model asks before loading.** After you pick a profile, a confirmation pop-up lists only the parameters that change (`old → new`, `—` where one side does not set it); Enter switches, `q`/Esc cancels. Without a terminal the same list is printed followed by `Switch? [y/N]`.
+- `llama-launcher completions bash|zsh|fish` prints a shell completion script. It completes subcommands, flags, profile names (after `load`, `unload` and `start --profile`) and enabled backend names (after `stop` and `logs`), read live from the config on each tab press through a hidden `__complete` subcommand. A tab press never runs an `api_key_cmd` and never creates a config file.
+- The Homebrew formula now installs bash, zsh and fish completions, generated at install time by `llama-launcher completions <shell>`.
+
+### Changed
+
+- Stopping or unloading a server by address no longer waits out each backend's health-check timeout in turn: the launcher probes all backends at once, so a dead or unreachable address answers in about one timeout per check round instead of one per backend. Which backend is identified is unchanged.
+- README: new Requirements section listing the host programs the launcher runs (backend binaries, `lsof`, `ps`, `tail`, macOS memory tools, keystore tools, the `api_key_cmd` shell, the Edit-config opener) and what stops working without each; the API keys section now states that `api_key_cmd` has the same per-backend effect as `api_key`.
+
 ## 1.8.2
 
 ### Added
