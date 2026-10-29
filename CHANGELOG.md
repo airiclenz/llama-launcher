@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.1
+
 ### Fixed
 
 - A Splash Model that Splash installed as an MLX snapshot (`config.json` plus safetensors weights, as current Splash versions download it) now counts as installed, so `load` and `config validate` accept it instead of refusing it with the `splash serve --model <id>` install hint. Snapshots in the old Splash package format (`manifest.json`) still resolve, and the `refs/splash` pin Splash writes after a verified download is still required.
