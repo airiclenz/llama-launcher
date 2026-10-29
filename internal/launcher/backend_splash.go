@@ -250,12 +250,18 @@ func splashHubDir() (string, error) {
 	return filepath.Join(home, ".cache", "huggingface", "hub"), nil
 }
 
+// splashSnapshotMarkers are the files whose presence, as a regular file, marks
+// a pinned snapshot as a Splash Model: config.json for an MLX snapshot (what
+// Splash installs today) and manifest.json for the old Splash package format,
+// which snapshots installed before that change still carry.
+var splashSnapshotMarkers = []string{"config.json", "manifest.json"}
+
 // splashModelInstalled reports whether Splash finished installing repoID in
-// hub. Splash fetches a snapshot's manifest.json before its weights and pins
-// the snapshot with refs/splash/<installation>/<rev> only after the download
-// is verified (install/models.py _retain_snapshot_ref), so installed means a
-// pinned <rev> whose snapshots/<rev>/manifest.json exists. A manifest alone
-// can be an interrupted download.
+// hub. Splash pins a snapshot with refs/splash/<installation>/<rev> only after
+// the download is verified (install/models.py _retain_snapshot_ref), so
+// installed means a pinned <rev> whose snapshots/<rev>/ holds one of
+// splashSnapshotMarkers as a regular file. The pin is mandatory: a marker
+// alone can be an interrupted download.
 func splashModelInstalled(hub, repoID string) bool {
 	repoDir := filepath.Join(hub, "models--"+strings.ReplaceAll(repoID, "/", "--"))
 	installations, err := os.ReadDir(filepath.Join(repoDir, "refs", "splash"))
@@ -274,10 +280,22 @@ func splashModelInstalled(hub, repoID string) bool {
 			if rev.IsDir() {
 				continue
 			}
-			manifest := filepath.Join(repoDir, "snapshots", rev.Name(), "manifest.json")
-			if info, err := os.Stat(manifest); err == nil && info.Mode().IsRegular() {
+			if splashSnapshotHasMarker(filepath.Join(repoDir, "snapshots", rev.Name())) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// splashSnapshotHasMarker reports whether the snapshot directory holds any of
+// splashSnapshotMarkers as a regular file. A missing snapshot directory holds
+// none.
+func splashSnapshotHasMarker(snapshot string) bool {
+	for _, marker := range splashSnapshotMarkers {
+		info, err := os.Stat(filepath.Join(snapshot, marker))
+		if err == nil && info.Mode().IsRegular() {
+			return true
 		}
 	}
 	return false

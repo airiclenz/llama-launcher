@@ -25,7 +25,9 @@
 - Any change to the hub lookup (`splashHubDir`) or repo-id validation.
 - Any version bump or release.
 
-## 1. Accept MLX snapshots in the Splash install check
+## 1. Accept MLX snapshots in the Splash install check — ✅ DONE (2026-10-29)
+
+NOTES (2026-10-29): marker list lives in a package var `splashSnapshotMarkers` and the per-snapshot stat in a new helper `splashSnapshotHasMarker` (keeps `splashModelInstalled` within the nesting limit); `writeSplashSnapshot` now returns the snapshot dir so the missing-snapshot and marker-as-directory cases can break it; the existing "manifest.json without a refs/splash pin" subtest is kept alongside the new config.json one.
 
 **Closes:** splash-mlx-install-check
 

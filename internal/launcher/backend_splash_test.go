@@ -412,18 +412,19 @@ func setSplashHubEnv(t *testing.T, hfHubCache, hfHome, xdgCacheHome, home string
 	t.Setenv("HOME", home)
 }
 
-// writeSplashSnapshot creates snapshots/<rev>/ for repoID in hub, with a
-// manifest.json when withManifest is set, and pins it with
-// refs/splash/<installation>/<rev> when withRef is set.
-func writeSplashSnapshot(t *testing.T, hub, repoID string, withManifest, withRef bool) {
+// writeSplashSnapshot creates snapshots/<rev>/ for repoID in hub, writes the
+// named marker file into it unless marker is "", and pins it with
+// refs/splash/<installation>/<rev> when withRef is set. It returns the
+// snapshot directory so a test can break it further.
+func writeSplashSnapshot(t *testing.T, hub, repoID, marker string, withRef bool) string {
 	t.Helper()
 	repoDir := filepath.Join(hub, "models--"+strings.ReplaceAll(repoID, "/", "--"))
 	snapshot := filepath.Join(repoDir, "snapshots", splashTestRev)
 	if err := os.MkdirAll(snapshot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if withManifest {
-		if err := os.WriteFile(filepath.Join(snapshot, "manifest.json"), []byte("{}"), 0o644); err != nil {
+	if marker != "" {
+		if err := os.WriteFile(filepath.Join(snapshot, marker), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -436,31 +437,34 @@ func writeSplashSnapshot(t *testing.T, hub, repoID string, withManifest, withRef
 			t.Fatal(err)
 		}
 	}
+	return snapshot
 }
 
-// installSplashModel writes a fully installed repoID into hub.
+// installSplashModel writes a fully installed repoID into hub as an MLX
+// snapshot, the format Splash installs today.
 func installSplashModel(t *testing.T, hub, repoID string) {
 	t.Helper()
-	writeSplashSnapshot(t, hub, repoID, true, true)
+	writeSplashSnapshot(t, hub, repoID, "config.json", true)
 }
 
 func TestSplashResolveModelInstallCheck(t *testing.T) {
 	const ref = "mlx-community/Qwen3-8B-4bit"
+	const mlxRef = "mlx-community/Qwen3.8-27B-4bit"
 
-	resolves := func(t *testing.T) {
+	resolves := func(t *testing.T, modelRef string) {
 		t.Helper()
-		got, err := (&Splash{}).ResolveModel(&Config{}, ref)
-		if err != nil || got != ref {
-			t.Fatalf("ResolveModel(%q) = %q, %v; want %q, nil", ref, got, err, ref)
+		got, err := (&Splash{}).ResolveModel(&Config{}, modelRef)
+		if err != nil || got != modelRef {
+			t.Fatalf("ResolveModel(%q) = %q, %v; want %q, nil", modelRef, got, err, modelRef)
 		}
 	}
-	refusesWithInstallHint := func(t *testing.T) {
+	refusesWithInstallHint := func(t *testing.T, modelRef string) {
 		t.Helper()
-		_, err := (&Splash{}).ResolveModel(&Config{}, ref)
+		_, err := (&Splash{}).ResolveModel(&Config{}, modelRef)
 		if err == nil {
-			t.Fatalf("ResolveModel(%q) succeeded; want a not-installed error", ref)
+			t.Fatalf("ResolveModel(%q) succeeded; want a not-installed error", modelRef)
 		}
-		if want := "splash serve --model " + ref; !strings.Contains(err.Error(), want) {
+		if want := "splash serve --model " + modelRef; !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q", err, want)
 		}
 	}
@@ -469,54 +473,95 @@ func TestSplashResolveModelInstallCheck(t *testing.T) {
 		hub := t.TempDir()
 		installSplashModel(t, hub, ref)
 		setSplashHubEnv(t, hub, t.TempDir(), t.TempDir(), t.TempDir())
-		resolves(t)
+		resolves(t, ref)
 	})
 
 	t.Run("HF_HOME fallback", func(t *testing.T) {
 		hfHome := t.TempDir()
 		installSplashModel(t, filepath.Join(hfHome, "hub"), ref)
 		setSplashHubEnv(t, "", hfHome, t.TempDir(), t.TempDir())
-		resolves(t)
+		resolves(t, ref)
 	})
 
 	t.Run("XDG_CACHE_HOME fallback", func(t *testing.T) {
 		xdg := t.TempDir()
 		installSplashModel(t, filepath.Join(xdg, "huggingface", "hub"), ref)
 		setSplashHubEnv(t, "", "", xdg, t.TempDir())
-		resolves(t)
+		resolves(t, ref)
 	})
 
 	t.Run("home default", func(t *testing.T) {
 		home := t.TempDir()
 		installSplashModel(t, filepath.Join(home, ".cache", "huggingface", "hub"), ref)
 		setSplashHubEnv(t, "", "", "", home)
-		resolves(t)
+		resolves(t, ref)
 	})
 
 	t.Run("empty HF_HUB_CACHE falls back to HF_HOME", func(t *testing.T) {
 		hfHome := t.TempDir()
 		installSplashModel(t, filepath.Join(hfHome, "hub"), ref)
 		setSplashHubEnv(t, "", hfHome, "", "")
-		resolves(t)
+		resolves(t, ref)
 	})
 
 	t.Run("model absent from the hub", func(t *testing.T) {
 		setSplashHubEnv(t, t.TempDir(), "", "", "")
-		refusesWithInstallHint(t)
+		refusesWithInstallHint(t, ref)
 	})
 
-	t.Run("snapshot without manifest.json", func(t *testing.T) {
+	t.Run("MLX snapshot with config.json", func(t *testing.T) {
 		hub := t.TempDir()
-		writeSplashSnapshot(t, hub, ref, false, true)
+		writeSplashSnapshot(t, hub, mlxRef, "config.json", true)
 		setSplashHubEnv(t, hub, "", "", "")
-		refusesWithInstallHint(t)
+		resolves(t, mlxRef)
+	})
+
+	t.Run("legacy snapshot with manifest.json", func(t *testing.T) {
+		hub := t.TempDir()
+		writeSplashSnapshot(t, hub, ref, "manifest.json", true)
+		setSplashHubEnv(t, hub, "", "", "")
+		resolves(t, ref)
+	})
+
+	t.Run("pinned snapshot with neither file", func(t *testing.T) {
+		hub := t.TempDir()
+		writeSplashSnapshot(t, hub, ref, "", true)
+		setSplashHubEnv(t, hub, "", "", "")
+		refusesWithInstallHint(t, ref)
+	})
+
+	t.Run("pin whose snapshot directory is missing", func(t *testing.T) {
+		hub := t.TempDir()
+		snapshot := writeSplashSnapshot(t, hub, ref, "", true)
+		if err := os.RemoveAll(snapshot); err != nil {
+			t.Fatal(err)
+		}
+		setSplashHubEnv(t, hub, "", "", "")
+		refusesWithInstallHint(t, ref)
+	})
+
+	t.Run("config.json that is a directory", func(t *testing.T) {
+		hub := t.TempDir()
+		snapshot := writeSplashSnapshot(t, hub, ref, "", true)
+		if err := os.Mkdir(filepath.Join(snapshot, "config.json"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		setSplashHubEnv(t, hub, "", "", "")
+		refusesWithInstallHint(t, ref)
+	})
+
+	t.Run("config.json without a refs/splash pin", func(t *testing.T) {
+		hub := t.TempDir()
+		writeSplashSnapshot(t, hub, ref, "config.json", false)
+		setSplashHubEnv(t, hub, "", "", "")
+		refusesWithInstallHint(t, ref)
 	})
 
 	t.Run("manifest.json without a refs/splash pin", func(t *testing.T) {
 		hub := t.TempDir()
-		writeSplashSnapshot(t, hub, ref, true, false)
+		writeSplashSnapshot(t, hub, ref, "manifest.json", false)
 		setSplashHubEnv(t, hub, "", "", "")
-		refusesWithInstallHint(t)
+		refusesWithInstallHint(t, ref)
 	})
 
 	t.Run("empty ref resolves without a lookup", func(t *testing.T) {
