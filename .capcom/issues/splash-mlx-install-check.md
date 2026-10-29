@@ -3,6 +3,7 @@ title: Splash install check refuses MLX models
 status: open
 type: bug
 priority: 1
+plan: 2026-10-29 - 00 - splash-mlx-install-check-plan
 created: 2026-10-29T18:26:01Z
 ---
 
