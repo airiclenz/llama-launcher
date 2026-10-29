@@ -1,10 +1,12 @@
 ---
 title: Splash install check refuses MLX models
-status: open
+status: done
 type: bug
 priority: 1
 plan: 2026-10-29 - 00 - splash-mlx-install-check-plan
 created: 2026-10-29T18:26:01Z
+closed: 2026-10-29T19:29:23Z
+reason: "Resolved by plan 2026-10-29 - 00 - splash-mlx-install-check-plan (archived in 6a50d48): Splash install check accepts config.json (MLX) or manifest.json snapshots under a refs/splash pin; refusals covered by tests"
 ---
 
 A Splash Profile whose model is an MLX model (e.g. `mlx-community/Qwen3.8-27B-4bit`) is refused by `load` and `config validate` with "splash model ... is not installed in ~/.cache/huggingface/hub", although Splash has installed and pinned it.
