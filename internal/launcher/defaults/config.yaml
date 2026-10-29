@@ -341,6 +341,6 @@ profiles:
   # splash-qwen:
   #   description: "Qwen3.8 27B via Splash"
   #   server: splash
-  #   model: incoai/Qwen3.8-27B-Splash
+  #   model: mlx-community/Qwen3.8-27B-4bit
   #   context_size: 32768
   #   extra_args: ["--default-reasoning-effort", "high"]

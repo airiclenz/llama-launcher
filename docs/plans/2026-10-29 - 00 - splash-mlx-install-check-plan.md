@@ -51,7 +51,10 @@ NOTES (2026-10-29): marker list lives in a package var `splashSnapshotMarkers` a
 
 **Commit:** `fix(splash): accept MLX snapshots in the install check`
 
-## 2. Document the MLX marker in TDD and ADR-0014
+## 2. Document the MLX marker in TDD and ADR-0014 — ✅ DONE (2026-10-29)
+
+NOTES (2026-10-29): the dated amendment marker sits on the changed decision and why bullets; the new consequences line carries the history itself, so it has no marker. adr-0014.md also says those two Notes carry the amendment, the way adr-0015.md does. The TDD splash-qwen example keeps two spaces before its comment, and the next line's comment column is left as it is.
+NOTES (2026-10-29): `capcom check` exits 1 only on AGENTS.md:12 (the stale capcom block, already failing at base) and reports nothing under .capcom/knowledge.
 
 **What:** Recast at the regression check (2026-10-29).
 

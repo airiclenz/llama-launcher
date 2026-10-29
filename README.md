@@ -107,7 +107,7 @@ Other top-level options control launcher behaviour (`auto_stop_server`, `auto_un
 | `llamacpp` | `127.0.0.1:8080` | File path (relative to `models_dir` or absolute) |
 | `ollama` | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`, pulled first) |
 | `lmstudio` | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
-| `splash` | `127.0.0.1:8000` | Hugging Face `owner/repo` id (e.g. `incoai/Qwen3.8-27B-Splash`), installed once via `splash serve --model …` |
+| `splash` | `127.0.0.1:8000` | Hugging Face `owner/repo` id (e.g. `mlx-community/Qwen3.8-27B-4bit`), installed once via `splash serve --model …` |
 
 For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp` and `splash`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](.capcom/knowledge/decisions/adr-0001.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
 

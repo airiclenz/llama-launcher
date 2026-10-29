@@ -4,5 +4,6 @@ title: "ADR-0014 consequences: resolution fails with the install command, and th
 
 - A Splash Profile whose Model is not installed fails at resolution with the install command in the error, on every path that resolves Profiles, not only at start.
 - The check follows Splash's cache layout. If Splash changes where or how it pins installed snapshots, this check must change with it.
+- Splash dropped its package format (Splash commit 539eae95, "Stop loading Splash packages"), so the Models it installs today are MLX snapshots holding `config.json` and no `manifest.json`. The check accepts either file, so a snapshot installed in the old Splash package format keeps resolving.
 - A Model installed into a different hub than the launcher's environment resolves (for example a launchd or MCP-adapter process with a different `HF_HOME`) is reported as not installed.
 - The launcher never drives Splash's download or install; that stays out of scope.
