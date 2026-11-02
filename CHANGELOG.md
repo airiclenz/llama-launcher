@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.9.2
+
 ### Fixed
 
 - `llama-launcher load` (and `start --profile`, the non-terminal menu and MCP `load_profile`) no longer fails when a server the launcher started stalls past `startup_stall_timeout` and then turns healthy. The CLI keeps watching the server it left running and prints a `Still loading <profile>… m:ss` line every 10 seconds. It exits 0 with the usual success lines once the server is ready. It exits 3 if the server stops running, or if the server is still not healthy `startup_max_wait` after the load began. Ctrl+C ends the command and leaves the server loading.
