@@ -30,7 +30,11 @@
 - The terminal menu's popup behaviour (Esc, unbounded wait) beyond the shared refactor in item 1.
 - ADR changes: ADR-0010's "a start timeout leaves the server running" still holds.
 
-## 1. A terminal-free still-loading wait with a deadline
+## 1. A terminal-free still-loading wait with a deadline — ✅ DONE (2026-11-02)
+
+NOTES (2026-11-02): consequential edit — llama-launcher.TDD.md: made necessary by the `stillLoadingWatch` clock/deadline fields, `probeTimedOutServer` and `waitStillLoadingCLI`/`cliStillLoadingWatch` (the `menu.go` row's description of the watch, and the `menu_test.go` row's enumeration of the `TestWaitStillLoading_*` cases); the rows' "in terminal mode" wording stays for item 2.
+NOTES (2026-11-02): `stillLoadingWatch` gains `now` and `maxWait` beside `deadline`: `now` is the clock the deadline is checked against (the CLI test drives it with a fake clock), `maxWait` names the cap in the `Still not healthy after <max> (startup_max_wait).` line (the `stillLoadingDeadlineText` constant). `scriptedWatch` sets `now: time.Now`. The builder takes `maxWait` as well as the guard's named parameters, because it sets the deadline to `loadStart + maxWait`.
+NOTES (2026-11-02): `waitStillLoadingCLI` has no production caller yet. Item 2 wires it into `cmdLoad` and the non-terminal `doLoadProfile`.
 
 **What:**
 **Goal:** package `internal/launcher` has one still-loading poll loop shared by the TUI popup and a new CLI waiter. The CLI waiter, given a managed `startupTimeout`, its timeout error, the profile's backend, the load's start time and `cfg.StartupMaxWait()`, polls once per `stillLoadingPollInterval` and returns `(true, nil)` when the server turns healthy, `(false, <timeout text + stillLoadingGoneText>)` after `stillLoadingGoneStreak` gone polls, and `(false, <timeout text + "Still not healthy after <max> (startup_max_wait).">)` once load start + max has passed. It prints the still-loading line in CLI progress style when it begins and every 10 s, and never touches raw mode. The TUI popup's behaviour (no deadline, Esc/Ctrl+C/q return, raw mode) is unchanged.

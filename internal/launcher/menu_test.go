@@ -1146,6 +1146,7 @@ func scriptedWatch(healthy, starting, alive []bool, keys []keyCode, restored *bo
 		},
 		draw:     func() {},
 		enterRaw: func() (func(), error) { return func() { *restored = true }, nil },
+		now:      time.Now,
 	}
 }
 
@@ -1204,6 +1205,87 @@ func TestWaitStillLoading_ReturnKeysLeaveServer(t *testing.T) {
 		if !restored {
 			t.Errorf("key %d: raw mode was not restored", key)
 		}
+	}
+}
+
+// TestWaitStillLoading_DeadlineEndsWait verifies a passed deadline ends the
+// wait of a still-starting server with the timeout text plus the
+// startup_max_wait line.
+func TestWaitStillLoading_DeadlineEndsWait(t *testing.T) {
+	t.Parallel()
+	restored := false
+	timeoutErr := errors.New("server startup timed out: left running")
+	watch := scriptedWatch([]bool{false}, []bool{true}, []bool{true}, nil, &restored)
+	watch.deadline = time.Now().Add(-time.Second)
+	watch.maxWait = 10 * time.Minute
+
+	healthy, err := waitStillLoading(watch, timeoutErr)
+
+	if healthy {
+		t.Fatal("waitStillLoading reported healthy past its deadline")
+	}
+	want := "Still not healthy after 10m0s (startup_max_wait)."
+	if err == nil || !strings.Contains(err.Error(), timeoutErr.Error()) || !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %v, want the timeout text and %q", err, want)
+	}
+	if !restored {
+		t.Error("raw mode was not restored")
+	}
+}
+
+// TestWaitStillLoading_HealthyBeatsDeadline verifies a server healthy on the
+// poll that finds the deadline passed still counts as loaded.
+func TestWaitStillLoading_HealthyBeatsDeadline(t *testing.T) {
+	t.Parallel()
+	restored := false
+	watch := scriptedWatch([]bool{true}, []bool{true}, []bool{true}, nil, &restored)
+	watch.deadline = time.Now().Add(-time.Second)
+	watch.maxWait = 10 * time.Minute
+
+	healthy, err := waitStillLoading(watch, errors.New("timed out"))
+
+	if !healthy || err != nil {
+		t.Errorf("waitStillLoading = (%v, %v), want (true, nil)", healthy, err)
+	}
+}
+
+// TestWaitStillLoadingCLI_PrintsProgress verifies the CLI wait's cadence on a
+// fake clock: one still-loading line when the wait begins and one per
+// cliStillLoadingLineInterval elapsed, in plain CLI style with no escape
+// sequences. Not parallel: captureStdout swaps os.Stdout.
+func TestWaitStillLoadingCLI_PrintsProgress(t *testing.T) {
+	loadStart := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	waitStart := loadStart.Add(time.Minute)
+	clock := waitStart
+	probes := stillLoadingProbes{
+		healthy:  func() bool { return clock.Sub(waitStart) > cliStillLoadingLineInterval },
+		starting: func() bool { return true },
+		alive:    func() bool { return true },
+	}
+	watch := cliStillLoadingWatch(
+		probes,
+		"Qwen",
+		loadStart,
+		10*time.Minute,
+		func() time.Time { return clock },
+		func(d time.Duration) { clock = clock.Add(d) },
+	)
+
+	var healthy bool
+	var err error
+	out := captureStdout(t, func() {
+		healthy, err = waitStillLoading(watch, errors.New("timed out"))
+	})
+
+	if !healthy || err != nil {
+		t.Errorf("waitStillLoading = (%v, %v), want (true, nil)", healthy, err)
+	}
+	want := "    Still loading Qwen… 1:00\n    Still loading Qwen… 1:10\n"
+	if out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+	if strings.Contains(out, "\033") {
+		t.Errorf("output %q holds an escape sequence", out)
 	}
 }
 

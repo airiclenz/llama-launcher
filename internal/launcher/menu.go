@@ -528,20 +528,21 @@ func routeLoadError(err error, terminal bool, wait stillLoadingWaiter) error {
 // server left running; a server that is gone returns the timeout error with
 // a line saying so.
 func keepWaitingForLoad(cfg *Config, profile *ResolvedProfile, displayName string, timeoutErr error, st startupTimeout, loadStart time.Time) error {
-	b, err := GetLLMServer(profile.Backend)
+	probes, err := probeTimedOutServer(profile.Backend, st)
 	if err != nil {
 		return timeoutErr
 	}
 
 	healthy, err := waitStillLoading(stillLoadingWatch{
-		healthy:  func() bool { return b.HealthCheck(st.addr) == nil },
-		starting: func() bool { return startingUp(b, st.addr) },
-		alive:    func() bool { return IsProcessAlive(st.pid) },
+		healthy:  probes.healthy,
+		starting: probes.starting,
+		alive:    probes.alive,
 		readKey:  readKeyTimeout,
 		draw: func() {
 			drawStillLoading(os.Stdout, displayName, time.Since(loadStart))
 		},
 		enterRaw: enterStillLoadingRawMode,
+		now:      time.Now,
 	}, timeoutErr)
 	if healthy && menuRedrawsAfterLoad(cfg) {
 		// As in doLoadProfile: the menu paints over the popup.
@@ -562,6 +563,90 @@ func keepWaitingForLoad(cfg *Config, profile *ResolvedProfile, displayName strin
 	return nil
 }
 
+// stillLoadingProbes are the three questions a still-loading wait asks of the
+// server a managed startup timeout left running.
+type stillLoadingProbes struct {
+	healthy  func() bool // the server passes its health check
+	starting func() bool // the server reports Starting (StartupProber or LoadingPID)
+	alive    func() bool // the timed-out server's PID is alive
+}
+
+// probeTimedOutServer builds the stillLoadingProbes for the server st
+// describes, through the backend's LLMServer. It is the one place that
+// decides how a timed-out server is observed, for the popup and the CLI wait
+// alike; it fails only when the backend is unknown.
+func probeTimedOutServer(backend string, st startupTimeout) (stillLoadingProbes, error) {
+	b, err := GetLLMServer(backend)
+	if err != nil {
+		return stillLoadingProbes{}, err
+	}
+	return stillLoadingProbes{
+		healthy:  func() bool { return b.HealthCheck(st.addr) == nil },
+		starting: func() bool { return startingUp(b, st.addr) },
+		alive:    func() bool { return IsProcessAlive(st.pid) },
+	}, nil
+}
+
+// cliStillLoadingLineInterval is how often the CLI still-loading wait prints
+// its progress line, counted from the start of the wait.
+const cliStillLoadingLineInterval = 10 * time.Second
+
+// waitStillLoadingCLI is the terminal-free still-loading wait: after a
+// managed startup timeout it keeps watching the server st describes, printing
+// a CLI-style progress line when the wait begins and every
+// cliStillLoadingLineInterval after, until the server turns healthy (true,
+// nil), is gone (false, the timeout error plus stillLoadingGoneText) or
+// loadStart + maxWait has passed (false, the timeout error plus the
+// startup_max_wait line). It never enters raw mode and reads no keys: Ctrl+C
+// is the process's plain SIGINT. An unknown backend returns the timeout error
+// unchanged.
+func waitStillLoadingCLI(backend, displayName string, timeoutErr error, st startupTimeout, loadStart time.Time, maxWait time.Duration) (bool, error) {
+	probes, err := probeTimedOutServer(backend, st)
+	if err != nil {
+		return false, timeoutErr
+	}
+	watch := cliStillLoadingWatch(probes, displayName, loadStart, maxWait, time.Now, time.Sleep)
+	return waitStillLoading(watch, timeoutErr)
+}
+
+// cliStillLoadingWatch builds the stillLoadingWatch of the CLI wait: raw mode
+// is a no-op, a key read sleeps the poll interval and reports keyNone, the
+// deadline is loadStart + maxWait, and draw prints the
+// "Still loading <profile>… m:ss" line to stdout on its first call and then
+// once per cliStillLoadingLineInterval elapsed since that call. now and sleep
+// are the clock, injected so a test can drive the cadence.
+func cliStillLoadingWatch(probes stillLoadingProbes, displayName string, loadStart time.Time, maxWait time.Duration, now func() time.Time, sleep func(time.Duration)) stillLoadingWatch {
+	var waitStart time.Time
+	linesPrinted := 0
+	draw := func() {
+		current := now()
+		if linesPrinted == 0 {
+			waitStart = current
+		}
+		linesDue := int(current.Sub(waitStart)/cliStillLoadingLineInterval) + 1
+		if linesPrinted >= linesDue {
+			return
+		}
+		fmt.Printf("    Still loading %s… %s\n", displayName, formatElapsed(current.Sub(loadStart)))
+		linesPrinted = linesDue
+	}
+
+	return stillLoadingWatch{
+		healthy:  probes.healthy,
+		starting: probes.starting,
+		alive:    probes.alive,
+		readKey: func(timeout time.Duration) keyCode {
+			sleep(timeout)
+			return keyNone
+		},
+		draw:     draw,
+		enterRaw: func() (func(), error) { return func() {}, nil },
+		now:      now,
+		deadline: loadStart.Add(maxWait),
+		maxWait:  maxWait,
+	}
+}
+
 // stillLoadingPollInterval is how often the still-loading popup polls the
 // server and redraws its elapsed time.
 const stillLoadingPollInterval = time.Second
@@ -575,6 +660,10 @@ const stillLoadingGoneStreak = 2
 // the popup was watching is no longer running.
 const stillLoadingGoneText = "The server is no longer running."
 
+// stillLoadingDeadlineText is the line, formatted with startup_max_wait, added
+// to the timeout text when a still-loading wait reaches its deadline.
+const stillLoadingDeadlineText = "Still not healthy after %s (startup_max_wait)."
+
 // stillLoadingWatch is everything waitStillLoading touches outside itself,
 // injected so tests can drive it without a server or a terminal.
 type stillLoadingWatch struct {
@@ -584,16 +673,21 @@ type stillLoadingWatch struct {
 	readKey  func(timeout time.Duration) keyCode // the key pressed within timeout, or keyNone
 	draw     func()                              // redraws the popup
 	enterRaw func() (restore func(), err error)  // enters raw mode; restore undoes it
+	now      func() time.Time                    // the clock the deadline is checked against
+	deadline time.Time                           // when the wait gives up; zero = never
+	maxWait  time.Duration                       // startup_max_wait, named in the deadline error
 }
 
 // waitStillLoading polls the server a startup timeout left running, once per
-// stillLoadingPollInterval, until one of three outcomes: the server turns
-// healthy (true, nil); the server is gone — not healthy, not starting, its
-// PID not alive — on stillLoadingGoneStreak polls in a row (false, the
-// timeout error plus stillLoadingGoneText); or the user presses Esc, Ctrl+C
-// or q (false, nil), leaving the server running. Raw mode is entered first
-// and restored on every return path; when it cannot be entered the timeout
-// error is returned unchanged.
+// stillLoadingPollInterval, until one of four outcomes: the server turns
+// healthy (true, nil); a non-zero deadline has passed (false, the timeout
+// error plus the startup_max_wait line); the server is gone — not healthy,
+// not starting, its PID not alive — on stillLoadingGoneStreak polls in a row
+// (false, the timeout error plus stillLoadingGoneText); or the user presses
+// Esc, Ctrl+C or q (false, nil), leaving the server running. A server that is
+// healthy on the poll that finds the deadline passed still counts as healthy.
+// Raw mode is entered first and restored on every return path; when it
+// cannot be entered the timeout error is returned unchanged.
 func waitStillLoading(watch stillLoadingWatch, timeoutErr error) (bool, error) {
 	restore, err := watch.enterRaw()
 	if err != nil {
@@ -605,6 +699,9 @@ func waitStillLoading(watch stillLoadingWatch, timeoutErr error) (bool, error) {
 	for {
 		if watch.healthy() {
 			return true, nil
+		}
+		if !watch.deadline.IsZero() && !watch.now().Before(watch.deadline) {
+			return false, fmt.Errorf("%w\n"+stillLoadingDeadlineText, timeoutErr, watch.maxWait)
 		}
 		if watch.starting() || watch.alive() {
 			misses = 0
