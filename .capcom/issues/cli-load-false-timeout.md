@@ -1,11 +1,13 @@
 ---
 title: CLI load reports a startup timeout for a server that boots healthy
-status: open
+status: done
 type: bug
 priority: 2
 labels: [cli]
 plan: 2026-11-02 - 00 - cli-load-keeps-waiting-plan
 created: 2026-11-02T06:34:51Z
+closed: 2026-11-02T07:00:57Z
+reason: "Resolved by plan '2026-11-02 - 00 - cli-load-keeps-waiting-plan' (archived in b889b35): CLI load keeps waiting after a managed startup stall until healthy, gone or startup_max_wait."
 ---
 
 `llama-launcher load <profile>` on a managed LLM Server (llamacpp, Splash) prints `Error: server at <addr> did not become healthy: no startup progress for 30s …` and exits 3 when the server's start goes quiet for `startup_stall_timeout` (default 30 s) — its log stops growing and its `StartupProber` does not answer yet (a large GGUF paging in from a cold disk, an MLX model loading before Splash binds its port). The server was left running and turns healthy shortly after, so the load actually succeeded.
