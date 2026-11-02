@@ -1290,9 +1290,9 @@ func TestWaitStillLoadingCLI_PrintsProgress(t *testing.T) {
 }
 
 // TestDoLoadProfile_RoutesStartupTimeout verifies the post-LoadProfile
-// branching: only a managed startup timeout in terminal mode reaches the
-// still-loading waiter, with its address and PID; the external timeout and
-// every non-terminal error pass through unchanged.
+// branching: only a managed startup timeout reaches the still-loading waiter,
+// with its address and PID; the external timeout and every other error pass
+// through unchanged.
 func TestDoLoadProfile_RoutesStartupTimeout(t *testing.T) {
 	t.Parallel()
 	managed := startupTimeoutErr(errors.New("health wait timed out"), &RunningInstance{
@@ -1304,12 +1304,11 @@ func TestDoLoadProfile_RoutesStartupTimeout(t *testing.T) {
 	tests := []struct {
 		name       string
 		err        error
-		terminal   bool
 		wantWaited bool
 	}{
-		{name: "non-terminal managed timeout", err: managed, terminal: false},
-		{name: "terminal external timeout", err: external, terminal: true},
-		{name: "terminal managed timeout", err: managed, terminal: true, wantWaited: true},
+		{name: "managed timeout", err: managed, wantWaited: true},
+		{name: "external timeout", err: external},
+		{name: "other error", err: errors.New("model file not found")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1320,7 +1319,7 @@ func TestDoLoadProfile_RoutesStartupTimeout(t *testing.T) {
 				return nil
 			}
 
-			got := routeLoadError(tc.err, tc.terminal, waiter)
+			got := routeLoadError(tc.err, waiter)
 
 			if !tc.wantWaited {
 				if waited != nil || got != tc.err {

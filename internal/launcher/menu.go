@@ -470,9 +470,20 @@ func doLoadProfile(cfg *Config, name string) error {
 		tracker.Close()
 	}
 	fmt.Print(escClear + escCursorShow)
-	if err != nil {
-		return routeLoadError(err, isTerminal(), func(timeoutErr error, st startupTimeout) error {
+	if err != nil && isTerminal() {
+		return routeLoadError(err, func(timeoutErr error, st startupTimeout) error {
 			return keepWaitingForLoad(cfg, profile, displayName, timeoutErr, st, loadStart)
+		})
+	}
+	if err != nil {
+		wait := newCLILoadWaiter(cfg, profile, loadStart)
+		return routeLoadError(err, func(timeoutErr error, st startupTimeout) error {
+			waited, waitErr := keepWaitingCLI(cfg, profile, timeoutErr, st, loadStart, wait)
+			if waitErr != nil {
+				return waitErr
+			}
+			printLoadSuccess(displayName, waited, true)
+			return nil
 		})
 	}
 
@@ -508,14 +519,14 @@ func printLoadSuccess(displayName string, inst *RunningInstance, started bool) {
 // errors.As found in it, and returns what doLoadProfile should return.
 type stillLoadingWaiter func(timeoutErr error, st startupTimeout) error
 
-// routeLoadError decides what a failed menu load does next. Only a managed
-// startup timeout (a startupTimeout carrying an address and a PID) in
-// terminal mode goes to wait; every other error — the external auto-start's
-// timeout, whose startupTimeout fields are zero, included — and every error
-// in non-terminal mode is returned unchanged for the error popup.
-func routeLoadError(err error, terminal bool, wait stillLoadingWaiter) error {
+// routeLoadError decides what a failed load does next. Only a managed startup
+// timeout (a startupTimeout carrying an address and a PID) goes to wait; every
+// other error — the external auto-start's timeout, whose startupTimeout fields
+// are zero, included — is returned unchanged. The caller picks the waiter: the
+// still-loading popup in terminal mode, the CLI wait otherwise.
+func routeLoadError(err error, wait stillLoadingWaiter) error {
 	var st startupTimeout
-	if !terminal || !errors.As(err, &st) || st.addr == "" || st.pid <= 0 {
+	if !errors.As(err, &st) || st.addr == "" || st.pid <= 0 {
 		return err
 	}
 	return wait(err, st)
@@ -553,14 +564,57 @@ func keepWaitingForLoad(cfg *Config, profile *ResolvedProfile, displayName strin
 		return err
 	}
 
-	printLoadSuccess(displayName, &RunningInstance{
-		Backend: profile.Backend,
-		Host:    *profile.Host,
-		Port:    *profile.Port,
-		PID:     st.pid,
-		LogFile: st.logFile,
-	}, true)
+	printLoadSuccess(displayName, timedOutInstance(profile, st), true)
 	return nil
+}
+
+// timedOutInstance is the RunningInstance of the server a managed startup
+// timeout left running, once a still-loading wait has seen it turn healthy:
+// the profile's address and backend, the timed-out PID and log, and the
+// profile as its active one — what LoadProfile would have returned.
+func timedOutInstance(profile *ResolvedProfile, st startupTimeout) *RunningInstance {
+	return &RunningInstance{
+		Backend:       profile.Backend,
+		Host:          *profile.Host,
+		Port:          *profile.Port,
+		PID:           st.pid,
+		LogFile:       st.logFile,
+		ActiveProfile: profile.Name,
+	}
+}
+
+// cliLoadWaiter is the terminal-free still-loading wait as a load's caller
+// sees it: given the managed timeout error and the startupTimeout found in
+// it, it reports whether the server turned healthy, or the error to show.
+// Injected so a test drives the post-load handling without a server.
+type cliLoadWaiter func(timeoutErr error, st startupTimeout) (bool, error)
+
+// newCLILoadWaiter returns the production cliLoadWaiter for profile:
+// waitStillLoadingCLI on its backend, bounded by loadStart + startup_max_wait.
+func newCLILoadWaiter(cfg *Config, profile *ResolvedProfile, loadStart time.Time) cliLoadWaiter {
+	return func(timeoutErr error, st startupTimeout) (bool, error) {
+		return waitStillLoadingCLI(profile.Backend, profile.DisplayName(), timeoutErr, st, loadStart, cfg.StartupMaxWait())
+	}
+}
+
+// keepWaitingCLI runs wait after a managed startup timeout and, once the
+// server turns healthy, returns its timedOutInstance. When startup_max_wait
+// has already elapsed since loadStart — waitForStartup's own total cap fired,
+// so there is no wait left — it returns the timeout error unchanged without
+// waiting. A wait that ends without a healthy server and without an error of
+// its own returns the timeout error.
+func keepWaitingCLI(cfg *Config, profile *ResolvedProfile, timeoutErr error, st startupTimeout, loadStart time.Time, wait cliLoadWaiter) (*RunningInstance, error) {
+	if time.Since(loadStart) >= cfg.StartupMaxWait() {
+		return nil, timeoutErr
+	}
+	healthy, err := wait(timeoutErr, st)
+	if healthy {
+		return timedOutInstance(profile, st), nil
+	}
+	if err == nil {
+		err = timeoutErr
+	}
+	return nil, err
 }
 
 // stillLoadingProbes are the three questions a still-loading wait asks of the

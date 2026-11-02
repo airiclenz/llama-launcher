@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1290,5 +1291,122 @@ func TestLogsClean_AcceptsOneDay(t *testing.T) {
 	}
 	if _, err := os.Stat(freshPath); err != nil {
 		t.Errorf("fresh log was removed: %v", err)
+	}
+}
+
+// cmdLoadFinishFixture is a llamacpp profile on 127.0.0.1:8080 and the
+// managed startup timeout LoadProfile returns for it (its PID 4242 left
+// running), for the cmdLoadFinish tests.
+func cmdLoadFinishFixture(t *testing.T) (*Config, *ResolvedProfile, error) {
+	t.Helper()
+	host, port := "127.0.0.1", 8080
+	profile := &ResolvedProfile{
+		Name:          "qwen",
+		Backend:       "llamacpp",
+		ProfileParams: ProfileParams{Host: &host, Port: &port},
+	}
+	timeoutErr := startupTimeoutErr(errors.New("server at 127.0.0.1:8080 did not become healthy: no startup progress for 30s"), &RunningInstance{
+		Backend: "llamacpp", Host: host, Port: port, PID: 4242, LogFile: "/logs/llamacpp.log",
+	})
+	return &Config{}, profile, timeoutErr
+}
+
+// TestCmdLoadFinish_ManagedTimeoutThenHealthy pins the fix for a load that
+// stalls past startup_stall_timeout and then turns healthy: the CLI waits it
+// out and reports the load as a success, not a timeout.
+func TestCmdLoadFinish_ManagedTimeoutThenHealthy(t *testing.T) {
+	cfg, profile, timeoutErr := cmdLoadFinishFixture(t)
+	waiter := func(error, startupTimeout) (bool, error) { return true, nil }
+
+	var code int
+	out := captureStdout(t, func() {
+		code = cmdLoadFinish(cfg, profile, nil, false, timeoutErr, time.Now(), waiter)
+	})
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, want := range []string{"Server started (PID 4242)", "Loaded qwen on 127.0.0.1:8080"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to hold %q", out, want)
+		}
+	}
+}
+
+// TestCmdLoadFinish_MaxWaitAlreadyElapsedDoesNotWait pins that a timeout
+// reached once startup_max_wait has already elapsed since the load began —
+// waitForStartup's own total cap — exits 3 with the error unchanged.
+func TestCmdLoadFinish_MaxWaitAlreadyElapsedDoesNotWait(t *testing.T) {
+	cfg, profile, timeoutErr := cmdLoadFinishFixture(t)
+	called := false
+	waiter := func(error, startupTimeout) (bool, error) {
+		called = true
+		return true, nil
+	}
+	loadStart := time.Now().Add(-cfg.StartupMaxWait() - time.Second)
+
+	var code int
+	errOut := captureStderr(t, func() {
+		code = cmdLoadFinish(cfg, profile, nil, false, timeoutErr, loadStart, waiter)
+	})
+
+	if code != 3 {
+		t.Errorf("exit code = %d, want 3", code)
+	}
+	if called {
+		t.Error("waiter was called, want no wait once startup_max_wait has elapsed")
+	}
+	if !strings.Contains(errOut, timeoutErr.Error()) || strings.Contains(errOut, "startup_max_wait") {
+		t.Errorf("stderr = %q, want the original error and no startup_max_wait line", errOut)
+	}
+}
+
+// TestCmdLoadFinish_ManagedTimeoutGone pins that a server that dies during
+// the extra wait exits 3 with the waiter's gone error.
+func TestCmdLoadFinish_ManagedTimeoutGone(t *testing.T) {
+	cfg, profile, timeoutErr := cmdLoadFinishFixture(t)
+	waiter := func(err error, _ startupTimeout) (bool, error) {
+		return false, fmt.Errorf("%w\n%s", err, stillLoadingGoneText)
+	}
+
+	var code int
+	errOut := captureStderr(t, func() {
+		code = cmdLoadFinish(cfg, profile, nil, false, timeoutErr, time.Now(), waiter)
+	})
+
+	if code != 3 {
+		t.Errorf("exit code = %d, want 3", code)
+	}
+	if !strings.Contains(errOut, "no longer running") {
+		t.Errorf("stderr = %q, want it to say the server is no longer running", errOut)
+	}
+}
+
+// TestCmdLoadFinish_ExternalTimeoutDoesNotWait pins that the external
+// auto-start's timeout still exits 3 at once.
+func TestCmdLoadFinish_ExternalTimeoutDoesNotWait(t *testing.T) {
+	cfg, profile, _ := cmdLoadFinishFixture(t)
+	external := externalStartupTimeoutErr(errors.New("server at 127.0.0.1:11434 did not become healthy within 15s"), &RunningInstance{
+		Backend: "ollama", Host: "127.0.0.1", Port: 11434, PID: 4242,
+	})
+	called := false
+	waiter := func(error, startupTimeout) (bool, error) {
+		called = true
+		return true, nil
+	}
+
+	var code int
+	errOut := captureStderr(t, func() {
+		code = cmdLoadFinish(cfg, profile, nil, false, external, time.Now(), waiter)
+	})
+
+	if code != 3 {
+		t.Errorf("exit code = %d, want 3", code)
+	}
+	if called {
+		t.Error("waiter was called, want no wait after an external auto-start timeout")
+	}
+	if !strings.Contains(errOut, external.Error()) {
+		t.Errorf("stderr = %q, want the external timeout error", errOut)
 	}
 }

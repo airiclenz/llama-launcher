@@ -149,14 +149,34 @@ func cmdLoad(cfg *Config, args []string) int {
 		return 2
 	}
 
-	displayName := profile.DisplayName()
-	progress := newCLIProgress(fmt.Sprintf("Loading %s", displayName))
+	progress := newCLIProgress(fmt.Sprintf("Loading %s", profile.DisplayName()))
+	loadStart := time.Now()
 	inst, started, err := LoadProfile(cfg, profile, restart, progress)
+	return cmdLoadFinish(cfg, profile, inst, started, err, loadStart, newCLILoadWaiter(cfg, profile, loadStart))
+}
+
+// cmdLoadFinish is cmdLoad after LoadProfile returns: the success lines and
+// exit 0, or the error on stderr and exit 3. A managed startup timeout first
+// runs wait, which keeps watching the server the timeout left running until
+// it turns healthy (the success lines, exit 0), is gone or reaches
+// startup_max_wait from loadStart (the waiter's error, exit 3). Every other
+// error, the external auto-start's timeout included, exits 3 at once.
+func cmdLoadFinish(cfg *Config, profile *ResolvedProfile, inst *RunningInstance, started bool, err error, loadStart time.Time, wait cliLoadWaiter) int {
+	if err != nil {
+		err = routeLoadError(err, func(timeoutErr error, st startupTimeout) error {
+			waited, waitErr := keepWaitingCLI(cfg, profile, timeoutErr, st, loadStart, wait)
+			if waitErr == nil {
+				inst, started = waited, true
+			}
+			return waitErr
+		})
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 3
 	}
 
+	displayName := profile.DisplayName()
 	if started && inst.PID > 0 {
 		fmt.Printf("Server started (PID %d)\n", inst.PID)
 	} else if started {
