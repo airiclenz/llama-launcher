@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Release skill:** `release-llama-launcher` now clears a blocked release gate itself instead of stopping: it commits the pending files, pulls, runs `make check`, pushes `main` and watches the `ci.yml` run until it is green, diagnosing and fixing red runs. It asks the owner only when a call is theirs, such as a secret or unrelated work in the tree, a non-mechanical rebase conflict, a fix that changes behaviour, or three red rounds. It never weakens a test or CI to get a green run.
+
 ## 1.9.1
 
 ### Fixed

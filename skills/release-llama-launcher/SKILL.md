@@ -2,7 +2,9 @@
 name: release-llama-launcher
 description: >
   Cuts a llama-launcher release: checks the release gate with `go run
-  ./cmd/release status`, drafts the notes with release-notes-llama-launcher,
+  ./cmd/release status` and clears it itself — commits the pending files,
+  pulls, pushes main and watches CI until it is green, fixing red runs —
+  drafts the notes with release-notes-llama-launcher,
   proposes the version and has the owner confirm it, makes the two local
   release commits with `prepare`, then — after a dry run and one explicit
   confirmation — runs `publish`, which pushes, waits for the CI-made tag,
@@ -37,12 +39,17 @@ neither is run for llama-launcher.
 - **One irreversible step: `publish`.** Everything before it is local and
   undone with `git reset --keep HEAD~2`; everything after it is fixed
   forward, never undone.
-- **No bypass.** A blocked gate stops the run. You never tag, push, create a
-  GitHub release, or commit to the tap by hand — `publish`
+- **No bypass.** A gate is cleared by making its conditions true (step 1b),
+  never by skipping one. Before `prepare` you may commit, pull and push
+  ordinary work to `main` (step 1b). You never tag, push the release commits,
+  create a GitHub release, or commit to the tap by hand — `publish`
   does all of it, and the tag is made by CI, never by you or `publish`.
-- **Ask with the host's user-question tool** (`ask_user`, `AskUserQuestion`,
-  or similar) at every *Ask* below, and wait for the answer. No answer, or a
-  host without the tool, means stop — never assume consent.
+- **Run autonomously; stop only for a human.** Work through every step
+  without pausing, except at the *Ask* points below and wherever a decision
+  is genuinely the owner's (step 1b lists those). Then use the
+  host's user-question tool (`ask_user`, `AskUserQuestion`, or similar) and
+  wait for the answer. No answer, or a host without the tool, means stop —
+  never assume consent.
 - Needs an authenticated `gh` (`gh auth status`) and a Go toolchain. Shell snippets assume fail-fast hosts (`set -e`,
   `pipefail`): a command that may match nothing carries `|| true` — keep it.
 
@@ -68,12 +75,66 @@ file `<TMP>/release-notes-llama-launcher-vX.Y.Z.md` is reused when it exists
 (show it and *Ask* approval as in step 3), else step 2 runs with the argument
 vX.Y.Z first.
 
-**Gate.** `gate.ok` false and no resume → **stop**: list every
-`gate.failures` entry verbatim. Fixing them (a dirty tree, an unpushed or
-diverged HEAD, a red or missing `ci.yml` run) is the owner's work; offer
-nothing that skips them. Otherwise print one ledger line: baseline tag and
-publish date — or "no release published yet" when `baseline.tag` is empty —
-commit count, and highest tag ("none" when `highestTag` is empty).
+**Gate.** `gate.ok` false and no resume → list every `gate.failures` entry
+verbatim and clear them in step 1b. Once the gate is OK, print one ledger
+line: baseline tag and publish date — or "no release published yet" when
+`baseline.tag` is empty — commit count, and highest tag ("none" when
+`highestTag` is empty).
+
+## 1b — Clear the gate: commit, pull, push, watch CI until green
+
+Run this only when the gate is blocked. It never runs on a resume — the
+`prepare` commits are on HEAD, and committing or pushing now would split them
+from the release. Work through the steps in order, then re-run step 1's
+status call. Repeat until `gate.ok` is true.
+
+1. **Commit the pending files.** Read `git status --porcelain` and
+   `git diff`, including untracked files. Group the changes into logical
+   commits, with conventional messages in the repo's style (`git log -15
+   --format=%s`). Follow AGENTS.md: after a hand edit to `.capcom/`, run
+   `capcom check` first. Commit messages carry no AI attribution — no
+   `Co-Authored-By` trailer, no "generated with" line.
+   *Ask* instead of committing when a change is a secret or credential; when
+   it is a build artefact or scratch file that `.gitignore` should cover;
+   when it is half-finished work, such as failing tests, a plan marked
+   `draft`, or conflict markers; or when it is clearly unrelated work in
+   progress that the owner may not want shipped. Offer three choices:
+   commit it, leave it out (stash it with `git stash push -- <paths>` and
+   say so in the report), or abort.
+2. **Pull.** When `origin/main` has commits HEAD does not, run
+   `git pull --rebase origin main`. If a conflict is not mechanical, run
+   `git rebase --abort` and *Ask*.
+3. **Check locally.** Run `make check`, the same gate `ci.yml` runs. If it
+   is red, fix the cause as in step 5 before pushing.
+4. **Push and watch.** Push with `git push origin main`. If the push is
+   rejected, return to step 2. Then wait for the `ci.yml` run of the pushed
+   head:
+
+   ```bash
+   SHA="$(git rev-parse HEAD)"
+   for i in $(seq 1 30); do
+     ID="$(gh run list --workflow ci.yml --commit "$SHA" --json databaseId --jq '.[0].databaseId' || true)"
+     [ -n "$ID" ] && break; sleep 10
+   done
+   echo "RUN=$ID"; gh run watch "$ID" --exit-status --interval 30 > /dev/null && echo CI=green || echo CI=red
+   ```
+
+   The watch can take several minutes, so give the shell call a long
+   timeout or run it in the background. If no run appears after five
+   minutes, *Ask*.
+5. **Fix a red run.** Read `gh run view "$ID" --log-failed`. Find the root
+   cause and reproduce it locally (`make check`, or the single failing
+   test). Fix it properly, then commit with a `fix(...)` or `test(...)`
+   message and go back to step 3.
+   A fix never weakens the gate. Never skip, delete or loosen a failing test
+   to make it pass, never add `t.Skip` or a build tag, never edit `ci.yml`
+   to drop a check, and never re-run a failure until it happens to pass.
+   One exception: when the log shows an infrastructure fault (a runner
+   outage, a network timeout, a cache error), re-run the job once with
+   `gh run rerun "$ID" --failed`.
+   *Ask* after three red rounds, when the fix changes user-visible
+   behaviour or a design decision, or when the cause is outside this repo.
+   The question names the failing job, the log excerpt and what you tried.
 
 ## 2 — Draft the notes
 
@@ -165,6 +226,10 @@ detail. Once the cause is fixed (by the owner, or by you when the fix is
 outside the release — never a hand-made tag, release or channel commit),
 re-run the **same** command: `publish` converges, skipping every step its
 probe reports done. A re-run needs no new confirmation for the same version.
+If the tag never appeared, read the run of `tag-on-version-bump.yml` for the
+pushed head with step 1b's `gh run list` / `gh run view --log-failed` before
+deciding whose fix it is. Fix a cause outside the release yourself, and *Ask*
+when a fix would change the release itself.
 
 ## Abort
 
@@ -187,6 +252,10 @@ End with the final step table and, in plain words:
 
 ## Hard rules
 
-- Never tag, push, release or update a channel by hand; `publish` alone does.
-- Never bypass the gate, nor switch versions to get past a failed `publish`.
+- Never tag, push the release commits, release or update a channel by hand;
+  `publish` alone does. Pushing ordinary commits to `main` is allowed only
+  in step 1b.
+- Never bypass the gate by skipping a check: clear it by making the check
+  pass. Never weaken a test or CI to turn a run green, and never switch
+  versions to get past a failed `publish`.
 - The owner confirms notes, version and publish — each via the question tool.
