@@ -1,11 +1,13 @@
 ---
 title: The menu does not show which row a click would hit
-status: open
+status: done
 type: feature
 priority: 3
 labels: [menu]
 plan: 2026-11-17 - 02 - menu-hover-highlight-plan
 created: 2026-11-17T10:25:41Z
+closed: 2026-11-17T11:11:14Z
+reason: Resolved by plan '2026-11-17 - 02 - menu-hover-highlight-plan' (archived in 016882b)
 ---
 
 The interactive menu and its pickers (`selectMenu` in `internal/launcher/ui.go`, TDD §3.1) take a left click on a row, but nothing on screen follows the pointer. Terminal.app keeps its I-beam cursor over the menu, and an I-beam does not make the targeted row obvious, so the user has to guess which row a click will land on. The menu enables click and wheel reporting only (`\x1b[?1000h` + `\x1b[?1006h`); pointer motion is never reported, and `decodeSGRMouse` in `ui_input.go` drops motion reports as `keyMouseIgnored`.

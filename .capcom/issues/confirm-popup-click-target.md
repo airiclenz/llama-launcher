@@ -1,12 +1,14 @@
 ---
 title: The Switch model confirmation has no visible click target
-status: open
+status: done
 type: feature
 priority: 3
 labels: [menu]
 deps: [menu-hover-not-shown]
 plan: 2026-11-17 - 02 - menu-hover-highlight-plan
 created: 2026-11-17T10:25:41Z
+closed: 2026-11-17T11:11:14Z
+reason: Resolved by plan '2026-11-17 - 02 - menu-hover-highlight-plan' (archived in 016882b)
 ---
 
 The Switch model confirmation popup (`drawConfirmPopup` in `internal/launcher/ui.go`, TDD §5 "Switch model") confirms on a left click anywhere inside its box. Nothing in the popup looks clickable, nothing reacts to the pointer, and there is no way to cancel with the mouse.
