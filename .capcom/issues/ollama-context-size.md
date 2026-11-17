@@ -4,6 +4,7 @@ status: open
 type: feature
 priority: 3
 labels: [config]
+plan: 2026-11-17 - 00 - p3-features-sweep-plan
 created: 2026-10-13T11:47:04Z
 ---
 
