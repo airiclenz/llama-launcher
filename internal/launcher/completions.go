@@ -15,8 +15,12 @@ const completeCommand = "__complete"
 // completionSubcommands are the top-level commands offered as the first word,
 // in printUsage order.
 var completionSubcommands = []string{
-	"load", "reload", "unload", "start", "stop", "status", "list", "logs", "config", "version", "completions",
+	"load", "reload", "unload", "start", "stop", "status", "list", "logs", "autostart", "config", "version",
+	"completions",
 }
+
+// completionAutostartSubcommands are the subcommands offered after autostart.
+var completionAutostartSubcommands = []string{"install", "print", "remove"}
 
 // completionShells are the shells `completions` prints a script for.
 var completionShells = []string{"bash", "zsh", "fish"}
@@ -227,6 +231,13 @@ func commandCandidates(command string, args []string, cfg *Config) (flags, value
 		}
 		if args[0] == "init" {
 			flags = []string{"--force", "-f"}
+		}
+	case "autostart":
+		if len(args) == 0 {
+			return nil, completionAutostartSubcommands
+		}
+		if !hasPositional(args[1:]) {
+			values = completionProfiles(cfg)
 		}
 	case "completions":
 		if !positional {

@@ -114,6 +114,8 @@ func Run(args []string) int {
 		return cmdList(cfg, args[1:])
 	case "logs":
 		return cmdLogs(cfg, args[1:])
+	case "autostart":
+		return cmdAutostart(cfg, configPath, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n", args[0])
 		printUsage()
@@ -1047,6 +1049,7 @@ Commands:
   list [--json]         List available profiles
   logs [target] [-f]           Tail an instance's log
   logs clean [--days N|--all]  Remove old log files
+  autostart print <profile>    Print a launchd plist that loads a profile at login
   config validate       Check config file for errors
   config init [--force]   Generate example config (overwrite if --force)
   config reset           Reset config to example (overwrite)

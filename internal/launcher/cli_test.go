@@ -1600,3 +1600,50 @@ func TestRun_DispatchesReload(t *testing.T) {
 		t.Errorf("Run(reload --x) = exit %d, stderr %q; want exit 2 and the unknown-flag error", code, stderr)
 	}
 }
+
+func TestCmdAutostart_Print(t *testing.T) {
+	cfgPath := writeRunConfig(t)
+
+	cases := []struct {
+		name     string
+		args     []string
+		wantCode int
+		wantOut  []string
+	}{
+		{
+			"an existing Profile prints its plist",
+			[]string{"autostart", "print", "chat"}, 0,
+			[]string{
+				"<string>com.github.airiclenz.llama-launcher.chat</string>",
+				"<string>" + cfgPath + "</string>\n\t\t<string>load</string>\n\t\t<string>chat</string>",
+				"<string>" + filepath.Join(filepath.Dir(cfgPath), "autostart-chat.log") + "</string>",
+			},
+		},
+		{"an unknown Profile exits 2", []string{"autostart", "print", "missing"}, 2, nil},
+		{"a missing Profile exits 2", []string{"autostart", "print"}, 2, nil},
+		{"an unknown subcommand exits 2", []string{"autostart", "frobnicate", "chat"}, 2, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args := append([]string{"--config", cfgPath}, c.args...)
+			var code int
+
+			var out string
+			captureStderr(t, func() {
+				out = captureStdout(t, func() { code = Run(args) })
+			})
+
+			if code != c.wantCode {
+				t.Fatalf("Run(%v) = exit %d, want %d", args, code, c.wantCode)
+			}
+			if c.wantCode != 0 && out != "" {
+				t.Errorf("Run(%v) wrote %q to stdout, want nothing", args, out)
+			}
+			for _, fragment := range c.wantOut {
+				if !strings.Contains(out, fragment) {
+					t.Errorf("Run(%v) output lacks %q:\n%s", args, fragment, out)
+				}
+			}
+		})
+	}
+}

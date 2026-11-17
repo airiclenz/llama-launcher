@@ -66,6 +66,10 @@ func TestComplete_Candidates(t *testing.T) {
 		{"config offers its subcommands", []string{"config", ""}, []string{"validate", "init", "reset"}},
 		{"config init offers --force", []string{"config", "init", "-"}, []string{"--force", "-f"}},
 		{"completions offers the shells", []string{"completions", ""}, completionShells},
+		{"autostart offers its subcommands", []string{"autostart", ""}, []string{"install", "print", "remove"}},
+		{"autostart print offers profile names", []string{"autostart", "print", ""}, []string{"chat"}},
+		{"autostart offers nothing after its profile", []string{"autostart", "print", "chat", ""}, nil},
+		{"a first-word prefix finds autostart", []string{"au"}, []string{"autostart"}},
 		{"an unknown command offers nothing", []string{"frobnicate", ""}, nil},
 	}
 	for _, c := range cases {

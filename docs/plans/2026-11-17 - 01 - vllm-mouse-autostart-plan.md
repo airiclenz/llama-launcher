@@ -202,7 +202,11 @@ NOTES (2026-11-17): in the confirm popup a wheel notch is ignored (neither confi
 **Closes:** menu-mouse-ignored
 **Commit:** `feat(menu): take the mouse in popups`
 
-## 9. `autostart print` renders a launchd plist
+## 9. `autostart print` renders a launchd plist — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): `TestBuildLaunchAgentSpec` is split into `TestBuildLaunchAgentSpec_*` functions (program/label, slug, relative paths, unknown Profile, PATH table, missing server binary, hub variables); `env` is a `getenv func(string) string` that supplies PATH and the forwarded variables, while binary lookups use the process PATH.
+NOTES (2026-11-17): every `buildLaunchAgentSpec` failure exits 2 (unknown or unresolvable Profile, plus the near-impossible `os.Executable` failure), matching `load`'s resolve path.
+NOTES (2026-11-17): completion offers `install print remove` as the plan says, though `install` / `remove` only land with item 10; README/TDD docs for `autostart` are left to item 10 ("and docs"); only `printUsage` gained the `autostart print` line.
 
 **What:**
 **Goal:** `llama-launcher autostart print <profile>` writes a valid launchd plist to stdout (exit 0) for an existing Profile and exits 2 for an unknown one; the plist has Label `com.github.airiclenz.llama-launcher.<profile-slug>`, `ProgramArguments` `[<launcher>, --config, <absolute config path>, load, <profile>]`, `RunAtLoad` true, no `KeepAlive`, `AbandonProcessGroup` true, `StandardOutPath`/`StandardErrorPath` `<log_dir>/autostart-<profile-slug>.log`, and `EnvironmentVariables` with `PATH` (the current `PATH` with the launcher's directory and the Profile's managed server binary's directory prepended when missing) plus `HF_HOME` / `HF_HUB_CACHE` / `XDG_CACHE_HOME` when set.
