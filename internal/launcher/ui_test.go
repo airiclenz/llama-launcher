@@ -177,19 +177,65 @@ func TestDrawPopupReturnsDrawnRect(t *testing.T) {
 	}
 }
 
+// confirmPopupRun is one scripted run of drawConfirmPopup: what it returned,
+// how many events it read, and the output it had written at each wait, the
+// whole output last.
+type confirmPopupRun struct {
+	confirmed bool
+	read      int
+	atWait    []string
+	output    string
+}
+
+// writtenAfterWait returns what the popup wrote between its wait number
+// index and the next one (or its return, for the last wait).
+func (r confirmPopupRun) writtenAfterWait(index int) string {
+	until := r.output
+	if index+1 < len(r.atWait) {
+		until = r.atWait[index+1]
+	}
+	return strings.TrimPrefix(until, r.atWait[index])
+}
+
+// runConfirmPopup drives drawConfirmPopup over the scripted events, or over
+// a wait that fails with waitErr when it is set.
+func runConfirmPopup(t *testing.T, events []inputEvent, waitErr error) confirmPopupRun {
+	t.Helper()
+
+	var out bytes.Buffer
+	run := confirmPopupRun{}
+	run.confirmed = drawConfirmPopup(&out, "Big", []string{"row"}, func() (inputEvent, error) {
+		run.atWait = append(run.atWait, out.String())
+		if waitErr != nil {
+			return inputEvent{key: keyNone}, waitErr
+		}
+		if run.read >= len(events) {
+			t.Fatalf("popup still open after every scripted event")
+		}
+		event := events[run.read]
+		run.read++
+		return event, nil
+	})
+	run.output = out.String()
+	return run
+}
+
 // TestSwitchModel_ConfirmPopup pins the switch confirmation input: enter and
-// a left click inside the popup box confirm; q, esc, an unreadable key and a
-// raw-mode failure cancel; navigation, the wheel, a click outside the box and
-// ignored mouse reports change nothing. Every path clears the popup, turns
-// mouse reporting off and restores the cursor.
+// a left click on [ Switch ] confirm; q, esc, an unreadable key, a raw-mode
+// failure and a left click on [ Cancel ] cancel; navigation, the wheel,
+// ignored mouse reports and a click anywhere else — beside a button, on the
+// box or outside it — change nothing. Every path waits with motion tracking
+// on, then clears the popup, turns mouse reporting off and restores the
+// cursor.
 func TestSwitchModel_ConfirmPopup(t *testing.T) {
 	t.Parallel()
 
-	box := drawPopup(io.Discard, "Big", []string{"row"}, "enter switch · q cancel")
+	layout := drawConfirmFrame(io.Discard, "Big", []string{"row"}, confirmButtonNone)
+	box, switchButton, cancelButton := layout.box, layout.switchButton, layout.cancelButton
 	click := func(x, y int) inputEvent { return inputEvent{key: keyClick, x: x, y: y} }
 	key := func(code keyCode) inputEvent { return inputEvent{key: code} }
-	right := box.col + box.width - 1
-	bottom := box.row + box.height - 1
+	lastCol := func(r screenRect) int { return r.col + r.width - 1 }
+	buttonRow := switchButton.row
 
 	tests := []struct {
 		name   string
@@ -200,16 +246,24 @@ func TestSwitchModel_ConfirmPopup(t *testing.T) {
 		{name: "enter confirms", events: []inputEvent{key(keyEnter)}, want: true},
 		{name: "q cancels", events: []inputEvent{key(keyQ)}},
 		{name: "esc cancels", events: []inputEvent{key(keyEscape)}},
+		{name: "ctrl-c cancels", events: []inputEvent{key(keyCtrlC)}},
 		{name: "unreadable key cancels", events: []inputEvent{key(keyNone)}},
 		{name: "navigation is ignored", events: []inputEvent{key(keyUp), key(keyDown), key(keyEnter)}, want: true},
 		{name: "ignored mouse report does not cancel", events: []inputEvent{key(keyMouseIgnored), key(keyEnter)}, want: true},
-		{name: "click on the top-left corner confirms", events: []inputEvent{click(box.col, box.row)}, want: true},
-		{name: "click on the bottom-right corner confirms", events: []inputEvent{click(right, bottom)}, want: true},
-		{name: "click left of the box is ignored", events: []inputEvent{click(box.col-1, box.row), key(keyQ)}},
-		{name: "click right of the box is ignored", events: []inputEvent{click(right+1, box.row), key(keyQ)}},
-		{name: "click above the box is ignored", events: []inputEvent{click(box.col, box.row-1), key(keyQ)}},
-		{name: "click below the box is ignored", events: []inputEvent{click(box.col, bottom+1), key(keyQ)}},
-		{name: "click outside then enter confirms", events: []inputEvent{click(right+1, bottom+1), key(keyEnter)}, want: true},
+		{name: "click on the first cell of switch confirms", events: []inputEvent{click(switchButton.col, buttonRow)}, want: true},
+		{name: "click on the last cell of switch confirms", events: []inputEvent{click(lastCol(switchButton), buttonRow)}, want: true},
+		{name: "click on the first cell of cancel cancels", events: []inputEvent{click(cancelButton.col, buttonRow)}},
+		{name: "click on the last cell of cancel cancels", events: []inputEvent{click(lastCol(cancelButton), buttonRow)}},
+		{name: "click left of switch is ignored", events: []inputEvent{click(switchButton.col-1, buttonRow), key(keyQ)}},
+		{name: "click right of switch is ignored", events: []inputEvent{click(lastCol(switchButton)+1, buttonRow), key(keyQ)}},
+		{name: "click left of cancel is ignored", events: []inputEvent{click(cancelButton.col-1, buttonRow), key(keyQ)}},
+		{name: "click right of cancel is ignored", events: []inputEvent{click(lastCol(cancelButton)+1, buttonRow), key(keyQ)}},
+		{name: "click above switch is ignored", events: []inputEvent{click(switchButton.col, buttonRow-1), key(keyQ)}},
+		{name: "click below cancel is ignored", events: []inputEvent{click(cancelButton.col, buttonRow+1), key(keyQ)}},
+		{name: "click on the box corner is ignored", events: []inputEvent{click(box.col, box.row), key(keyQ)}},
+		{name: "click on a text row inside the box is ignored", events: []inputEvent{click(switchButton.col, box.row+2), key(keyQ)}},
+		{name: "click outside the box is ignored", events: []inputEvent{click(box.col+box.width, box.row+box.height), key(keyQ)}},
+		{name: "click elsewhere then enter confirms", events: []inputEvent{click(box.col, box.row), key(keyEnter)}, want: true},
 		{name: "wheel is ignored", events: []inputEvent{key(keyWheelUp), key(keyWheelDown), key(keyQ)}},
 		{name: "raw mode failure cancels", err: errors.New("raw mode unavailable")},
 	}
@@ -218,43 +272,170 @@ func TestSwitchModel_ConfirmPopup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var out bytes.Buffer
-			var atWait string
-			next := 0
-			got := drawConfirmPopup(&out, "Big", []string{"row"}, func() (inputEvent, error) {
-				if atWait == "" {
-					atWait = out.String()
-				}
-				if tt.err != nil {
-					return key(keyNone), tt.err
-				}
-				if next >= len(tt.events) {
-					t.Fatalf("popup still open after every scripted event")
-				}
-				event := tt.events[next]
-				next++
-				return event, nil
-			})
+			run := runConfirmPopup(t, tt.events, tt.err)
 
-			if got != tt.want {
-				t.Errorf("drawConfirmPopup = %v, want %v", got, tt.want)
+			if run.confirmed != tt.want {
+				t.Errorf("drawConfirmPopup = %v, want %v", run.confirmed, tt.want)
 			}
-			if next != len(tt.events) {
-				t.Errorf("popup decided after %d of %d events", next, len(tt.events))
+			if run.read != len(tt.events) {
+				t.Errorf("popup decided after %d of %d events", run.read, len(tt.events))
 			}
-			if !strings.Contains(atWait, "enter switch · q cancel") {
-				t.Errorf("popup drawn without the confirm footer: %q", atWait)
+			drawn := run.atWait[0]
+			for _, text := range []string{confirmSwitchLabel + confirmButtonGap + confirmCancelLabel, "enter switch · q cancel"} {
+				if !strings.Contains(drawn, text) {
+					t.Errorf("popup drawn without %q: %q", text, drawn)
+				}
 			}
-			if !strings.Contains(atWait, escMouseOn) {
-				t.Errorf("mouse reporting not on while waiting: %q", atWait)
+			if strings.Contains(drawn, cBoldCyan) {
+				t.Errorf("a button is highlighted before the pointer moved: %q", drawn)
 			}
-			tail := strings.TrimPrefix(out.String(), atWait)
+			if !strings.Contains(drawn, escMouseTrackOn) {
+				t.Errorf("motion tracking not on at the first wait: %q", drawn)
+			}
+			tail := run.writtenAfterWait(len(run.atWait) - 1)
 			if !strings.Contains(tail, escCursorShow) || !strings.Contains(tail, escClear) {
 				t.Errorf("popup not cleared or cursor not restored: %q", tail)
 			}
 			assertMouseOffBeforeCursorShow(t, tail)
 		})
 	}
+}
+
+// TestSwitchModel_ConfirmPopupHover pins the button highlight: the button
+// under the pointer is repainted in the selection colour, neither is once the
+// pointer leaves, a hover that changes nothing writes nothing, and hovering
+// decides nothing — enter still confirms.
+func TestSwitchModel_ConfirmPopupHover(t *testing.T) {
+	t.Parallel()
+
+	layout := drawConfirmFrame(io.Discard, "Big", []string{"row"}, confirmButtonNone)
+	hover := func(x, y int) inputEvent { return inputEvent{key: keyHover, x: x, y: y} }
+	overSwitch := hover(layout.switchButton.col, layout.switchButton.row)
+	overCancel := hover(layout.cancelButton.col, layout.cancelButton.row)
+	overBox := hover(layout.box.col, layout.box.row)
+	plainRow := confirmSwitchLabel + confirmButtonGap + confirmCancelLabel
+	switchLit := cBoldCyan + confirmSwitchLabel + cReset + confirmButtonGap + confirmCancelLabel
+	cancelLit := confirmSwitchLabel + confirmButtonGap + cBoldCyan + confirmCancelLabel + cReset
+
+	tests := []struct {
+		name string
+		// events are followed by an enter; wantWritten[i] is the button row
+		// the popup must repaint after events[i], or "" for no output at all.
+		events      []inputEvent
+		wantWritten []string
+	}{
+		{name: "hover over switch highlights it", events: []inputEvent{overSwitch}, wantWritten: []string{switchLit}},
+		{name: "hover over cancel highlights it", events: []inputEvent{overCancel}, wantWritten: []string{cancelLit}},
+		{name: "hover elsewhere writes nothing", events: []inputEvent{overBox, hover(1, 1)}, wantWritten: []string{"", ""}},
+		{name: "hover within one button writes nothing", events: []inputEvent{overSwitch, hover(overSwitch.x+1, overSwitch.y)}, wantWritten: []string{switchLit, ""}},
+		{name: "highlight moves between the buttons", events: []inputEvent{overSwitch, overCancel}, wantWritten: []string{switchLit, cancelLit}},
+		{name: "highlight clears when the pointer leaves", events: []inputEvent{overCancel, overBox}, wantWritten: []string{cancelLit, plainRow}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			events := append(append([]inputEvent{}, tt.events...), inputEvent{key: keyEnter})
+
+			run := runConfirmPopup(t, events, nil)
+
+			if !run.confirmed {
+				t.Errorf("enter after hovering did not confirm")
+			}
+			for i, want := range tt.wantWritten {
+				written := run.writtenAfterWait(i)
+				if want == "" && written != "" {
+					t.Errorf("event %d changed nothing but wrote %q", i, written)
+				}
+				if want != "" && !strings.Contains(written, want) {
+					t.Errorf("event %d: button row %q not repainted: %q", i, want, written)
+				}
+			}
+		})
+	}
+}
+
+// TestConfirmPopupButtonRects pins the button hit rectangles against the
+// drawn popup: each rect is one row high, as wide as its label, and sits on
+// the cells where the label appears once the output's escapes are stripped;
+// the row is centred in the box, whichever line sets the box width and
+// whichever button is highlighted.
+func TestConfirmPopupButtonRects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		title   string
+		lines   []string
+		hovered confirmButton
+	}{
+		{name: "buttons set the width", title: "Big", lines: []string{"row"}},
+		{name: "a long line sets the width", title: "Big", lines: []string{"a line much wider than the two buttons side by side"}},
+		{name: "an even-width line sets the width", title: "Big", lines: []string{"a line much wider than the two buttons side by side!"}},
+		{name: "the title sets the width", title: "A title much wider than the two buttons side by side", lines: []string{"row"}},
+		{name: "a line names a button", title: "Big", lines: []string{"press [ Switch ] or [ Cancel ]"}},
+		{name: "switch highlighted", title: "Big", lines: []string{"row"}, hovered: confirmButtonSwitch},
+		{name: "cancel highlighted", title: "Big", lines: []string{"row"}, hovered: confirmButtonCancel},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+
+			layout := drawConfirmFrame(&out, tt.title, tt.lines, tt.hovered)
+
+			row, col := lastDrawnCell(t, out.String(), confirmSwitchLabel+confirmButtonGap+confirmCancelLabel)
+			labelWidth := visibleWidth(confirmSwitchLabel)
+			wantSwitch := screenRect{row: row, col: col, width: labelWidth, height: 1}
+			wantCancel := screenRect{row: row, col: col + labelWidth + visibleWidth(confirmButtonGap), width: visibleWidth(confirmCancelLabel), height: 1}
+			if layout.switchButton != wantSwitch {
+				t.Errorf("switch button rect %+v, drawn at %+v", layout.switchButton, wantSwitch)
+			}
+			if layout.cancelButton != wantCancel {
+				t.Errorf("cancel button rect %+v, drawn at %+v", layout.cancelButton, wantCancel)
+			}
+			left := wantSwitch.col - layout.box.col
+			right := layout.box.col + layout.box.width - (wantCancel.col + wantCancel.width)
+			if left-right > 1 || right-left > 1 {
+				t.Errorf("button row not centred: %d cells left of it, %d right", left, right)
+			}
+			footerRow, _ := lastDrawnCell(t, out.String(), "enter switch · q cancel")
+			if row <= layout.box.row+len(tt.lines) || row >= footerRow {
+				t.Errorf("button row %d not between the popup lines and the footer row %d", row, footerRow)
+			}
+		})
+	}
+}
+
+// sgrSequence matches one colour or attribute escape.
+var sgrSequence = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// lastDrawnCell returns the 1-based row and column of the first cell of text
+// on the lowest line of output that shows it, reading output as drawPopup
+// writes it: one cursor position per line, colour escapes stripped. It fails
+// t when no line shows text.
+func lastDrawnCell(t *testing.T, output, text string) (row, col int) {
+	t.Helper()
+
+	positions := regexp.MustCompile(`\x1b\[(\d+);(\d+)H([^\x1b]*(?:\x1b\[[0-9;]*m[^\x1b]*)*)`).FindAllStringSubmatch(output, -1)
+	for i := len(positions) - 1; i >= 0; i-- {
+		plain := sgrSequence.ReplaceAllString(positions[i][3], "")
+		at := strings.Index(plain, text)
+		if at < 0 {
+			continue
+		}
+		lineRow, rowErr := strconv.Atoi(positions[i][1])
+		lineCol, colErr := strconv.Atoi(positions[i][2])
+		if rowErr != nil || colErr != nil {
+			t.Fatalf("unreadable cursor position %q", positions[i][0])
+		}
+		return lineRow, lineCol + len([]rune(plain[:at]))
+	}
+	t.Fatalf("%q not drawn: %q", text, output)
+	return 0, 0
 }
 
 // TestAwaitDismiss pins what closes an any-key popup: a key, a click or a

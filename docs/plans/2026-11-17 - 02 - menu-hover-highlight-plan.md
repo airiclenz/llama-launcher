@@ -79,7 +79,11 @@ Depends on item 1.
 - `go test ./internal/launcher/ -run 'HoverSelection|MenuItemAt|SelectMenu|MenuRawRestore|MenuRawEnter|MenuStep|RemainingWait'`
 **Commit:** `feat(menu): move the selection to the row under the pointer`
 
-## 3. Switch model confirmation buttons
+## 3. Switch model confirmation buttons — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): the hover cases the plan lists under the rewritten `TestSwitchModel_ConfirmPopup` live in a sibling table test, `TestSwitchModel_ConfirmPopupHover` (same Acceptance pattern), so each table keeps one assertion shape; both share the `runConfirmPopup` helper.
+NOTES (2026-11-17): the shared placement helper (`placePopup`) both computes the start row/col and writes the lines, and the button rects are read back from the rendered frame lines (`labelRect`) rather than computed from the layout arithmetic; the row is centred against the box by rendering once unindented to learn the box width.
+NOTES (2026-11-17): pre-existing, untouched: `menu.go` (~808) and `progress.go` (~166) carry their own copies of the popup placement arithmetic that `placePopup` now owns in `ui.go`.
 
 Depends on item 1.
 

@@ -501,10 +501,12 @@ func drawPopupAndWait(w io.Writer, title string, lines []string, wait func() err
 	}
 }
 
-// confirmPopup shows a popup asking to confirm a model switch and reports
-// whether it was confirmed. It holds stdin in raw mode for the whole popup so
-// mouse reporting is off again before the terminal is restored. Outside a
-// terminal, or when raw mode cannot be entered, it confirms nothing.
+// confirmPopup shows a popup asking to confirm a model switch, with a
+// [ Switch ] and a [ Cancel ] button, and reports whether it was confirmed;
+// see drawConfirmPopup for what confirms and what cancels. It holds stdin in
+// raw mode for the whole popup so mouse reporting is off again before the
+// terminal is restored. Outside a terminal, or when raw mode cannot be
+// entered, it confirms nothing.
 func confirmPopup(title string, lines []string) bool {
 	if !isTerminal() {
 		return false
@@ -529,19 +531,68 @@ func readInputRaw() (inputEvent, error) {
 	return readInput(), nil
 }
 
-// drawConfirmPopup renders a popup with an "enter switch · q cancel" footer
-// to w, turns on mouse reporting and reads input events with wait until one
-// decides: enter, or a left click inside the popup box, confirms; q, esc,
-// ctrl-c, an unreadable key and a wait failure (raw mode unavailable) all
-// cancel; navigation and digit keys, a click outside the box, the wheel and
-// ignored mouse reports change nothing. Like drawPopupAndWait it clears the
-// popup, turns mouse reporting off and restores the cursor on every return
-// path.
+const (
+	confirmSwitchLabel = "[ Switch ]"
+	confirmCancelLabel = "[ Cancel ]"
+	confirmButtonGap   = "  "
+	confirmFooter      = "enter switch · q cancel"
+
+	// popupPadding is the blank cells a popup frame keeps left of its
+	// content; popupBorderWidth is the width of the border glyph before them.
+	popupPadding     = 2
+	popupBorderWidth = 1
+)
+
+// confirmButton names a button of the Switch model confirmation popup, or
+// none of them.
+type confirmButton int
+
+const (
+	confirmButtonNone confirmButton = iota
+	confirmButtonSwitch
+	confirmButtonCancel
+)
+
+// confirmLayout is where one draw of the Switch model confirmation popup put
+// its box (border included) and its two buttons. A button's rect is its label
+// including the brackets, one row high.
+type confirmLayout struct {
+	box          screenRect
+	switchButton screenRect
+	cancelButton screenRect
+}
+
+// buttonAt returns the button drawn on the 1-based cell at column x, row y,
+// or confirmButtonNone when the cell belongs to neither.
+func (l confirmLayout) buttonAt(x, y int) confirmButton {
+	switch {
+	case l.switchButton.contains(x, y):
+		return confirmButtonSwitch
+	case l.cancelButton.contains(x, y):
+		return confirmButtonCancel
+	default:
+		return confirmButtonNone
+	}
+}
+
+// drawConfirmPopup renders the Switch model confirmation popup — lines, one
+// centred row of [ Switch ] and [ Cancel ] buttons and an "enter switch · q
+// cancel" footer — to w, turns on mouse reporting with motion tracking and
+// reads input events with wait until one decides: enter, or a left click on
+// [ Switch ], confirms; q, esc, ctrl-c, an unreadable key, a wait failure
+// (raw mode unavailable) and a left click on [ Cancel ] all cancel;
+// navigation and digit keys, a click anywhere else — inside or outside the
+// box — the wheel and ignored mouse reports change nothing. The button under
+// the pointer is drawn highlighted; the popup is repainted in place only when
+// that button changes. The buttons take no keyboard focus. Like
+// drawPopupAndWait it clears the popup, turns mouse reporting off and
+// restores the cursor on every return path.
 func drawConfirmPopup(w io.Writer, title string, lines []string, wait func() (inputEvent, error)) bool {
 	defer fmt.Fprint(w, escClear+escMouseOff+escCursorShow)
 
-	box := drawPopup(w, title, lines, "enter switch · q cancel")
-	fmt.Fprint(w, escMouseOn)
+	hovered := confirmButtonNone
+	layout := drawConfirmFrame(w, title, lines, hovered)
+	fmt.Fprint(w, escMouseTrackOn)
 
 	for {
 		ev, err := wait()
@@ -551,14 +602,88 @@ func drawConfirmPopup(w io.Writer, title string, lines []string, wait func() (in
 		switch ev.key {
 		case keyEnter:
 			return true
-		case keyClick:
-			if box.contains(ev.x, ev.y) {
-				return true
-			}
 		case keyQ, keyEscape, keyCtrlC, keyNone:
 			return false
+		case keyClick:
+			if clicked := layout.buttonAt(ev.x, ev.y); clicked != confirmButtonNone {
+				return clicked == confirmButtonSwitch
+			}
+		case keyHover:
+			if pointed := layout.buttonAt(ev.x, ev.y); pointed != hovered {
+				hovered = pointed
+				layout = drawConfirmFrame(w, title, lines, hovered)
+			}
 		}
 	}
+}
+
+// drawConfirmFrame draws the Switch model confirmation popup to w with the
+// hovered button highlighted, and returns where the box and the buttons
+// landed. The button rects are read back from the rendered frame lines, so
+// they are the cells the labels were drawn on.
+func drawConfirmFrame(w io.Writer, title string, lines []string, hovered confirmButton) confirmLayout {
+	popupLines := renderConfirmFrame(title, lines, hovered)
+	box := placePopup(w, popupLines)
+
+	return confirmLayout{
+		box:          box,
+		switchButton: labelRect(popupLines, box, confirmSwitchLabel),
+		cancelButton: labelRect(popupLines, box, confirmCancelLabel),
+	}
+}
+
+// renderConfirmFrame renders the confirmation popup's frame lines: lines, a
+// blank row, the button row centred in the box, a blank row and the dimmed
+// footer.
+func renderConfirmFrame(title string, lines []string, hovered confirmButton) []string {
+	render := func(buttonRow string) []string {
+		body := append([]string{}, lines...)
+		body = append(body, "", buttonRow, "", cDim+confirmFooter+cReset)
+		return renderPopupFrame(title, body)
+	}
+
+	// The frame sizes itself to its widest line, so the row is rendered once
+	// unindented to learn the box width, then again indented to its centre.
+	buttonRow := confirmButtonRow(hovered)
+	boxWidth := visibleWidth(render(buttonRow)[0])
+	indent := (boxWidth-visibleWidth(buttonRow))/2 - popupBorderWidth - popupPadding
+	if indent < 0 {
+		indent = 0
+	}
+	return render(strings.Repeat(" ", indent) + buttonRow)
+}
+
+// confirmButtonRow returns the "[ Switch ]  [ Cancel ]" row with the hovered
+// button in the selection colour and the other plain.
+func confirmButtonRow(hovered confirmButton) string {
+	paint := func(button confirmButton, label string) string {
+		if button != hovered {
+			return label
+		}
+		return cBoldCyan + label + cReset
+	}
+	return paint(confirmButtonSwitch, confirmSwitchLabel) +
+		confirmButtonGap +
+		paint(confirmButtonCancel, confirmCancelLabel)
+}
+
+// labelRect returns the cells label occupies in the lowest of popupLines that
+// holds it, given the box those lines were drawn in. It is the zero rect,
+// which contains no cell, when no line holds label.
+func labelRect(popupLines []string, box screenRect, label string) screenRect {
+	for i := len(popupLines) - 1; i >= 0; i-- {
+		at := strings.Index(popupLines[i], label)
+		if at < 0 {
+			continue
+		}
+		return screenRect{
+			row:    box.row + i,
+			col:    box.col + visibleWidth(popupLines[i][:at]),
+			width:  visibleWidth(label),
+			height: 1,
+		}
+	}
+	return screenRect{}
 }
 
 // screenRect is a box on the terminal: its top-left cell as a 1-based row and
@@ -579,10 +704,23 @@ func drawPopup(w io.Writer, title string, lines []string, footer string) screenR
 	body := append([]string{}, lines...)
 	body = append(body, "", fmt.Sprintf("%s%s%s", cDim, footer, cReset))
 
-	f := Frame{Title: title, Padding: 2, BorderColor: cLightGray}
-	rendered := f.Render(body)
-	popupLines := strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+	return placePopup(w, renderPopupFrame(title, body))
+}
 
+// renderPopupFrame renders body in a popup frame under title and returns the
+// frame's lines, top border first.
+func renderPopupFrame(title string, body []string) []string {
+	f := Frame{Title: title, Padding: popupPadding, BorderColor: cLightGray}
+	rendered := f.Render(body)
+	return strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
+}
+
+// placePopup writes popupLines to w centred on the last menu (or the
+// terminal), hides the cursor and returns the box they cover, border
+// included. The same lines always land on the same cells while the menu and
+// the terminal keep their size, so a popup is repainted in place by placing
+// it again.
+func placePopup(w io.Writer, popupLines []string) screenRect {
 	popupWidth := visibleWidth(popupLines[0])
 
 	var startCol, startRow int
