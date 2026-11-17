@@ -16,9 +16,13 @@ const (
 	escCursorShow = "\033[?25h"
 
 	// escMouseOn turns on click and wheel reporting (1000) in SGR encoding
-	// (1006); escMouseOff turns both off again, in reverse order.
-	escMouseOn  = "\033[?1000h\033[?1006h"
-	escMouseOff = "\033[?1006l\033[?1000l"
+	// (1006); escMouseTrackOn adds any-motion tracking (1003) to them, so the
+	// pointer is reported as it moves. escMouseOff is the one off-switch for
+	// both: it turns all three modes off in reverse order, and switching off
+	// a mode that is not on is harmless.
+	escMouseOn      = "\033[?1000h\033[?1006h"
+	escMouseTrackOn = "\033[?1000h\033[?1003h\033[?1006h"
+	escMouseOff     = "\033[?1006l\033[?1003l\033[?1000l"
 
 	cReset         = "\033[0m"
 	cDim           = "\033[2m"
@@ -39,13 +43,15 @@ const (
 	keyCtrlC  keyCode = -5
 	keyQ      keyCode = -6
 
-	// The mouse events decodeInput reports: a left-button press (with its
-	// position on the inputEvent), the two wheel directions, and every other
-	// mouse report — release, motion, other buttons — which callers ignore.
+	// The mouse events decodeInput reports: a left-button press and pointer
+	// motion (each with its position on the inputEvent), the two wheel
+	// directions, and every other mouse report — release, other buttons —
+	// which callers ignore.
 	keyClick        keyCode = -7
 	keyWheelUp      keyCode = -8
 	keyWheelDown    keyCode = -9
 	keyMouseIgnored keyCode = -10
+	keyHover        keyCode = -11
 )
 
 type menuItem struct {
@@ -381,10 +387,14 @@ func waitForAnyKey() error {
 // awaitDismiss reads input events with read until one closes an any-key
 // popup: every key, a click anywhere and a wheel notch close it; a mouse
 // report the decoder ignores — a button release above all, which follows
-// every click — never does.
+// every click — never does, and neither does pointer motion: a keyHover
+// still queued from the menu's motion tracking must not close the popup the
+// click opened.
 func awaitDismiss(read func() inputEvent) {
 	for {
-		if read().key != keyMouseIgnored {
+		switch read().key {
+		case keyMouseIgnored, keyHover:
+		default:
 			return
 		}
 	}

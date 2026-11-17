@@ -39,7 +39,11 @@
 - Changing the terminal's pointer shape; drag selection; scrolling long lists; keyboard focus on popup buttons.
 - Windows (the menu is refused there).
 
-## 1. Decode pointer motion
+## 1. Decode pointer motion — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): consequential edit — llama-launcher.TDD.md: made necessary by decodeSGRMouse decoding motion to keyHover (the `ui_input.go` file-table row said every report but a left press and the wheel is `keyMouseIgnored`, and that x,y belong to a click only)
+NOTES (2026-11-17): the plan's Tests line gives no consumed count for the added rows; `\x1b[<32;3;4M` is 10 bytes, `\x1b[<35;12;7M` / `...m` 11, `\x1b[<0;5;6M` 9, the two wheel rows 10
+NOTES (2026-11-17): no CHANGELOG entry — nothing enables `escMouseTrackOn` yet, so the item changes nothing a user can observe
 
 **What:**
 **Goal:** `decodeInput` decodes an SGR mouse report whose button value has the motion bit (32) set and whose final byte is `M` to `inputEvent{key: keyHover, x, y}` with the report's 1-based column and row, whether or not a button is held; every report without the motion bit decodes as it did. `ui.go` carries `escMouseTrackOn` (modes 1000, 1003, 1006 on) and `escMouseOff` switches 1003 off as well as 1006 and 1000. `awaitDismiss` reads past `keyHover` exactly as it reads past `keyMouseIgnored`.

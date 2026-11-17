@@ -258,7 +258,7 @@ func TestSwitchModel_ConfirmPopup(t *testing.T) {
 
 // TestAwaitDismiss pins what closes an any-key popup: a key, a click or a
 // wheel notch closes it at once; ignored mouse reports — a button release
-// above all — are read past without closing it.
+// above all — and pointer motion are read past without closing it.
 func TestAwaitDismiss(t *testing.T) {
 	t.Parallel()
 
@@ -273,6 +273,7 @@ func TestAwaitDismiss(t *testing.T) {
 		{name: "wheel up closes", events: []keyCode{keyWheelUp}, wantRead: 1},
 		{name: "wheel down closes", events: []keyCode{keyWheelDown}, wantRead: 1},
 		{name: "release does not close", events: []keyCode{keyMouseIgnored, keyMouseIgnored, keyClick}, wantRead: 3},
+		{name: "hover does not close", events: []keyCode{keyHover, keyHover, keyClick}, wantRead: 3},
 	}
 
 	for _, tt := range tests {
@@ -328,7 +329,13 @@ func TestDecodeInput(t *testing.T) {
 		{name: "wheel up", input: "\x1b[<64;10;3M", wantEvent: inputEvent{key: keyWheelUp}, wantConsumed: 11, wantComplete: true},
 		{name: "wheel down", input: "\x1b[<65;10;3M", wantEvent: inputEvent{key: keyWheelDown}, wantConsumed: 11, wantComplete: true},
 		{name: "left release", input: "\x1b[<0;5;7m", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 9, wantComplete: true},
-		{name: "motion", input: "\x1b[<35;5;7M", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 10, wantComplete: true},
+		{name: "motion", input: "\x1b[<35;5;7M", wantEvent: inputEvent{key: keyHover, x: 5, y: 7}, wantConsumed: 10, wantComplete: true},
+		{name: "motion with multi-digit column", input: "\x1b[<35;12;7M", wantEvent: inputEvent{key: keyHover, x: 12, y: 7}, wantConsumed: 11, wantComplete: true},
+		{name: "motion with left held", input: "\x1b[<32;3;4M", wantEvent: inputEvent{key: keyHover, x: 3, y: 4}, wantConsumed: 10, wantComplete: true},
+		{name: "motion with release final byte", input: "\x1b[<35;12;7m", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 11, wantComplete: true},
+		{name: "left click without motion bit", input: "\x1b[<0;5;6M", wantEvent: inputEvent{key: keyClick, x: 5, y: 6}, wantConsumed: 9, wantComplete: true},
+		{name: "wheel up at origin", input: "\x1b[<64;1;1M", wantEvent: inputEvent{key: keyWheelUp}, wantConsumed: 10, wantComplete: true},
+		{name: "wheel down at origin", input: "\x1b[<65;1;1M", wantEvent: inputEvent{key: keyWheelDown}, wantConsumed: 10, wantComplete: true},
 		{name: "right click", input: "\x1b[<2;5;7M", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 9, wantComplete: true},
 		{name: "malformed mouse report", input: "\x1b[<0;5M", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 7, wantComplete: true},
 		{name: "split mouse report", input: "\x1b[<0;12", wantComplete: false},

@@ -8,8 +8,8 @@ import (
 )
 
 // inputEvent is one decoded unit of raw-mode stdin: a key, or a mouse report.
-// x and y are the 1-based terminal column and row of a keyClick; every other
-// event leaves them zero.
+// x and y are the 1-based terminal column and row of a keyClick or a
+// keyHover; every other event leaves them zero.
 type inputEvent struct {
 	key  keyCode
 	x, y int
@@ -39,6 +39,7 @@ const (
 	maxEscapeSequenceLength = 32
 
 	sgrButtonLeft      = 0
+	sgrMotionBit       = 32 // set when the report is for pointer motion, a button held or not
 	sgrButtonWheelUp   = 64
 	sgrButtonWheelDown = 65
 	sgrPress           = 'M'
@@ -59,8 +60,8 @@ var pendingInput []byte
 // sequence (consumed is then 0), so the caller must read more bytes before
 // decoding again. A lone ESC ending buf is a complete keyEscape. Every other
 // escape sequence is consumed whole: an SGR mouse report decodes to keyClick,
-// keyWheelUp, keyWheelDown or keyMouseIgnored, the arrow keys to keyUp and
-// keyDown, and anything else to keyNone. An empty buf is incomplete.
+// keyHover, keyWheelUp, keyWheelDown or keyMouseIgnored, the arrow keys to
+// keyUp and keyDown, and anything else to keyNone. An empty buf is incomplete.
 func decodeInput(buf []byte) (ev inputEvent, consumed int, complete bool) {
 	if len(buf) == 0 {
 		return inputEvent{}, 0, false
@@ -145,9 +146,10 @@ func decodeCSI(buf []byte) (inputEvent, int, bool) {
 }
 
 // decodeSGRMouse decodes the parameters ("button;x;y") and final byte of an
-// SGR mouse report. A left-button press is keyClick at x,y; button 64 and 65
-// presses are the wheel; a release, motion, any other button or a malformed
-// report is keyMouseIgnored.
+// SGR mouse report. A report with the motion bit set is keyHover at x,y,
+// whether or not a button is held; a left-button press is keyClick at x,y;
+// button 64 and 65 presses are the wheel; a release, any other button or a
+// malformed report is keyMouseIgnored.
 func decodeSGRMouse(params []byte, final byte) inputEvent {
 	ignored := inputEvent{key: keyMouseIgnored}
 	if final != sgrPress {
@@ -165,6 +167,10 @@ func decodeSGRMouse(params []byte, final byte) inputEvent {
 			return ignored
 		}
 		values = append(values, value)
+	}
+
+	if values[0]&sgrMotionBit != 0 {
+		return inputEvent{key: keyHover, x: values[1], y: values[2]}
 	}
 
 	switch values[0] {
