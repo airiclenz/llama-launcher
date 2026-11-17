@@ -98,7 +98,11 @@ Depends on item 1.
 - `go test ./internal/launcher/ -run 'ConfirmPopup|DrawPopup|AwaitDismiss|SwitchModel'`
 **Commit:** `feat(menu): confirm a model switch with hover-highlighted buttons`
 
-## 4. Document hover and the confirmation buttons
+## 4. Document hover and the confirmation buttons — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): no CHANGELOG entry from this item — it only documents behaviour whose entries items 2 and 3 carry in their own sidecars.
+NOTES (2026-11-17): the TDD `ui_input.go` file-table row was left as is — item 1's consequential edit already names `keyHover` and pointer motion there.
+NOTES (2026-11-17): the TDD `ui.go` row also names `menuRawEnter`, `menuStep`, `remainingWait`, `placePopup` and `labelRect`, the symbols items 2 and 3 landed beyond those the plan's Approach lists.
 
 Depends on items 2 and 3.
 
