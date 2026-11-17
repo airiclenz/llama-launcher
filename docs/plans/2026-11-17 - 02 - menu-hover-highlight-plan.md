@@ -57,7 +57,13 @@ NOTES (2026-11-17): no CHANGELOG entry — nothing enables `escMouseTrackOn` yet
 - `go test ./internal/launcher/ -run 'DecodeInput|AwaitDismiss|MenuRawRestore|DrawPopup|ConfirmPopup'`
 **Commit:** `feat(menu): decode pointer motion reports`
 
-## 2. Selection follows the pointer in the menu
+## 2. Selection follows the pointer in the menu — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): `menuStep` returns four values (selected, repaint, result, done) rather than the three the item sketches — the extra `done` flag says whether `result` is set, since every int is either a valid index or an existing sentinel (-1 quit, -2 stale).
+NOTES (2026-11-17): `menuStep` treats an elapsed wait (`keyNone`) as "nothing visible changed" alongside unchanged hover and `keyMouseIgnored`; the refresh deadline, not the event, triggers that repaint. A missed click, an unknown key and a digit past the last item still repaint as before.
+NOTES (2026-11-17): the digit-key lookup moved out of `selectMenu` into a helper `digitItem` (called by `menuStep`) with unchanged behaviour, to keep `menuStep` flat.
+NOTES (2026-11-17): `selectMenu` always reads input once per repaint before consulting the deadline, so a zero or negative `refresh` still polls input as it did before.
+NOTES (2026-11-17): the TDD `ui.go` row still describes click-and-wheel only; item 4 owns that documentation, so it was left untouched here.
 
 Depends on item 1.
 

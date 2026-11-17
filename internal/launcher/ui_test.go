@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRenderMenuRowsMultibyteLabelColumn pins the label-column measurement of
@@ -540,5 +541,161 @@ func TestMenuRawRestore(t *testing.T) {
 
 	if got, want := out.String(), escMouseOff+escCursorShow; got != want {
 		t.Errorf("menuRawRestore wrote %q, want %q", got, want)
+	}
+}
+
+// TestHoverSelection pins where the selection goes when the pointer moves: onto
+// the selectable row under it, and nowhere for a separator, the title, the
+// header, the footer or a position outside the frame.
+func TestHoverSelection(t *testing.T) {
+	t.Parallel()
+
+	items, geometry := hoverFixture()
+	const selected = 3
+	tests := []struct {
+		name string
+		x, y int
+		want int
+	}{
+		{name: "selectable row", x: 40, y: hoverFirstBodyRow, want: 0},
+		{name: "another selectable row", x: 40, y: hoverFirstBodyRow + 2, want: 2},
+		{name: "already selected row", x: 40, y: hoverFirstBodyRow + 3, want: selected},
+		{name: "first frame column of a row", x: geometry.left, y: hoverFirstBodyRow, want: 0},
+		{name: "last frame column of a row", x: geometry.right, y: hoverFirstBodyRow, want: 0},
+		{name: "separator", x: 40, y: hoverFirstBodyRow + 1, want: selected},
+		{name: "header above the body", x: 40, y: hoverFirstBodyRow - 1, want: selected},
+		{name: "title above the body", x: 40, y: hoverStartRow + 1, want: selected},
+		{name: "footer below the body", x: 40, y: hoverFirstBodyRow + len(items), want: selected},
+		{name: "left of the frame", x: geometry.left - 1, y: hoverFirstBodyRow, want: selected},
+		{name: "right of the frame", x: geometry.right + 1, y: hoverFirstBodyRow, want: selected},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := hoverSelection(geometry, items, selected, tc.x, tc.y); got != tc.want {
+				t.Errorf("hoverSelection(x=%d, y=%d) = %d, want %d", tc.x, tc.y, got, tc.want)
+			}
+		})
+	}
+}
+
+// hoverStartRow and hoverFirstBodyRow are where hoverFixture's frame starts and
+// where its first item is drawn: below the top border, the title rule, two
+// header lines and their divider.
+const (
+	hoverStartRow     = 9
+	hoverFirstBodyRow = hoverStartRow + 5
+)
+
+// hoverFixture returns the items and geometry the hover and step tests share:
+// the TestMenuItemAt items in a titled, two-line-header frame drawn at a
+// centered origin.
+func hoverFixture() ([]menuItem, menuGeometry) {
+	items := []menuItem{
+		{Label: "alpha", Description: "first"},
+		{Separator: true},
+		{Label: "bravo", Description: "second"},
+		{Label: "charlie", Description: "last"},
+	}
+	frame := Frame{Title: "Profiles", Header: []string{"status", "model"}, Footer: []string{"hints"}, RawMode: true}
+	lines := strings.Split(strings.TrimSuffix(frame.Render(renderMenuRows(items, 0)), "\r\n"), "\r\n")
+	return items, newMenuGeometry(frame, hoverStartRow, 31, visibleWidth(lines[0]))
+}
+
+// TestMenuRawEnter pins the mouse mode selectMenu turns on: click and wheel
+// reporting plus any-motion tracking, without which no hover is ever reported.
+func TestMenuRawEnter(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	menuRawEnter(&out)
+
+	if got, want := out.String(), escMouseTrackOn; got != want {
+		t.Errorf("menuRawEnter wrote %q, want %q", got, want)
+	}
+}
+
+// TestMenuStep pins what each input event does to the open menu: which events
+// leave the screen alone, which move the selection and repaint, and which end
+// the menu with a result.
+func TestMenuStep(t *testing.T) {
+	t.Parallel()
+
+	items, geometry := hoverFixture()
+	const selected = 2
+	onRow := func(key keyCode, row int) inputEvent {
+		return inputEvent{key: key, x: geometry.left + 1, y: hoverFirstBodyRow + row}
+	}
+	tests := []struct {
+		name         string
+		event        inputEvent
+		wantSelected int
+		wantRepaint  bool
+		wantResult   int
+		wantDone     bool
+	}{
+		{name: "hover on the selected row", event: onRow(keyHover, 2), wantSelected: selected},
+		{name: "hover on a separator", event: onRow(keyHover, 1), wantSelected: selected},
+		{name: "hover outside the frame", event: inputEvent{key: keyHover, x: geometry.right + 1, y: hoverFirstBodyRow}, wantSelected: selected},
+		{name: "ignored mouse report", event: inputEvent{key: keyMouseIgnored}, wantSelected: selected},
+		{name: "elapsed wait", event: inputEvent{key: keyNone}, wantSelected: selected},
+		{name: "hover onto another row", event: onRow(keyHover, 0), wantSelected: 0, wantRepaint: true},
+		{name: "wheel up", event: inputEvent{key: keyWheelUp}, wantSelected: 0, wantRepaint: true},
+		{name: "wheel down", event: inputEvent{key: keyWheelDown}, wantSelected: 3, wantRepaint: true},
+		{name: "arrow up", event: inputEvent{key: keyUp}, wantSelected: 0, wantRepaint: true},
+		{name: "arrow down", event: inputEvent{key: keyDown}, wantSelected: 3, wantRepaint: true},
+		{name: "click on a row", event: onRow(keyClick, 3), wantSelected: selected, wantResult: 3, wantDone: true},
+		{name: "click on a separator", event: onRow(keyClick, 1), wantSelected: selected, wantRepaint: true},
+		{name: "enter", event: inputEvent{key: keyEnter}, wantSelected: selected, wantResult: selected, wantDone: true},
+		{name: "q", event: inputEvent{key: keyQ}, wantSelected: selected, wantResult: -1, wantDone: true},
+		{name: "escape", event: inputEvent{key: keyEscape}, wantSelected: selected, wantResult: -1, wantDone: true},
+		{name: "ctrl+c", event: inputEvent{key: keyCtrlC}, wantSelected: selected, wantResult: -1, wantDone: true},
+		{name: "digit skips the separator", event: inputEvent{key: keyCode('2')}, wantSelected: selected, wantResult: 2, wantDone: true},
+		{name: "digit past the last item", event: inputEvent{key: keyCode('9')}, wantSelected: selected, wantRepaint: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			next, repaint, result, done := menuStep(tc.event, geometry, items, selected)
+
+			if next != tc.wantSelected || repaint != tc.wantRepaint || done != tc.wantDone {
+				t.Errorf("menuStep = (selected %d, repaint %v, done %v), want (%d, %v, %v)", next, repaint, done, tc.wantSelected, tc.wantRepaint, tc.wantDone)
+			}
+			if done && result != tc.wantResult {
+				t.Errorf("menuStep result = %d, want %d", result, tc.wantResult)
+			}
+		})
+	}
+}
+
+// TestRemainingWait pins the refresh deadline arithmetic: time is left before
+// the deadline and none at or past it, so a stream of pointer motion cannot
+// postpone the next refresh.
+func TestRemainingWait(t *testing.T) {
+	t.Parallel()
+
+	deadline := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Duration
+	}{
+		{name: "before the deadline", now: deadline.Add(-300 * time.Millisecond), want: 300 * time.Millisecond},
+		{name: "at the deadline", now: deadline, want: 0},
+		{name: "past the deadline", now: deadline.Add(2 * time.Second), want: -2 * time.Second},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := remainingWait(deadline, tc.now); got != tc.want {
+				t.Errorf("remainingWait = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

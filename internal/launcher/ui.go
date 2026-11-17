@@ -86,11 +86,14 @@ const idxMenuStale = -2
 // selectMenu renders an interactive item picker and blocks until the user
 // chooses an entry (returns its index), quits (returns -1), or headerFn
 // reports the menu stale (returns idxMenuStale). headerFn runs once per
-// refresh tick and on every input event; it returns the header lines plus a
-// flag marking the menu stale. Mouse reporting is on while the menu holds raw
-// mode: a left click on a selectable row chooses it as Enter would, a wheel
-// notch moves the selection as Up/Down do, and every other mouse report is
-// ignored. Both modes are undone on every return path, mouse first.
+// refresh tick and before every repaint; it returns the header lines plus a
+// flag marking the menu stale. Mouse reporting with pointer tracking is on
+// while the menu holds raw mode (menuRawEnter): the selection follows the
+// pointer onto the selectable row under it, a left click on a selectable row
+// chooses it as Enter would, a wheel notch moves the selection as Up/Down do,
+// and every other mouse report is ignored. An event that changes nothing
+// visible (menuStep) causes no repaint and does not postpone the refresh tick.
+// Both modes are undone on every return path, mouse first.
 func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem, hints string, centered bool, refresh time.Duration) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
@@ -105,7 +108,7 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 		menuRawRestore(os.Stdout)
 		term.Restore(fd, oldState)
 	}()
-	os.Stdout.WriteString(escMouseOn)
+	menuRawEnter(os.Stdout)
 
 	selected := firstSelectable(items)
 	if selected < 0 {
@@ -171,37 +174,90 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 
 		os.Stdout.WriteString(buf.String())
 
-		event := readInputTimeout(refresh)
-		key := event.key
-		switch key {
-		case keyUp, keyWheelUp:
-			selected = moveSelection(items, selected, -1)
-		case keyDown, keyWheelDown:
-			selected = moveSelection(items, selected, 1)
-		case keyClick:
-			if idx, ok := menuItemAt(geometry, items, event.x, event.y); ok {
-				return idx
+		// Motion reports arrive far faster than the refresh tick: events that
+		// change nothing visible are absorbed here, against a deadline fixed
+		// at this repaint, so they can neither flicker the screen nor
+		// postpone the next headerFn run.
+		deadline := time.Now().Add(refresh)
+		repaint := false
+		for wait := refresh; !repaint; {
+			event := readInputTimeout(wait)
+			next, changed, result, done := menuStep(event, geometry, items, selected)
+			if done {
+				return result
 			}
-		case keyEnter:
-			return selected
-		case keyQ, keyEscape, keyCtrlC:
-			return -1
-		default:
-			if key >= keyCode('1') && key <= keyCode('9') {
-				idx := int(key-keyCode('0')) - 1
-				count := 0
-				for i, item := range items {
-					if item.Separator {
-						continue
-					}
-					if count == idx {
-						return i
-					}
-					count++
-				}
-			}
+			selected = next
+			wait = remainingWait(deadline, time.Now())
+			repaint = changed || wait <= 0
 		}
 	}
+}
+
+// menuStep decides what one input event does to the menu drawn at geometry:
+// the selection after it, whether the screen must be repainted, and — when
+// done is true — the value selectMenu returns (an item index, or -1 for
+// quit). A hover that leaves the selection where it is, an ignored mouse
+// report and an elapsed wait (keyNone) change nothing visible and ask for no
+// repaint; every other event does, as before pointer tracking.
+func menuStep(event inputEvent, geometry menuGeometry, items []menuItem, selected int) (next int, repaint bool, result int, done bool) {
+	switch event.key {
+	case keyNone, keyMouseIgnored:
+		return selected, false, 0, false
+	case keyHover:
+		next = hoverSelection(geometry, items, selected, event.x, event.y)
+		return next, next != selected, 0, false
+	case keyUp, keyWheelUp:
+		return moveSelection(items, selected, -1), true, 0, false
+	case keyDown, keyWheelDown:
+		return moveSelection(items, selected, 1), true, 0, false
+	case keyClick:
+		if idx, ok := menuItemAt(geometry, items, event.x, event.y); ok {
+			return selected, false, idx, true
+		}
+	case keyEnter:
+		return selected, false, selected, true
+	case keyQ, keyEscape, keyCtrlC:
+		return selected, false, -1, true
+	default:
+		if idx, ok := digitItem(items, event.key); ok {
+			return selected, false, idx, true
+		}
+	}
+	return selected, true, 0, false
+}
+
+// digitItem returns the index of the selectable item a digit key '1'..'9'
+// names — the nth one, separators not counted — and true; false for any other
+// key or a digit past the last item.
+func digitItem(items []menuItem, key keyCode) (int, bool) {
+	if key < keyCode('1') || key > keyCode('9') {
+		return -1, false
+	}
+	remaining := int(key - keyCode('1'))
+	for i, item := range items {
+		if item.Separator {
+			continue
+		}
+		if remaining == 0 {
+			return i, true
+		}
+		remaining--
+	}
+	return -1, false
+}
+
+// remainingWait returns how long selectMenu may still wait for input before
+// its next refresh is due at deadline: zero or negative once now has reached
+// it.
+func remainingWait(deadline, now time.Time) time.Duration {
+	return deadline.Sub(now)
+}
+
+// menuRawEnter writes the escape that turns on selectMenu's mouse reporting to
+// w: clicks, the wheel and any pointer motion, so the selection can follow the
+// pointer. menuRawRestore undoes it.
+func menuRawEnter(w io.Writer) {
+	io.WriteString(w, escMouseTrackOn)
 }
 
 // menuRawRestore writes the escapes that undo selectMenu's screen modes to w:
@@ -263,6 +319,18 @@ func menuItemAt(geometry menuGeometry, items []menuItem, x, y int) (int, bool) {
 		return -1, false
 	}
 	return idx, true
+}
+
+// hoverSelection returns the selection after the pointer moved to column x,
+// row y: the selectable item under it, or selected unchanged over a
+// separator, the title, the header, the footer or outside the frame. It
+// shares menuItemAt with the click, so the highlighted row is always the row
+// a click would choose.
+func hoverSelection(geometry menuGeometry, items []menuItem, selected, x, y int) int {
+	if idx, ok := menuItemAt(geometry, items, x, y); ok {
+		return idx
+	}
+	return selected
 }
 
 // menuLabelWidth returns the width of the menu's label column: the widest
