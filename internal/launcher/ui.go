@@ -80,8 +80,11 @@ const idxMenuStale = -2
 // selectMenu renders an interactive item picker and blocks until the user
 // chooses an entry (returns its index), quits (returns -1), or headerFn
 // reports the menu stale (returns idxMenuStale). headerFn runs once per
-// refresh tick and on every keystroke; it returns the header lines plus a
-// flag marking the menu stale.
+// refresh tick and on every input event; it returns the header lines plus a
+// flag marking the menu stale. Mouse reporting is on while the menu holds raw
+// mode: a left click on a selectable row chooses it as Enter would, a wheel
+// notch moves the selection as Up/Down do, and every other mouse report is
+// ignored. Both modes are undone on every return path, mouse first.
 func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem, hints string, centered bool, refresh time.Duration) int {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
@@ -93,9 +96,10 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 		return -1
 	}
 	defer func() {
+		menuRawRestore(os.Stdout)
 		term.Restore(fd, oldState)
-		fmt.Print(escCursorShow)
 	}()
+	os.Stdout.WriteString(escMouseOn)
 
 	selected := firstSelectable(items)
 	if selected < 0 {
@@ -149,6 +153,7 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 		lastMenuRect.col = startCol
 		lastMenuRect.width = frameWidth
 		lastMenuRect.height = frameHeight
+		geometry := newMenuGeometry(frame, startRow, startCol, frameWidth)
 
 		buf.Reset()
 		buf.WriteString(escClear)
@@ -160,21 +165,16 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 
 		os.Stdout.WriteString(buf.String())
 
-		key := readKeyTimeout(refresh)
+		event := readInputTimeout(refresh)
+		key := event.key
 		switch key {
-		case keyUp:
-			for next := selected - 1; next >= 0; next-- {
-				if !items[next].Separator {
-					selected = next
-					break
-				}
-			}
-		case keyDown:
-			for next := selected + 1; next < len(items); next++ {
-				if !items[next].Separator {
-					selected = next
-					break
-				}
+		case keyUp, keyWheelUp:
+			selected = moveSelection(items, selected, -1)
+		case keyDown, keyWheelDown:
+			selected = moveSelection(items, selected, 1)
+		case keyClick:
+			if idx, ok := menuItemAt(geometry, items, event.x, event.y); ok {
+				return idx
 			}
 		case keyEnter:
 			return selected
@@ -196,6 +196,67 @@ func selectMenu(title string, headerFn func() ([]string, bool), items []menuItem
 			}
 		}
 	}
+}
+
+// menuRawRestore writes the escapes that undo selectMenu's screen modes to w:
+// mouse reporting off first, then the cursor shown again. selectMenu calls it
+// before restoring the terminal, so a button released after the menu returned
+// is no longer reported and never lands as text in cooked mode.
+func menuRawRestore(w io.Writer) {
+	io.WriteString(w, escMouseOff+escCursorShow)
+}
+
+// moveSelection returns the index of the next selectable item from selected in
+// direction step (-1 up, +1 down), skipping separators; selected itself when
+// none lies that way. The arrow keys and the mouse wheel share it.
+func moveSelection(items []menuItem, selected, step int) int {
+	for next := selected + step; next >= 0 && next < len(items); next += step {
+		if !items[next].Separator {
+			return next
+		}
+	}
+	return selected
+}
+
+// menuGeometry is where one selectMenu draw put the menu body on screen, in
+// the 1-based row and column cells an SGR mouse report carries.
+type menuGeometry struct {
+	firstBodyRow int // screen row of items[0]
+	left, right  int // first and last screen column of the frame, borders included
+}
+
+// newMenuGeometry derives the body's screen position from the frame drawn at
+// startRow/startCol, frameWidth columns wide. It mirrors Frame.Render's
+// layout: the top border, a title rule when the frame has a title, and the
+// header lines plus their divider when it has a header. The header is the one
+// the draw used — headerFn may change its length between refresh ticks.
+func newMenuGeometry(frame Frame, startRow, startCol, frameWidth int) menuGeometry {
+	bodyRow := startRow + 1
+	if frame.Title != "" {
+		bodyRow++
+	}
+	if len(frame.Header) > 0 {
+		bodyRow += len(frame.Header) + 1
+	}
+	return menuGeometry{
+		firstBodyRow: bodyRow,
+		left:         startCol,
+		right:        startCol + frameWidth - 1,
+	}
+}
+
+// menuItemAt hit-tests a mouse position against the menu body: the index of
+// the selectable item drawn at column x, row y, and true; or false for a
+// separator, the title, the header, the footer, or anywhere outside the frame.
+func menuItemAt(geometry menuGeometry, items []menuItem, x, y int) (int, bool) {
+	if x < geometry.left || x > geometry.right {
+		return -1, false
+	}
+	idx := y - geometry.firstBodyRow
+	if idx < 0 || idx >= len(items) || items[idx].Separator {
+		return -1, false
+	}
+	return idx, true
 }
 
 // menuLabelWidth returns the width of the menu's label column: the widest

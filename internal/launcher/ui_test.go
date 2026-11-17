@@ -296,3 +296,125 @@ func TestDecodeInput_SeveralEventsOneAtATime(t *testing.T) {
 		}
 	}
 }
+
+// TestMenuItemAt pins the mouse hit-test against the frame selectMenu actually
+// draws: for every rendered line, a click inside the frame selects exactly the
+// item whose label that line shows, and nothing on the title, header, footer,
+// border or separator lines; a click left or right of the frame selects
+// nothing.
+func TestMenuItemAt(t *testing.T) {
+	t.Parallel()
+
+	items := []menuItem{
+		{Label: "alpha", Description: "first"},
+		{Separator: true},
+		{Label: "bravo", Description: "second"},
+		{Label: "charlie", Description: "last"},
+	}
+	tests := []struct {
+		name               string
+		title              string
+		header             []string
+		startRow, startCol int
+	}{
+		{name: "no title, no header", startRow: 2, startCol: 1},
+		{name: "title only", title: "Profiles", startRow: 2, startCol: 1},
+		{name: "title and one header line", title: "Profiles", header: []string{"status"}, startRow: 2, startCol: 1},
+		{name: "title and a longer header", title: "Profiles", header: []string{"status", "model", "uptime", "port"}, startRow: 2, startCol: 1},
+		{name: "centered origin", title: "Profiles", header: []string{"status", "model"}, startRow: 9, startCol: 31},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			frame := Frame{Title: tc.title, Header: tc.header, Footer: []string{"hints"}, RawMode: true}
+			lines := strings.Split(strings.TrimSuffix(frame.Render(renderMenuRows(items, 0)), "\r\n"), "\r\n")
+			frameWidth := visibleWidth(lines[0])
+			geometry := newMenuGeometry(frame, tc.startRow, tc.startCol, frameWidth)
+
+			for row, line := range lines {
+				want, wantOK := labelledItem(items, stripEscapes(line))
+				y := tc.startRow + row
+				for _, x := range []int{tc.startCol, tc.startCol + frameWidth/2, tc.startCol + frameWidth - 1} {
+					got, ok := menuItemAt(geometry, items, x, y)
+					if got != want || ok != wantOK {
+						t.Errorf("menuItemAt(x=%d, y=%d) on %q = (%d, %v), want (%d, %v)", x, y, stripEscapes(line), got, ok, want, wantOK)
+					}
+				}
+				for _, x := range []int{tc.startCol - 1, tc.startCol + frameWidth} {
+					if got, ok := menuItemAt(geometry, items, x, y); ok {
+						t.Errorf("menuItemAt(x=%d, y=%d) outside the frame = (%d, true), want no item", x, y, got)
+					}
+				}
+			}
+			for _, y := range []int{tc.startRow - 1, tc.startRow + len(lines)} {
+				if got, ok := menuItemAt(geometry, items, tc.startCol+1, y); ok {
+					t.Errorf("menuItemAt(y=%d) above or below the frame = (%d, true), want no item", y, got)
+				}
+			}
+		})
+	}
+}
+
+// labelledItem returns the index of the selectable item whose label a rendered
+// menu line shows after its row marker, and true; false for any other line.
+func labelledItem(items []menuItem, line string) (int, bool) {
+	for i, item := range items {
+		if item.Separator {
+			continue
+		}
+		if strings.Contains(line, "▶ "+item.Label+" ") || strings.Contains(line, "· "+item.Label+" ") {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+// TestSelectMenuMoveSelection pins the separator-skipping step the arrow keys
+// and the mouse wheel share.
+func TestSelectMenuMoveSelection(t *testing.T) {
+	t.Parallel()
+
+	items := []menuItem{
+		{Label: "alpha"},
+		{Separator: true},
+		{Label: "bravo"},
+		{Label: "charlie"},
+	}
+	tests := []struct {
+		name     string
+		selected int
+		step     int
+		want     int
+	}{
+		{name: "down skips a separator", selected: 0, step: 1, want: 2},
+		{name: "up skips a separator", selected: 2, step: -1, want: 0},
+		{name: "down to the next row", selected: 2, step: 1, want: 3},
+		{name: "down stays on the last row", selected: 3, step: 1, want: 3},
+		{name: "up stays on the first row", selected: 0, step: -1, want: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := moveSelection(items, tc.selected, tc.step); got != tc.want {
+				t.Errorf("moveSelection(%d, %d) = %d, want %d", tc.selected, tc.step, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMenuRawRestore pins the order selectMenu undoes its screen modes in:
+// mouse reporting off before the cursor is shown again.
+func TestMenuRawRestore(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	menuRawRestore(&out)
+
+	if got, want := out.String(), escMouseOff+escCursorShow; got != want {
+		t.Errorf("menuRawRestore wrote %q, want %q", got, want)
+	}
+}

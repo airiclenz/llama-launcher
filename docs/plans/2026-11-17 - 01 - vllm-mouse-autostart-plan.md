@@ -158,7 +158,12 @@ NOTES (2026-11-17): side effect of decoding one event at a time — several byte
 - `GOOS=linux go vet ./internal/launcher/ && GOOS=windows go vet ./internal/launcher/`
 **Commit:** `feat(menu): decode SGR mouse input`
 
-## 7. Click and wheel in menus and pickers
+## 7. Click and wheel in menus and pickers — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): menuGeometry holds only the first body row and the frame's column span (borders included); the item count the approach listed is dropped because menuItemAt bounds the row by len(items); newMenuGeometry(frame, startRow, startCol, frameWidth) derives it from the drawn Frame's Title and Header
+NOTES (2026-11-17): the Up/Down separator-skipping loops moved into moveSelection(items, selected, step), which the wheel shares; selectMenu's defer now writes escMouseOff + escCursorShow (menuRawRestore) before term.Restore, where it printed escCursorShow after it; selectMenu's doc comment now says headerFn runs on every input event and describes mouse handling
+NOTES (2026-11-17): TestMenuItemAt renders the real Frame for each layout and checks every rendered line, so the hit-test is pinned to Frame.Render's layout; TDD/README wording on mouse use is left to item 8, which owns those docs; footer hints ("↑↓ select · enter …") unchanged
+NOTES (2026-11-17): a selectMenu that ignores a mouse event still re-runs headerFn and redraws, as for any other key — a click outside a row costs one extra headerFn call and redraw for its press and, when the terminal reports it, its release (liveStatusHeaderFn's backend probe stays throttled to refresh_duration)
 
 **What:** Depends on item 6.
 **Goal:** While `selectMenu` holds raw mode, mouse reporting is on and is switched off before raw mode is restored on every return path; a left click on a selectable row selects it and returns it as Enter would; a click on a separator, the title, the header, the footer or outside the frame does nothing; a wheel notch moves the selection one selectable row as Up/Down do.
