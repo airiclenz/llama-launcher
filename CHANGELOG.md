@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **Ollama Profiles now send their context size.** A Profile's own `context_size` reaches Ollama on load as `options.num_ctx` (no `options` key when it is unset), and Ollama's `ParamSpecs` now lists the context size, so the Profile-list context column and "Show model config" show it for Ollama rows. This deliberately supersedes the 1.4.6 entry that removed Ollama's context_size display: the value is now actually sent. Only a context_size the Ollama Profile sets itself counts — `defaults.context_size` is not inherited for Ollama — so a defaults-only Ollama Profile sends no `num_ctx`, shows a blank cell, and its `ResolvedProfile.ContextSize` (and the `context_size` field of `list --json`) is now nil/absent where it used to carry the defaults value. Ollama reloads a Model whose request options differ, so the size holds only while clients send the same `num_ctx` (or the Ollama server runs with `OLLAMA_CONTEXT_LENGTH`). The rule lives in one place: Ollama implements a package-private `defaultContextSizeIgnorer` capability that `mergeParams` checks, so `ResolveProfile`, the context column and `list --json` follow it without any backend-name check.
+- **Log file names now show the instance port and the Profile.** A server the launcher starts for a Profile logs to `<backend>-<port>-<profile>-<timestamp>.log` (the Profile name with every character outside `A-Z a-z 0-9 . _ -` replaced by `_`), and an `ollama serve` the launcher starts logs to `ollama-<port>-<timestamp>.log`, so a log's instance can be read from its name. `llama-launcher logs`, `status` and the menu now pick the newest log of the instance's own port rather than the newest log of the backend, so two instances of one backend no longer show each other's log. Existing `<backend>-<timestamp>.log` files are not renamed: they are still found (when no log carries the instance's port), aged by `log_retention` and removed by `logs clean`.
+
+### Added
+
+- A Profile may set its own `log_retention: N` (days). Automatic log cleanup ages that Profile's logs against its own value and every other log against the global `log_retention`; `0` keeps the Profile's logs, a Profile without the key uses the global value, and a negative value is a config error. `logs clean` is unchanged and ignores both.
+- `llama-launcher reload [target]` re-activates a running instance's active Profile with the current config, exactly as `load <profile> --restart` would, so config edits take effect without retyping the Profile name. `target` takes the same forms as `stop` (`host:port` or a backend name, auto-selected when only one instance runs). It refuses with a clear error and a non-zero exit when no server is running, the target is ambiguous or unmatched, the server refuses the configured api_key, the server is still starting, no Model is loaded, or no Profile matches the running Model. Shell completion offers `reload` and enabled backend names after it.
+
 ## 1.9.2
 
 ### Fixed
