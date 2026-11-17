@@ -33,6 +33,7 @@ Mutating (confirm with user first):
 |---|---|
 | `llama-launcher load <profile>` | Activate a profile. No-op if already active. |
 | `llama-launcher load <profile> --restart` | Force a restart even if active. |
+| `llama-launcher reload [target]` | Re-activate a running instance's active profile with the current config (same as `load <profile> --restart`); `target` is `host:port` or a backend name. |
 | `llama-launcher unload [profile]` | Stop the server / unload the model. |
 | `llama-launcher start [--profile p]` | Start a server, optionally with a profile. |
 | `llama-launcher stop [target]` | Stop a server by `host:port` or backend name. |

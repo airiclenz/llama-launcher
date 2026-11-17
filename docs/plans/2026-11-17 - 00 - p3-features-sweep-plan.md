@@ -93,7 +93,12 @@ internal/launcher/config.go — Profile, (*Config).configChecks; internal/launch
 **Closes:** per-profile-log-retention
 **Commit:** `feat(config): let a Profile override log_retention`
 
-## 4. `reload` subcommand
+## 4. `reload` subcommand — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): cmdLoad's resolve/LoadProfile/cmdLoadFinish tail moved into activateProfileCLI, shared by load and reload, so reload carries no copy of the load logic (the Loading progress label is the same for both).
+NOTES (2026-11-17): a Starting instance and an idle instance (no Model) exit 3 like the unmatched-Profile case; the plan named their messages but not their exit codes.
+NOTES (2026-11-17): resolveTargetInstance's verb for logs is "show logs for" (matching cmdLogs' own bare-target listing); logs only calls it with an explicit target, so that line is unreachable from logs today.
+NOTES (2026-11-17): refuseAuthFailedUnload reused as-is for reload (doc comment now says "unload or reload"); not renamed, per the no-rename rule.
 
 **What:**
 **Goal:** `llama-launcher reload [target]` re-activates the target instance's active Profile with the current config, exactly as `load <profile> --restart` would; with no running instance, an ambiguous target, an unmatched target, or an instance whose active Profile is unknown, it prints a clear error and exits non-zero.

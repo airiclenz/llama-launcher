@@ -15,7 +15,7 @@ const completeCommand = "__complete"
 // completionSubcommands are the top-level commands offered as the first word,
 // in printUsage order.
 var completionSubcommands = []string{
-	"load", "unload", "start", "stop", "status", "list", "logs", "config", "version", "completions",
+	"load", "reload", "unload", "start", "stop", "status", "list", "logs", "config", "version", "completions",
 }
 
 // completionShells are the shells `completions` prints a script for.
@@ -204,7 +204,7 @@ func commandCandidates(command string, args []string, cfg *Config) (flags, value
 			return nil, completionProfiles(cfg)
 		}
 		flags = []string{"--profile", "-p"}
-	case "stop":
+	case "stop", "reload":
 		if !positional {
 			values = completionBackends(cfg)
 		}

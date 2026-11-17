@@ -100,6 +100,8 @@ func Run(args []string) int {
 	switch args[0] {
 	case "load":
 		return cmdLoad(cfg, args[1:])
+	case "reload":
+		return cmdReload(cfg, args[1:])
 	case "unload":
 		return cmdUnload(cfg, args[1:])
 	case "start":
@@ -143,6 +145,14 @@ func cmdLoad(cfg *Config, args []string) int {
 		return 2
 	}
 
+	return activateProfileCLI(cfg, profileName, restart)
+}
+
+// activateProfileCLI is the shared tail of load and reload: it resolves
+// profileName against cfg (an unknown name exits 2), activates it with
+// LoadProfile — restart forcing the relaunch even when the Profile is
+// already active — and reports the outcome through cmdLoadFinish.
+func activateProfileCLI(cfg *Config, profileName string, restart bool) int {
 	profile, err := cfg.ResolveProfile(profileName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -153,6 +163,65 @@ func cmdLoad(cfg *Config, args []string) int {
 	loadStart := time.Now()
 	inst, started, err := LoadProfile(cfg, profile, restart, progress)
 	return cmdLoadFinish(cfg, profile, inst, started, err, loadStart, newCLILoadWaiter(cfg, profile, loadStart))
+}
+
+// cmdReload re-activates the active Profile of the instance named by the
+// optional [target] (host:port or backend name, as for stop) with the
+// current config — exactly `load <profile> --restart`. It refuses, before
+// any load, an instance it cannot name a Profile for: one refusing the
+// configured api_key, one still Starting, one with no Model loaded, or one
+// whose Model matches no Profile (all exit 3). Usage errors exit 2, no
+// running instance exits 1, and an unmatched or ambiguous target exits 2,
+// as for stop.
+func cmdReload(cfg *Config, args []string) int {
+	target := ""
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			fmt.Fprintf(os.Stderr, "Error: unknown flag %q\n", a)
+			return 2
+		}
+		if target != "" {
+			fmt.Fprintln(os.Stderr, "Usage: llama-launcher reload [target]")
+			return 2
+		}
+		target = a
+	}
+
+	inst, err := resolveTargetInstance(cfg, target, "reload")
+	if err != nil {
+		if errors.Is(err, ErrNotRunning) {
+			fmt.Println("No server running.")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 2
+	}
+
+	if inst.AuthFailed {
+		if code, refused := refuseAuthFailedUnload(cfg, inst); refused {
+			return code
+		}
+	}
+	if err := reloadableProfileErr(inst); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 3
+	}
+	return activateProfileCLI(cfg, inst.ActiveProfile, true)
+}
+
+// reloadableProfileErr explains why inst has no Profile to reload, or
+// returns nil when discovery matched it to one. A Starting instance has no
+// Model yet, so no Profile can be matched to it (ADR-0010).
+func reloadableProfileErr(inst *RunningInstance) error {
+	switch {
+	case inst.Starting:
+		return fmt.Errorf("%s at %s is still starting — reload it once its Model has loaded", serverLabel(inst.Backend), inst.Addr())
+	case inst.ActiveModel == "":
+		return fmt.Errorf("no Model loaded at %s", inst.Addr())
+	case inst.ActiveProfile == "":
+		return fmt.Errorf("no Profile matches the Model running at %s", inst.Addr())
+	}
+	return nil
 }
 
 // cmdLoadFinish is cmdLoad after LoadProfile returns: the success lines and
@@ -259,7 +328,7 @@ func cmdUnload(cfg *Config, args []string) int {
 	return 0
 }
 
-// refuseAuthFailedUnload refuses an unload of an AuthFailed instance with
+// refuseAuthFailedUnload refuses an unload or reload of an AuthFailed instance with
 // the authFailedErr message, re-probed by discovery's own rule
 // (authRefusalAt). It reports refused false when the server no longer
 // refuses the api_key — it changed since discovery — and leaves the caller
@@ -363,11 +432,12 @@ func cmdStart(cfg *Config, args []string) int {
 }
 
 // resolveTargetInstance interprets the optional [target] argument for
-// stop/logs. The target may be an explicit host:port or a backend name; if
-// no target is given and exactly one instance is reachable, it is selected
-// automatically. On ambiguity (multiple matches), the candidates are
-// printed to stderr and the returned error is non-nil.
-func resolveTargetInstance(cfg *Config, target string) (*RunningInstance, error) {
+// stop/logs/reload. The target may be an explicit host:port or a backend
+// name; if no target is given and exactly one instance is reachable, it is
+// selected automatically. On ambiguity (multiple matches), the candidates
+// are printed to stderr — the bare-target listing asks which one to <verb> —
+// and the returned error is non-nil.
+func resolveTargetInstance(cfg *Config, target, verb string) (*RunningInstance, error) {
 	running := DiscoverRunningInstances(cfg)
 	if len(running) == 0 {
 		return nil, ErrNotRunning
@@ -377,7 +447,7 @@ func resolveTargetInstance(cfg *Config, target string) (*RunningInstance, error)
 		if len(running) == 1 {
 			return running[0], nil
 		}
-		fmt.Fprintln(os.Stderr, "Multiple servers running — specify which to stop:")
+		fmt.Fprintf(os.Stderr, "Multiple servers running — specify which to %s:\n", verb)
 		for _, inst := range running {
 			fmt.Fprintf(os.Stderr, "  %s\n", instanceAtLabel(inst))
 		}
@@ -418,7 +488,7 @@ func cmdStop(cfg *Config, args []string) int {
 		target = args[0]
 	}
 
-	inst, err := resolveTargetInstance(cfg, target)
+	inst, err := resolveTargetInstance(cfg, target, "stop")
 	if err != nil {
 		if errors.Is(err, ErrNotRunning) {
 			fmt.Println("No server running.")
@@ -763,7 +833,7 @@ func cmdLogs(cfg *Config, args []string) int {
 
 	var inst *RunningInstance
 	if target != "" {
-		t, err := resolveTargetInstance(cfg, target)
+		t, err := resolveTargetInstance(cfg, target, "show logs for")
 		if err != nil {
 			if errors.Is(err, ErrNotRunning) {
 				fmt.Println("No server running.")
@@ -968,6 +1038,8 @@ Usage: llama-launcher [--config path] [command] [args]
 Commands:
   load <profile> [--restart]
                         Activate a profile (no-op if already active; --restart forces)
+  reload [target]       Re-activate an instance's active profile with the current config
+                        (target = host:port or backend name; same as load <profile> --restart)
   unload [profile]      Unload model (for managed backends: stops server)
   start [--profile p]   Start server (optionally with a profile)
   stop [target]         Stop a server (target = host:port or backend name)

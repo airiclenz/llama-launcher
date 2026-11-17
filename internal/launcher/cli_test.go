@@ -1442,3 +1442,161 @@ func TestCmdLoadFinish_ExternalTimeoutDoesNotWait(t *testing.T) {
 		t.Errorf("stderr = %q, want the external timeout error", errOut)
 	}
 }
+
+// runReload runs cmdReload with args and returns its exit code, stdout and
+// stderr. Callers must not use t.Parallel(): the standard streams are
+// process-global.
+func runReload(t *testing.T, cfg *Config, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+
+	stderr = captureStderr(t, func() {
+		stdout = captureStdout(t, func() { code = cmdReload(cfg, args) })
+	})
+	return code, stdout, stderr
+}
+
+// TestCmdReload_RefusesWithoutAProfileToReload pins every reload that ends
+// before any load: usage errors, no running instance, and an instance whose
+// active Profile cannot be named — each with its own message and exit code.
+// Not parallel: runReload swaps the standard streams.
+func TestCmdReload_RefusesWithoutAProfileToReload(t *testing.T) {
+	cases := []struct {
+		name string
+		// setup returns the config and the address the message names.
+		setup    func(t *testing.T) (*Config, string)
+		args     []string
+		wantCode int
+		// wantOut is the substring expected on stdout and stderr combined;
+		// "%s" is replaced with the address setup returned.
+		wantOut string
+	}{
+		{
+			name: "a flag is refused before discovery",
+			setup: func(t *testing.T) (*Config, string) {
+				return startingCfg(t, "llamacpp", deadAddr(t)), ""
+			},
+			args:     []string{"--x"},
+			wantCode: 2,
+			wantOut:  `unknown flag "--x"`,
+		},
+		{
+			name: "a second positional is refused",
+			setup: func(t *testing.T) (*Config, string) {
+				return startingCfg(t, "llamacpp", deadAddr(t)), ""
+			},
+			args:     []string{"llamacpp", "ollama"},
+			wantCode: 2,
+			wantOut:  "Usage: llama-launcher reload [target]",
+		},
+		{
+			name: "no running instance",
+			setup: func(t *testing.T) (*Config, string) {
+				return startingCfg(t, "llamacpp", deadAddr(t)), ""
+			},
+			wantCode: 1,
+			wantOut:  "No server running.",
+		},
+		{
+			name: "an unmatched target",
+			setup: func(t *testing.T) (*Config, string) {
+				srv := newFakeLlamaCppServerServingModel(t, "healthy-model")
+				return startingCfg(t, "llamacpp", addrFromURL(t, srv.URL)), ""
+			},
+			args:     []string{"ollama"},
+			wantCode: 2,
+			wantOut:  "no running ollama instance",
+		},
+		{
+			name: "a Model no Profile matches",
+			setup: func(t *testing.T) (*Config, string) {
+				srv := newFakeLlamaCppServerServingModel(t, "healthy-model")
+				addr := addrFromURL(t, srv.URL)
+				return startingCfg(t, "llamacpp", addr), addr
+			},
+			wantCode: 3,
+			wantOut:  "no Profile matches the Model running at %s",
+		},
+		{
+			name: "an idle instance with no Model",
+			setup: func(t *testing.T) (*Config, string) {
+				addr := addrFromURL(t, newFakeLlamaCppServer(t).URL)
+				return startingCfg(t, "llamacpp", addr), addr
+			},
+			wantCode: 3,
+			wantOut:  "no Model loaded at %s",
+		},
+		{
+			name: "a Starting instance",
+			setup: func(t *testing.T) (*Config, string) {
+				addr := addrFromURL(t, newFakeStartingLlamaCppServer(t).URL)
+				return startingCfg(t, "llamacpp", addr), addr
+			},
+			wantCode: 3,
+			wantOut:  "LLaMA.cpp at %s is still starting",
+		},
+		{
+			name: "an instance refusing the api_key",
+			setup: func(t *testing.T) (*Config, string) {
+				host, port := authRefusingServer(t, http.StatusUnauthorized)
+				cfg := sharedAddrCfg(t, host, port, "llamacpp")
+				cfg.Profiles["refusing"] = Profile{}
+				return cfg, ""
+			},
+			wantCode: 3,
+			wantOut:  ErrAuthFailed.Error(),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, addr := c.setup(t)
+			want := c.wantOut
+			if addr != "" {
+				want = fmt.Sprintf(c.wantOut, addr)
+			}
+
+			code, out, errOut := runReload(t, cfg, c.args...)
+
+			if code != c.wantCode {
+				t.Errorf("exit code = %d, want %d; stdout:\n%s\nstderr:\n%s", code, c.wantCode, out, errOut)
+			}
+			if !strings.Contains(out+errOut, want) {
+				t.Errorf("output lacks %q; stdout:\n%s\nstderr:\n%s", want, out, errOut)
+			}
+		})
+	}
+}
+
+// TestCmdReload_AmbiguousListingNamesReload: with several instances running
+// a bare reload refuses and lists them, asking which to reload — not which
+// to stop, the wording resolveTargetInstance once hard-coded. Not parallel:
+// runReload swaps the standard streams.
+func TestCmdReload_AmbiguousListingNamesReload(t *testing.T) {
+	first := newFakeLlamaCppServerServingModel(t, "first-model")
+	second := newFakeLlamaCppServerServingModel(t, "second-model")
+	cfg := startingCfg(t, "llamacpp", addrFromURL(t, first.URL))
+	_, secondPort, ok := splitHostPort(addrFromURL(t, second.URL))
+	if !ok {
+		t.Fatalf("splitting %q", second.URL)
+	}
+	cfg.Profiles["second"] = Profile{ProfileParams: ProfileParams{Port: &secondPort}}
+
+	code, _, errOut := runReload(t, cfg)
+
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 (ambiguous target); stderr:\n%s", code, errOut)
+	}
+	if !strings.Contains(errOut, "specify which to reload:") {
+		t.Errorf("stderr does not ask which to reload:\n%s", errOut)
+	}
+}
+
+// TestRun_DispatchesReload: the top-level dispatcher routes reload to
+// cmdReload — a flag after it is that command's usage error, not an unknown
+// command. Not parallel: runComplete swaps the standard streams.
+func TestRun_DispatchesReload(t *testing.T) {
+	_, stderr, code := runComplete(t, "--config", writeRunConfig(t), "reload", "--x")
+
+	if code != 2 || !strings.Contains(stderr, `unknown flag "--x"`) {
+		t.Errorf("Run(reload --x) = exit %d, stderr %q; want exit 2 and the unknown-flag error", code, stderr)
+	}
+}

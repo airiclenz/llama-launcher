@@ -259,6 +259,7 @@ The `reasoning-phi` row is blank because that Ollama Profile sets no `context_si
 
 ```bash
 llama-launcher load <profile> [--restart]   # Activate a profile (no-op if already active; --restart forces)
+llama-launcher reload [target]              # Re-activate an instance's active profile with the current config
 llama-launcher unload [profile]             # Unload model from the matching instance
 llama-launcher start [--profile p]          # Start server without a model (llamacpp and splash require --profile)
 llama-launcher stop [target]                # Stop a server (target = host:port or backend name)
@@ -275,7 +276,7 @@ llama-launcher completions bash|zsh|fish    # Print a shell completion script
 
 #### Shell completions
 
-`completions` prints a script that completes subcommands, flags, profile names (after `load`, `unload` and `start --profile`) and enabled backend names (after `stop` and `logs`). The names are read from your config on every tab press, so new profiles complete without regenerating the script; with no config, only subcommands and flags complete. A tab press never runs an `api_key_cmd`.
+`completions` prints a script that completes subcommands, flags, profile names (after `load`, `unload` and `start --profile`) and enabled backend names (after `stop`, `reload` and `logs`). The names are read from your config on every tab press, so new profiles complete without regenerating the script; with no config, only subcommands and flags complete. A tab press never runs an `api_key_cmd`.
 
 ```bash
 # bash (~/.bashrc) — eval rather than source <(…), which the bash 3.2 that ships with macOS ignores
