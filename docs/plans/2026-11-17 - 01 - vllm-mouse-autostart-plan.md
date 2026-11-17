@@ -113,7 +113,11 @@ NOTES (2026-11-17): the consequences Note's title and its "Only Splash addresses
 - `go test ./internal/launcher/ -run 'Validate|GetLLMServer|Default|Config'`
 **Commit:** `feat(vllm): list vLLM in the default config and MCP adapter`
 
-## 5. Document vLLM
+## 5. Document vLLM — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): the TDD vLLM argv/env subsection is §8.2 (beside §8.1 Splash); the rule's grep also hit glossary `start.md` and `skills/release-notes-llama-launcher/prompts/_llama-launcher.md`, both of which list the servers, so both gained vLLM; `starting.md` already named vLLM (item 3) and needed no edit.
+NOTES (2026-11-17): README's integration-test list and the TDD §12.5 integration tables are left without vLLM: there is no vLLM integration test.
+NOTES (2026-11-17): retry — README's Windows row in Supported platforms now reads "stopping a running llama-server, Ollama, Splash or vLLM server is refused the same way".
 
 **What:** Depends on items 1–4.
 **Goal:** README, TDD, the `llm-server` glossary Note, `skills/manage-llm-server/SKILL.md` and `launcher/doc.go` list vLLM alongside `llamacpp`, `ollama`, `lmstudio` and `splash`, with README's vLLM subsection under Backends stating the ratified calls (managed restart-per-Profile, Model refs, parameter mapping, `VLLM_API_KEY`, `PATH` under launchd, first-start download time).

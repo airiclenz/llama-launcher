@@ -2,7 +2,7 @@
 
 Consult `llama-launcher.TDD.md` for all project details: architecture, build commands, coding standards, and contribution workflow.
 
-Supported LLM Servers: `llamacpp`, `ollama`, `lmstudio` and `splash` — see the `glossary` Note (`capcom know show glossary`) for the domain terms and `llama-launcher.TDD.md` for how each one is driven.
+Supported LLM Servers: `llamacpp`, `ollama`, `lmstudio`, `splash` and `vllm` — see the `glossary` Note (`capcom know show glossary`) for the domain terms and `llama-launcher.TDD.md` for how each one is driven.
 
 Project knowledge lives in capcom's Knowledge tree (listed at the end of this file). Before
 starting work, run `capcom know tree --depth 2`, then `capcom know tree <id>` to open a branch,

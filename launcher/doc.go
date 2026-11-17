@@ -58,14 +58,14 @@
 // works — DiscoverRunningInstances, model load and unload against Ollama or
 // LM Studio, and activating a profile on a server that is already running —
 // while what needs unix process control does not act: no managed server
-// (llama-server, ollama serve, splash serve) is started there, and a stop
-// that would have to signal a PID cannot be carried out. LM Studio is the
+// (llama-server, ollama serve, splash serve, vllm serve) is started there,
+// and a stop that would have to signal a PID cannot be carried out. LM Studio is the
 // exception that keeps working, since its server start and stop are lms CLI
 // calls.
 //
 // Every windows refusal preserves the sentinel, so errors.Is finds
-// ErrUnsupported on each of them. Starting a managed llama-server or Splash
-// server refuses before it forks, and LoadProfile against a stopped Ollama
+// ErrUnsupported on each of them. Starting a managed llama-server, Splash or
+// vLLM server refuses before it forks, and LoadProfile against a stopped Ollama
 // refuses to start the daemon. A Stop — or an Unload that reduces to one on
 // a managed backend, or the stop step of a LoadProfile — that leaves the
 // server reachable because no PID can be signalled returns an error wrapping

@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
 [![Go Reference](https://pkg.go.dev/badge/github.com/airiclenz/llama-launcher/launcher.svg)](https://pkg.go.dev/github.com/airiclenz/llama-launcher/launcher)
 
-A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), and [Splash](https://github.com/incoai/splash) (an MLX-based server for Apple Silicon) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
+A terminal tool for managing local LLM servers through named configuration profiles. Supports [llama.cpp](https://github.com/ggerganov/llama.cpp), [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), [Splash](https://github.com/incoai/splash) (an MLX-based server for Apple Silicon), and [vLLM](https://github.com/vllm-project/vllm) as backends. Define your models and parameters once in a YAML file, then load and switch between them with a single command or an interactive TUI.
 
 `llama-launcher` is a process manager, not a request router: it starts and stops LLM servers and tells them which model to load. Clients talk to each server directly via its native address. The launcher exits after dispatching work, consuming zero resident memory while the server runs.
 
@@ -43,9 +43,9 @@ Building from source needs Go 1.26+; the Homebrew binaries need no toolchain. At
 
 | Program | OS | Used for | Without it |
 |---------|----|----------|------------|
-| `llama-server`, `ollama`, `lms`, `splash` | all | Starting the backend a profile names (`lms` also stops LM Studio) | Starting that backend fails with `server binary not found` |
+| `llama-server`, `ollama`, `lms`, `splash`, `vllm` | all | Starting the backend a profile names (`lms` also stops LM Studio) | Starting that backend fails with `server binary not found` |
 | `lsof` | macOS, Linux | Finding the process listening on the shared port: `stop`, and the port-conflict check before a start | `stop` cannot find the server by its port, and a taken port is not reported with its holder |
-| `ps` | macOS, Linux | Naming a port's occupant, a server's uptime, finding a Splash that is still loading | Occupants go unnamed, uptime shows `0s`, a loading Splash is not found |
+| `ps` | macOS, Linux | Naming a port's occupant, a server's uptime, finding a Splash or vLLM that is still loading | Occupants go unnamed, uptime shows `0s`, a loading Splash or vLLM is not found |
 | `tail` | macOS, Linux | `llama-launcher logs` and the menu's *Show log* | The log cannot be shown |
 | `sysctl`, `vm_stat`, `ioreg` | macOS | The TUI's [memory readout](#memory-readout) | The readout is left out (`ioreg` only feeds the GPU fields) |
 | `security` | macOS | Moving a literal `api_key` into the Keychain | The secret-store offer is not made |
@@ -55,7 +55,7 @@ Building from source needs Go 1.26+; the Homebrew binaries need no toolchain. At
 | `$VISUAL`, else `$EDITOR` | Linux, Windows | The menu's *Edit config* | *Edit config* is not offered |
 | `llama-launcher` | all | `llama-launcher-mcp` runs the CLI for every tool call (`--llama-launcher-bin`) | The adapter refuses to start |
 
-On Windows the launcher has no unix process control, so it neither starts nor stops `llama-server`, `ollama serve` or `splash` (see [Supported platforms](#supported-platforms)).
+On Windows the launcher has no unix process control, so it neither starts nor stops `llama-server`, `ollama serve`, `splash` or `vllm` (see [Supported platforms](#supported-platforms)).
 
 ## Quick start
 
@@ -110,8 +110,11 @@ Other top-level options control launcher behaviour (`auto_stop_server`, `auto_un
 | `ollama` | `localhost:11434` | Ollama model name (e.g. `llama3.1:8b`, pulled first) |
 | `lmstudio` | `localhost:1234` | LM Studio model key (e.g. `lmstudio-community/meta-llama-3.1-8b-instruct`) |
 | `splash` | `127.0.0.1:8000` | Hugging Face `owner/repo` id (e.g. `mlx-community/Qwen3.8-27B-4bit`), installed once via `splash serve --model …` |
+| `vllm` | `127.0.0.1:8000` | Hugging Face `owner/repo` id (e.g. `Qwen/Qwen3-8B`) or an absolute path to a local model directory |
 
-For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp` and `splash`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](.capcom/knowledge/decisions/adr-0001.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
+vLLM and Splash both default to `127.0.0.1:8000`. To run them side by side, give one of the Profiles a distinct `port`; otherwise both target one address, and only one server can hold an address at a time ([ADR-0006](.capcom/knowledge/decisions/adr-0006.md)).
+
+For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp`, `splash` and `vllm`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](.capcom/knowledge/decisions/adr-0001.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
 
 #### Ollama
 
@@ -131,6 +134,17 @@ Splash, like `llamacpp`, is restarted to switch models: each profile starts `spl
 - **Install each model once, by hand.** Run `splash serve --model <owner/repo>` in a terminal; the first run downloads the model, which can take around twenty minutes. The launcher checks the Hugging Face cache (`$HF_HUB_CACHE`, else `$HF_HOME/hub`, else `$XDG_CACHE_HOME/huggingface/hub`, else `~/.cache/huggingface/hub`) for the installed model and refuses a profile whose model is not there, naming that command. It never starts the download itself ([ADR-0014](.capcom/knowledge/decisions/adr-0014.md)).
 - **Parameters.** `context_size` becomes `--max-context`, and `host` / `port` become `--host` / `--port`. Sampling parameters are ignored. Pass any other Splash flag — reasoning effort, KV format, max memory — through the profile's `extra_args`.
 - **Network access.** Splash refuses requests whose `Host` names a host it does not know. When a profile's `host` is not loopback (for example `0.0.0.0` or a LAN address), the launcher adds `--allowed-host` for the machine's hostname and its short form (`Apollo-II.local` and `Apollo-II`), so LAN clients can reach it by IP or by hostname. Add `--allowed-host` to `extra_args` only for other names, such as a reverse proxy or a DNS alias. A Splash bound to `0.0.0.0` is still probed, listed and stopped by its configured address; the launcher's own checks reach it over loopback.
+
+#### vLLM
+
+[vLLM](https://github.com/vllm-project/vllm), like `llamacpp` and Splash, is restarted to switch models: each profile starts `vllm serve <model>` with its own settings, and unloading the model stops the server.
+
+- **Put `vllm` on `PATH`.** The launcher runs whatever `vllm` command it finds there — usually the script in the virtualenv or `uv tool` directory vLLM was installed into. A launcher or MCP adapter started by launchd does not see your shell's `PATH`, so its `PATH` must include that directory too.
+- **Model references.** `model` is a Hugging Face `owner/repo` id (e.g. `Qwen/Qwen3-8B`) or an absolute path to a local model directory, passed to `vllm serve` as-is. There is no install check: vLLM downloads a missing model itself.
+- **The first start downloads the model.** vLLM fetches a model it does not have yet before it starts listening, so the first start of a profile can take a long time. The launcher waits for it up to `startup_max_wait`; raise that for a large model. While it downloads or loads, `status` shows the server as `starting…` and `stop` can end it.
+- **Parameters.** `context_size` becomes `--max-model-len`, `parallel` becomes `--max-num-seqs`, and `host` / `port` become `--host` / `--port`. Sampling parameters are ignored. Pass any other vLLM flag — `--gpu-memory-utilization`, `--dtype`, `--served-model-name` — through the profile's `extra_args`.
+- **API key.** A configured `api_key` is exported as `VLLM_API_KEY` into the server's environment, never put on the command line (see [API keys](#api-keys)).
+- **Shared default address.** vLLM and Splash both default to `127.0.0.1:8000`. Give one of the profiles a distinct `port` to run both at once.
 
 ### API keys
 
@@ -166,6 +180,7 @@ The launcher is not a proxy, so what the key does depends on the backend:
 | `lmstudio` | LM Studio manages its own token: enable *Require API token* in its Server Settings, generate a token there, and paste it here so the launcher's health checks and model loads keep working. |
 | `ollama` | Ollama has no native authentication. Set a key only when the instance sits behind an authenticating reverse proxy; the launcher then sends it with its own requests. |
 | `splash` | Exported as `SPLASH_API_KEY` into the launched server's environment — Splash then rejects client requests without `Authorization: Bearer <key>`. Never put on the command line. |
+| `vllm` | Exported as `VLLM_API_KEY` into the launched server's environment — vLLM then rejects requests to its `/v1/*` endpoints without `Authorization: Bearer <key>`. Never put on the command line. |
 
 `api_key_cmd` has the same effect as `api_key` for every backend: the key it prints is used exactly as a literal `api_key` would be.
 
@@ -261,7 +276,7 @@ The `reasoning-phi` row is blank because that Ollama Profile sets no `context_si
 llama-launcher load <profile> [--restart]   # Activate a profile (no-op if already active; --restart forces)
 llama-launcher reload [target]              # Re-activate an instance's active profile with the current config
 llama-launcher unload [profile]             # Unload model from the matching instance
-llama-launcher start [--profile p]          # Start server without a model (llamacpp and splash require --profile)
+llama-launcher start [--profile p]          # Start server without a model (llamacpp, splash, vllm need --profile)
 llama-launcher stop [target]                # Stop a server (target = host:port or backend name)
 llama-launcher status [--json]              # Show all running instances (--json for structured output)
 llama-launcher list [--json]                # List available profiles (--json for structured output)
@@ -380,7 +395,7 @@ The package **compiles on macOS, Linux and Windows**, and each verb works wherev
 |---|---|
 | macOS | Everything. |
 | Linux | Everything. (Only the TUI's macOS-specific memory readout is dropped.) |
-| Windows | Everything the launcher drives over HTTP: discovery, model load/unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio start/stop works via the `lms` CLI. Starting `llama-server`, `splash` or `ollama serve` is refused (wrapping `ErrUnsupported`) because Windows lacks the unix process control the launcher would need to stop it again, and stopping a running llama-server, Ollama or Splash server is refused the same way (the error wraps `ErrUnsupported`). |
+| Windows | Everything the launcher drives over HTTP: discovery, model load/unload against Ollama or LM Studio, and `LoadProfile` against a server that is **already running**. LM Studio start/stop works via the `lms` CLI. Starting `llama-server`, `splash`, `vllm` or `ollama serve` is refused (wrapping `ErrUnsupported`) because Windows lacks the unix process control the launcher would need to stop it again, and stopping a running llama-server, Ollama, Splash or vLLM server is refused the same way (the error wraps `ErrUnsupported`). |
 
 ## Building
 
@@ -412,7 +427,7 @@ The version is read from the `VERSION` file and injected at build time.
 
 ## Architecture
 
-All code lives in `internal/launcher/`, with the public `launcher/` package a thin facade over it. Four LLM servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, LM Studio, and Splash. The optional MCP adapter is a separate binary under `cmd/llama-launcher-mcp/` and is the only component with a network listener.
+All code lives in `internal/launcher/`, with the public `launcher/` package a thin facade over it. Five LLM servers are implemented behind a common `LLMServer` interface: llama.cpp, Ollama, LM Studio, Splash, and vLLM. The optional MCP adapter is a separate binary under `cmd/llama-launcher-mcp/` and is the only component with a network listener.
 
 The launcher does not persist runtime state. Each command rediscovers running servers by probing the addresses in your config and asking each server's own API which model is loaded. `llama-launcher logs` covers launcher-managed servers only.
 

@@ -64,7 +64,7 @@ live in `docs/plans/`, decision records in `.capcom/knowledge/decisions/`.
 |---|---|
 | CLI commands & flags | `internal/launcher/cli.go` (the verbs `load`, `unload`, `start`, `stop`, `status`, `list`, `logs`, `validate`, `init`, `reset` and their flags; skip `_test.go`), `main.go` |
 | Interactive menu | `internal/launcher/menu.go`, `internal/launcher/ui.go`, `internal/launcher/frame.go`, `internal/launcher/progress.go` (what the TUI shows and the keys it takes) |
-| Servers driven | `internal/launcher/backend*.go` (llamacpp, ollama, lmstudio, splash), `internal/launcher/server.go`, `internal/launcher/discovery.go` |
+| Servers driven | `internal/launcher/backend*.go` (llamacpp, ollama, lmstudio, splash, vllm), `internal/launcher/server.go`, `internal/launcher/discovery.go` |
 | Config keys & defaults | `internal/launcher/config.go`, `internal/launcher/configwrite.go`, `internal/launcher/defaults/config.yaml` (what `init` writes), `internal/keystore/` (API-key storage) |
 | MCP server | `cmd/llama-launcher-mcp/` (its tools `list_profiles`, `server_status`, `tail_log`, `load_profile`, …, flags, allowlist and config) |
 | Go library | `launcher/` (the public package other programs import) |
