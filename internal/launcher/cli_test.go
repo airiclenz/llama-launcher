@@ -728,9 +728,9 @@ func TestCmdList_StarColumnAlignmentMultibyte(t *testing.T) {
 
 // TestCmdList_ContextColumnAlignment pins the context-size column of the text
 // `list` output: the cells are right-aligned between the name and the tag, the
-// Ollama row stays blank because its LLM Server never receives the parameter,
-// and a multibyte profile name keeps every following column in place (the row
-// is measured by visible width, not bytes).
+// Ollama row shows its own context size (sent on load as num_ctx), and a
+// multibyte profile name keeps every following column in place (the row is
+// measured by visible width, not bytes).
 func TestCmdList_ContextColumnAlignment(t *testing.T) {
 	host := "127.0.0.1"
 	port := 8080
@@ -763,7 +763,7 @@ func TestCmdList_ContextColumnAlignment(t *testing.T) {
 	want := []string{
 		"  bravo   65K  [LLaMA.cpp] -",
 		"  café   131K  [LLaMA.cpp] -",
-		"  olla         [Ollama   ] -",
+		"  olla    32K  [Ollama   ] -",
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("got %d profile rows, want %d in:\n%s", len(rows), len(want), out)
@@ -782,10 +782,10 @@ func TestCmdList_ContextColumnAlignment(t *testing.T) {
 		}
 	}
 
-	// Nothing but spaces stands between the Ollama name and its tag: the cell is
-	// blank because the server's ParamSpecs omit the context size.
-	if got := strings.TrimPrefix(rows[2], "  olla"); strings.TrimLeft(got, " ") != "[Ollama   ] -" {
-		t.Errorf("Ollama row %q does not carry a blank context cell", rows[2])
+	// The Ollama row carries its own context size: the server's ParamSpecs
+	// list the parameter it receives as num_ctx.
+	if got := strings.TrimPrefix(rows[2], "  olla"); strings.TrimLeft(got, " ") != "32K  [Ollama   ] -" {
+		t.Errorf("Ollama row %q does not carry its 32K context cell", rows[2])
 	}
 }
 
@@ -1032,6 +1032,38 @@ func TestCmdListJSON_NumericParamsPresentOnlyWhenSet(t *testing.T) {
 		if v, ok := keys["plain"][field]; ok {
 			t.Errorf("plain carries %s = %s, want the key absent", field, v)
 		}
+	}
+}
+
+// TestCmdListJSON_OllamaIgnoresDefaultContextSize asserts context_size follows
+// the merge rule: an Ollama Profile reports only its own value, while a
+// llamacpp Profile still inherits defaults.context_size.
+func TestCmdListJSON_OllamaIgnoresDefaultContextSize(t *testing.T) {
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+		},
+		Defaults: ProfileParams{Server: strPtrLocal("llamacpp"), ContextSize: ptrInt(4096)},
+		Profiles: map[string]Profile{
+			"cpp":      {Model: "/models/cpp.gguf"},
+			"olla":     {Model: "llama3", ProfileParams: ProfileParams{Server: strPtrLocal("ollama")}},
+			"olla-own": {Model: "llama3", ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(8192)}},
+		},
+	}
+
+	out := captureStdout(t, func() { cmdListJSON(cfg) })
+
+	entries := decodeListJSON(t, out)
+	if got := entries["cpp"].ContextSize; got == nil || *got != 4096 {
+		t.Errorf("cpp context_size = %v, want 4096 (inherited)", got)
+	}
+	if got := entries["olla-own"].ContextSize; got == nil || *got != 8192 {
+		t.Errorf("olla-own context_size = %v, want 8192", got)
+	}
+	keys := decodeListJSONKeys(t, out)
+	if v, ok := keys["olla"]["context_size"]; ok {
+		t.Errorf("defaults-only Ollama Profile carries context_size = %s, want the key absent", v)
 	}
 }
 

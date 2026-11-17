@@ -1133,6 +1133,11 @@ func applyBackendFallbacks(p *ProfileParams, cfg *Config, backendName string, b 
 	}
 }
 
+// mergeParams overlays a Profile's own parameters on the defaults: every
+// field the Profile sets wins, every other field keeps its default. The one
+// exception is context_size on an LLM Server that is a
+// defaultContextSizeIgnorer (keyed on the merged server, which equals
+// resolveProfileServer): there only the Profile's own value counts.
 func mergeParams(defaults, profile ProfileParams) ProfileParams {
 	merged := defaults
 	if profile.Server != nil {
@@ -1194,6 +1199,9 @@ func mergeParams(defaults, profile ProfileParams) ProfileParams {
 	}
 	if profile.MinP != nil {
 		merged.MinP = profile.MinP
+	}
+	if profile.ContextSize == nil && merged.Server != nil && serverIgnoresDefaultContextSize(*merged.Server) {
+		merged.ContextSize = nil
 	}
 	return merged
 }

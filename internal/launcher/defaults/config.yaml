@@ -211,7 +211,7 @@ sort_alphabetically: true
 #   threads         yes        -        -          -
 #   threads_batch   yes        -        -          -
 #   batch_size      yes        -        yes        -       (lmstudio: mapped to eval_batch_size)
-#   context_size    yes        -        yes        yes     (splash: mapped to --max-context)
+#   context_size    yes        yes      yes        yes     (splash: mapped to --max-context; ollama: sent as num_ctx, profile value only)
 #   host / port     yes        yes      yes        yes
 #   flash_attn      yes        -        yes        -       (lmstudio: mapped to flash_attention)
 #   cont_batching   yes        -        -          -
@@ -225,6 +225,11 @@ sort_alphabetically: true
 #   top_k           yes        -        -          -
 #   top_p           yes        -        -          -
 #   min_p           yes        -        -          -
+#
+# Ollama honours only a context_size the profile sets itself: the
+# defaults value below is not inherited. Ollama reloads a model whose
+# request options differ, so clients must send the same num_ctx (or run
+# the server with OLLAMA_CONTEXT_LENGTH) for it to hold.
 #
 # Splash honours only context_size (plus host / port). Sampling params
 # (temperature, repeat_penalty, top_k, top_p, min_p) are ignored for

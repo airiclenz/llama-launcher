@@ -113,6 +113,82 @@ func TestMergeParams(t *testing.T) {
 	})
 }
 
+// TestMergeParams_OllamaContextSizeFromProfileOnly pins the
+// defaultContextSizeIgnorer rule: an Ollama Profile's context size counts only
+// when the Profile sets it, while every other LLM Server still inherits
+// defaults.context_size.
+func TestMergeParams_OllamaContextSizeFromProfileOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		defaults ProfileParams
+		profile  ProfileParams
+		want     *int
+	}{
+		{
+			name:     "ollama profile ignores defaults context size",
+			defaults: ProfileParams{ContextSize: ptrInt(4096)},
+			profile:  ProfileParams{Server: strPtrLocal("ollama")},
+			want:     nil,
+		},
+		{
+			name:     "ollama via defaults server ignores defaults context size",
+			defaults: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(4096)},
+			profile:  ProfileParams{},
+			want:     nil,
+		},
+		{
+			name:     "ollama profile keeps its own context size",
+			defaults: ProfileParams{ContextSize: ptrInt(4096)},
+			profile:  ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(8192)},
+			want:     ptrInt(8192),
+		},
+		{
+			name:     "llamacpp profile still inherits defaults context size",
+			defaults: ProfileParams{ContextSize: ptrInt(4096)},
+			profile:  ProfileParams{Server: strPtrLocal("llamacpp")},
+			want:     ptrInt(4096),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			merged := mergeParams(tt.defaults, tt.profile)
+
+			switch {
+			case tt.want == nil && merged.ContextSize != nil:
+				t.Errorf("ContextSize = %d, want nil", *merged.ContextSize)
+			case tt.want != nil && (merged.ContextSize == nil || *merged.ContextSize != *tt.want):
+				t.Errorf("ContextSize = %v, want %d", merged.ContextSize, *tt.want)
+			}
+		})
+	}
+}
+
+// TestResolveProfile_OllamaIgnoresDefaultContextSize asserts the public
+// resolved form follows the merge rule: a defaults-only context size leaves
+// an Ollama Profile's ContextSize nil.
+func TestResolveProfile_OllamaIgnoresDefaultContextSize(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"ollama": {Enabled: true}},
+		Defaults: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(4096)},
+		Profiles: map[string]Profile{"olla": {Model: "llama3"}},
+	}
+
+	rp, err := cfg.ResolveProfile("olla")
+
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	if rp.ContextSize != nil {
+		t.Errorf("ContextSize = %d, want nil", *rp.ContextSize)
+	}
+}
+
 func TestApplyFallbacks(t *testing.T) {
 	t.Parallel()
 

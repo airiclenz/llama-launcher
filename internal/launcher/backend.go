@@ -114,9 +114,8 @@ var (
 // receives the context-size parameter, i.e. whether specContextSize is part
 // of its ParamSpecs. The profile lists gate their context-size column on this
 // so a parameter the server never receives is never displayed (the
-// LLMServer.ParamSpecs contract above); Ollama, whose spec list is empty,
-// therefore renders a blank cell. Unknown or unregistered server names report
-// false. Identity is derived from specContextSize's own label because Go
+// LLMServer.ParamSpecs contract above). Unknown or unregistered server names
+// report false. Identity is derived from specContextSize's own label because Go
 // forbids == on structs holding func fields.
 func serverShowsContextSize(serverName string) bool {
 	srv, err := GetLLMServer(serverName)
@@ -129,6 +128,27 @@ func serverShowsContextSize(serverName string) bool {
 		}
 	}
 	return false
+}
+
+// defaultContextSizeIgnorer is implemented by LLM Servers that honour only a
+// context_size the Profile sets itself: defaults.context_size is not
+// inherited, so mergeParams leaves the merged value nil for such a Profile and
+// every consumer of the merge (ResolveProfile, the profile-list context column,
+// `list --json`) follows the same rule.
+type defaultContextSizeIgnorer interface {
+	ignoresDefaultContextSize()
+}
+
+// serverIgnoresDefaultContextSize reports whether the named LLM Server
+// implements defaultContextSizeIgnorer. Unknown or unregistered server names
+// report false, so their Profiles keep the plain defaults merge.
+func serverIgnoresDefaultContextSize(serverName string) bool {
+	srv, err := GetLLMServer(serverName)
+	if err != nil {
+		return false
+	}
+	_, ignores := srv.(defaultContextSizeIgnorer)
+	return ignores
 }
 
 // apiKeyConfigurable is implemented by LLM Servers that accept a per-server

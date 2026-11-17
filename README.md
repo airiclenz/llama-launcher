@@ -111,6 +111,10 @@ Other top-level options control launcher behaviour (`auto_stop_server`, `auto_un
 
 For each backend, the launcher knows how to start the server (fork-and-detach for `llamacpp` and `splash`; `ollama serve` for Ollama; `lms server start` for LM Studio) and how to stop it. `stop` is unconditional — the launcher does not distinguish servers it started from servers that were already running (see [ADR-0001](.capcom/knowledge/decisions/adr-0001.md)). Multiple instances may run concurrently as long as each binds a distinct `host:port`.
 
+#### Ollama
+
+A Profile's own `context_size` is sent with the load request as `options.num_ctx`; `defaults.context_size` is not inherited for Ollama, so a Profile without its own value loads at Ollama's default context length. Ollama reloads a Model whenever a request's options differ, so the size holds only while your clients send the same `num_ctx` — or run the Ollama server with `OLLAMA_CONTEXT_LENGTH` set instead. No other Profile parameter reaches Ollama.
+
 #### Splash
 
 Splash, like `llamacpp`, is restarted to switch models: each profile starts `splash serve --model <owner/repo>` with its own settings.
@@ -247,7 +251,7 @@ Each profile row shows its title, the effective context size the backend will ac
   reasoning-phi                  [Ollama   ]
 ```
 
-The Ollama row is blank because Ollama's load request carries no context length — the column only shows what the backend is actually sent.
+The `reasoning-phi` row is blank because that Ollama Profile sets no `context_size` of its own — for Ollama only a Profile's own value is sent (`defaults.context_size` is not inherited), and the column only shows what the backend is actually sent.
 
 ### CLI commands
 
@@ -337,7 +341,7 @@ cfg, err := launcher.LoadConfig(launcher.DefaultConfigPath(), func(warning strin
 if err != nil {
 	return err
 }
-profile, err := cfg.ResolveProfile("qwen-coder") // merged with defaults, model path resolved
+profile, err := cfg.ResolveProfile("qwen-coder") // merged with defaults (an Ollama Profile keeps only its own context_size), model path resolved
 if err != nil {
 	return err
 }

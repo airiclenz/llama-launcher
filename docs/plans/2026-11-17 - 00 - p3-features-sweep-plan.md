@@ -34,7 +34,11 @@
 - 4: guard folded
 - 1 (re-check): guard folded — capability check inside mergeParams so list --json and the context column follow the Profile-only rule; launcher/launcher.go and the defaults-merge doc lines added
 
-## 1. Ollama Profiles send their context size
+## 1. Ollama Profiles send their context size — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): renamed TestFormatProfileParams_OllamaShowsNoParams to TestFormatProfileParams_OllamaShowsOnlyContextSize — the old name asserts the behaviour this item reverses; it now also asserts a non-Ollama param (Threads) stays hidden.
+NOTES (2026-11-17): TestBuildProfileItems_NoContextColumn's "a context size only Ollama carries does not open the column" subtest became "a defaults-only context size on Ollama does not open the column", and TestBuildSimpleProfileLines_ContextColumn's "no displayable profile" subtest dropped the Ollama Profile's own context_size (it now opens the column); added TestBuildProfileItems_OllamaIgnoresDefaultContextSize, TestMergeParams_OllamaContextSizeFromProfileOnly, TestResolveProfile_OllamaIgnoresDefaultContextSize, TestCmdListJSON_OllamaIgnoresDefaultContextSize and TestOllamaParamSpecs_ListsOnlyContextSize.
+NOTES (2026-11-17): README gained a short "#### Ollama" subsection under Backends carrying the num_ctx / OLLAMA_CONTEXT_LENGTH caveat; menu.go's profileContextCells comment ("merged (defaults + profile) context size") left as is — it reads mergeParams, which now applies the rule.
 
 **What:** Recast at the regression check (2026-11-17).
 **Goal:** An Ollama Profile's `context_size` reaches Ollama on load as `options.num_ctx` (omitted when unset), and Ollama's `ParamSpecs` returns exactly `[specContextSize]`, so the Profile-list context column and "Show model config" show it for Ollama rows. Only a context_size the Ollama Profile sets itself counts (defaults.context_size is not inherited), so `list --json` omits `context_size` for a defaults-only Ollama Profile and the public `ResolvedProfile.ContextSize` is nil for it.

@@ -110,9 +110,9 @@ func visibleColumnOf(t *testing.T, s, sub string) int {
 }
 
 // TestBuildProfileItems_ContextColumn pins the context-size column of the TUI
-// selection menu: llama.cpp rows show their compact merged value, the Ollama
-// row stays blank because its LLM Server never receives the parameter, and
-// both the [server] tags and the ★ marker keep their columns.
+// selection menu: every row shows its compact merged value — the Ollama row
+// included, since its LLM Server receives the parameter as num_ctx — and both
+// the [server] tags and the ★ marker keep their columns.
 func TestBuildProfileItems_ContextColumn(t *testing.T) {
 	t.Parallel()
 
@@ -136,9 +136,8 @@ func TestBuildProfileItems_ContextColumn(t *testing.T) {
 	}
 	big, small, olla := items[0].Description, items[1].Description, items[2].Description
 
-	// Cells hold the merged value, right-aligned to the widest one; the Ollama
-	// row is blank spaces of that same width (its ParamSpecs omit the param).
-	wantCells := map[string]string{big: "131K", small: " 65K", olla: "    "}
+	// Cells hold the merged value, right-aligned to the widest one.
+	wantCells := map[string]string{big: "131K", small: " 65K", olla: " 32K"}
 	for desc, want := range wantCells {
 		if got := desc[:visibleColumnOf(t, desc, "[")-len(contextColumnGap)]; got != want {
 			t.Errorf("context cell of %q = %q, want %q", desc, got, want)
@@ -192,6 +191,33 @@ func TestBuildProfileItems_ContextFromDefaults(t *testing.T) {
 	}
 }
 
+// TestBuildProfileItems_OllamaIgnoresDefaultContextSize pins the Ollama merge
+// rule in an open column: the llamacpp row inherits defaults.context_size, the
+// Ollama Profile without its own value gets a blank cell of the column width.
+func TestBuildProfileItems_OllamaIgnoresDefaultContextSize(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"ollama":   {Enabled: true},
+		},
+		Defaults: ProfileParams{ContextSize: ptrInt(32768)},
+		Profiles: map[string]Profile{
+			"cpp":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
+			"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama")}},
+		},
+	}
+
+	items := buildProfileItems(cfg, []string{"cpp", "olla"})
+
+	for i, want := range []string{"32K  [LLaMA.cpp]", "     [Ollama   ]"} {
+		if got := items[i].Description; got != want {
+			t.Errorf("description %d = %q, want %q", i, got, want)
+		}
+	}
+}
+
 // TestBuildProfileItems_NoContextColumn pins Decision D6's presence gate: with
 // no displayable profile the descriptions keep their exact pre-column shape.
 func TestBuildProfileItems_NoContextColumn(t *testing.T) {
@@ -220,22 +246,22 @@ func TestBuildProfileItems_NoContextColumn(t *testing.T) {
 		}
 	})
 
-	t.Run("a context size only Ollama carries does not open the column", func(t *testing.T) {
+	t.Run("a defaults-only context size on Ollama does not open the column", func(t *testing.T) {
 		t.Parallel()
 		cfg := &Config{
 			Servers: map[string]ServerConfig{
 				"llamacpp": {Enabled: true},
 				"ollama":   {Enabled: true},
 			},
+			Defaults: ProfileParams{ContextSize: ptrInt(65536)},
 			Profiles: map[string]Profile{
-				"cpp":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
-				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(65536)}},
+				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama")}},
 			},
 		}
 
-		items := buildProfileItems(cfg, []string{"cpp", "olla"})
+		items := buildProfileItems(cfg, []string{"olla"})
 
-		if got, want := items[1].Description, "[Ollama   ]"; got != want {
+		if got, want := items[0].Description, "[Ollama]"; got != want {
 			t.Errorf("description = %q, want %q", got, want)
 		}
 	})
@@ -302,12 +328,11 @@ func TestBuildSimpleProfileLines_ContextColumn(t *testing.T) {
 
 		lines := buildSimpleProfileLines(cfg, names)
 
-		// Cells hold the merged value right-aligned to the widest one; the
-		// Ollama row is blank because its ParamSpecs omit the parameter.
+		// Cells hold the merged value right-aligned to the widest one.
 		want := []string{
 			"Big    131K  [LLaMA.cpp]",
 			"Small   65K  [LLaMA.cpp] ★",
-			"Olla         [Ollama   ] ★",
+			"Olla    32K  [Ollama   ] ★",
 		}
 		if len(lines) != len(want) {
 			t.Fatalf("got %d lines, want %d", len(lines), len(want))
@@ -340,7 +365,7 @@ func TestBuildSimpleProfileLines_ContextColumn(t *testing.T) {
 			},
 			Profiles: map[string]Profile{
 				"cpp":  {ProfileParams: ProfileParams{Server: strPtrLocal("llamacpp")}},
-				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama"), ContextSize: ptrInt(65536)}},
+				"olla": {ProfileParams: ProfileParams{Server: strPtrLocal("ollama")}},
 			},
 		}
 
@@ -516,20 +541,23 @@ func TestFormatProfileParams_LMStudio(t *testing.T) {
 	})
 }
 
-func TestFormatProfileParams_OllamaShowsNoParams(t *testing.T) {
+func TestFormatProfileParams_OllamaShowsOnlyContextSize(t *testing.T) {
 	t.Parallel()
 
-	ctx := 4096
 	profile := &ResolvedProfile{
 		Backend:       "ollama",
 		ModelPath:     "llama3",
-		ProfileParams: ProfileParams{ContextSize: &ctx},
+		ProfileParams: ProfileParams{ContextSize: ptrInt(4096), Threads: ptrInt(8)},
 	}
+
 	lines := formatProfileParams(profile)
-	for _, line := range lines {
-		if contains(line, "Context size") {
-			t.Errorf("expected no Context size line for ollama profile (its load request never carries it), got lines: %v", lines)
-		}
+
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Context size") {
+		t.Errorf("expected a Context size line for ollama profile (its load request sends num_ctx), got lines: %v", lines)
+	}
+	if strings.Contains(joined, "Threads") {
+		t.Errorf("expected no Threads line for ollama profile (its load request never carries it), got lines: %v", lines)
 	}
 }
 

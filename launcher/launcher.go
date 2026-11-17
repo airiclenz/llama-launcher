@@ -23,7 +23,9 @@ type Profile = core.Profile
 type ProfileParams = core.ProfileParams
 
 // ResolvedProfile is a profile merged with the config defaults and with its
-// model path resolved: the form LoadProfile activates.
+// model path resolved: the form LoadProfile activates. One field is not
+// inherited for every server: an Ollama profile's ContextSize is set only when
+// the profile sets context_size itself, and is nil otherwise.
 type ResolvedProfile = core.ResolvedProfile
 
 // RunningInstance is a snapshot of one LLM-server instance found at

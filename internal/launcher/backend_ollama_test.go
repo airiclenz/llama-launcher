@@ -131,6 +131,9 @@ func TestOllamaLoadModel(t *testing.T) {
 			if payload["keep_alive"] != "24h" {
 				t.Errorf("keep_alive = %v, want 24h", payload["keep_alive"])
 			}
+			if options, ok := payload["options"]; ok {
+				t.Errorf("options = %v, want the key absent without a context size", options)
+			}
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer srv.Close()
@@ -138,6 +141,37 @@ func TestOllamaLoadModel(t *testing.T) {
 		profile := &ResolvedProfile{ModelPath: "llama3"}
 		if err := b.LoadModel(addrFromURL(t, srv.URL), profile); err != nil {
 			t.Errorf("expected success, got: %v", err)
+		}
+	})
+
+	t.Run("context size is sent as options.num_ctx", func(t *testing.T) {
+		t.Parallel()
+		bodies := make(chan []byte, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			bodies <- body
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		profile := &ResolvedProfile{ModelPath: "llama3", ProfileParams: ProfileParams{ContextSize: ptrInt(32768)}}
+		err := b.LoadModel(addrFromURL(t, srv.URL), profile)
+
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+		body := <-bodies
+		var payload struct {
+			Options map[string]json.RawMessage `json:"options"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decoding load body %q: %v", body, err)
+		}
+		if got := string(payload.Options["num_ctx"]); got != "32768" {
+			t.Errorf("options.num_ctx = %q, want 32768 (options = %v)", got, payload.Options)
+		}
+		if len(payload.Options) != 1 {
+			t.Errorf("options = %v, want num_ctx alone", payload.Options)
 		}
 	})
 
@@ -157,6 +191,22 @@ func TestOllamaLoadModel(t *testing.T) {
 			t.Errorf("error = %q, want it to contain 'status 404'", err)
 		}
 	})
+}
+
+// TestOllamaParamSpecs_ListsOnlyContextSize pins Ollama's display spec to the
+// one Profile parameter its load request carries.
+func TestOllamaParamSpecs_ListsOnlyContextSize(t *testing.T) {
+	t.Parallel()
+
+	specs := (&Ollama{}).ParamSpecs()
+
+	labels := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		labels = append(labels, spec.Label)
+	}
+	if len(labels) != 1 || labels[0] != specContextSize.Label {
+		t.Errorf("ParamSpecs labels = %v, want [%q]", labels, specContextSize.Label)
+	}
 }
 
 func TestOllamaUnloadModel(t *testing.T) {

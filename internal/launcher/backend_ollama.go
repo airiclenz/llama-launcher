@@ -54,14 +54,30 @@ func (b *Ollama) ResolveModel(_ *Config, modelRef string) (string, error) {
 	return modelRef, nil
 }
 
-// ParamSpecs is empty: LoadModel sends only the model name and a keep_alive
-// — no profile parameter reaches the Ollama server, so none is displayed.
-func (b *Ollama) ParamSpecs() []ProfileParamSpec { return nil }
+// ParamSpecs lists only the context size: LoadModel sends it as
+// options.num_ctx, and no other profile parameter reaches the Ollama server.
+func (b *Ollama) ParamSpecs() []ProfileParamSpec {
+	return []ProfileParamSpec{specContextSize}
+}
 
+// ignoresDefaultContextSize marks Ollama as a defaultContextSizeIgnorer: only a
+// context_size the Ollama Profile sets itself is sent, never
+// defaults.context_size, which is tuned for the managed servers.
+func (b *Ollama) ignoresDefaultContextSize() {}
+
+// LoadModel loads the Profile's Model through /api/generate, keeping it
+// resident for 24h. A set context size travels as options.num_ctx; without
+// one the payload carries no options key and Ollama applies its own default.
+// Ollama reloads a model whose request options differ, so the size holds only
+// while clients send the same num_ctx (or the server runs with
+// OLLAMA_CONTEXT_LENGTH).
 func (b *Ollama) LoadModel(addr string, profile *ResolvedProfile) error {
 	payload := map[string]interface{}{
 		"model":      profile.ModelPath,
 		"keep_alive": "24h",
+	}
+	if profile.ContextSize != nil {
+		payload["options"] = map[string]interface{}{"num_ctx": *profile.ContextSize}
 	}
 	body, _ := json.Marshal(payload)
 	resp, err := authedPostJSON(modelLoadTimeout, "http://"+addr+"/api/generate", b.apiKey(), body)
