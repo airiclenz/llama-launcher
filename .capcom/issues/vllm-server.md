@@ -3,6 +3,7 @@ title: vLLM is not a supported LLM Server
 status: open
 type: feature
 priority: 3
+plan: 2026-11-17 - 01 - vllm-mouse-autostart-plan
 created: 2026-10-13T11:47:04Z
 ---
 

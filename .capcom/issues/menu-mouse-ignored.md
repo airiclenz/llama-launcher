@@ -4,6 +4,7 @@ status: open
 type: feature
 priority: 3
 labels: [menu]
+plan: 2026-11-17 - 01 - vllm-mouse-autostart-plan
 created: 2026-11-06T18:09:37Z
 ---
 
