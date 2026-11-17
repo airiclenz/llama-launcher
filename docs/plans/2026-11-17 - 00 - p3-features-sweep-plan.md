@@ -74,7 +74,10 @@ internal/launcher/log_cleanup.go — parseLogTimestamp, cleanupLogs; internal/la
 **Closes:** log-name-instance
 **Commit:** `feat(logs): name log files by instance port and Profile`
 
-## 3. Per-Profile log retention
+## 3. Per-Profile log retention — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): cleanupLogs keeps its signature (the regression guard's second option), so cli.go (cmdLogsClean) needed no change and is not in FILES; the per-file variant cleanupExpiredLogs sits beside it, both delegating to a new removeLogs.
+NOTES (2026-11-17): Profile log_retention errors are reported in Profile-name order ("profile %q: log_retention must be 0 or positive"), placed right after the global log_retention check in configChecks.
 
 **What:** Depends on item 2.
 **Goal:** A Profile may set `log_retention: N` (N ≥ 0); automatic cleanup ages each log whose name carries that Profile's slug against the Profile's value, and every other log against the global value; a value ≤ 0 or unset means keep (never "delete everything"); a negative Profile value is a config error.

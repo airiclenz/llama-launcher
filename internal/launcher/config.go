@@ -309,6 +309,7 @@ type Profile struct {
 	Backend       string   `yaml:"backend"`
 	IsFavourite   bool     `yaml:"is_favourite,omitempty"`
 	ExtraArgs     []string `yaml:"extra_args"`
+	LogRetention  *int     `yaml:"log_retention,omitempty"` // days; nil defers to the global log_retention; not a server parameter
 	ProfileParams `yaml:",inline"`
 }
 
@@ -649,6 +650,7 @@ func (c *Config) configChecks() []configFinding {
 	if c.LogRetention != nil && *c.LogRetention < 0 {
 		findings = append(findings, configErrors("log_retention must be 0 or positive")...)
 	}
+	findings = append(findings, configErrors(c.profileLogRetentionErrors()...)...)
 	if c.LogDir == "" {
 		c.LogDir = filepath.Join(DefaultConfigDir(), "logs")
 	}
@@ -666,6 +668,25 @@ func (c *Config) configChecks() []configFinding {
 	}
 
 	return findings
+}
+
+// profileLogRetentionErrors reports each Profile whose log_retention is
+// negative, in Profile-name order. A negative value is refused rather than
+// read as "keep", mirroring the global log_retention check.
+func (c *Config) profileLogRetentionErrors() []string {
+	names := make([]string, 0, len(c.Profiles))
+	for name, p := range c.Profiles {
+		if p.LogRetention != nil && *p.LogRetention < 0 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	problems := make([]string, 0, len(names))
+	for _, name := range names {
+		problems = append(problems, fmt.Sprintf("profile %q: log_retention must be 0 or positive", name))
+	}
+	return problems
 }
 
 // apiKeySourceErrors reports the key-source mistakes a config must not load

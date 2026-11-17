@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -488,5 +489,144 @@ func TestCleanupLogs_SkipsDirectories(t *testing.T) {
 
 	if result.Removed != 0 {
 		t.Errorf("Removed = %d, want 0", result.Removed)
+	}
+}
+
+// TestAutoCleanupLogs_ProfileRetention pins per-Profile log_retention: a log
+// whose name carries a Profile's slug ages against that Profile's override, a
+// Profile without one defers to the global value, every other log (another
+// Profile's, ollama serve's, legacy) ages against the global value, and a
+// retention that is not positive keeps the logs it governs.
+func TestAutoCleanupLogs_ProfileRetention(t *testing.T) {
+	t.Parallel()
+
+	zero, one, seven, thirty := 0, 1, 7, 30
+	tenDaysAgo := time.Now().Add(-10 * 24 * time.Hour).Format(logTimestampFormat)
+	const (
+		coderLog  = "llamacpp-8080-coder-"
+		chatLog   = "llamacpp-8080-chat-"
+		serveLog  = "ollama-11434-"
+		legacyLog = "llamacpp-"
+	)
+
+	tests := []struct {
+		name        string
+		global      *int
+		profiles    map[string]Profile
+		wantKept    []string
+		wantRemoved []string
+	}{
+		{
+			name:        "Profile override outlives the global value",
+			global:      &seven,
+			profiles:    map[string]Profile{"coder": {LogRetention: &thirty}, "chat": {}},
+			wantKept:    []string{coderLog},
+			wantRemoved: []string{chatLog, serveLog, legacyLog},
+		},
+		{
+			name:        "Profile at 0 keeps its logs",
+			global:      &seven,
+			profiles:    map[string]Profile{"coder": {LogRetention: &zero}},
+			wantKept:    []string{coderLog},
+			wantRemoved: []string{chatLog, serveLog, legacyLog},
+		},
+		{
+			name:        "Profile without an override defers to the global value",
+			global:      &seven,
+			profiles:    map[string]Profile{"coder": {}},
+			wantRemoved: []string{coderLog, chatLog, serveLog, legacyLog},
+		},
+		{
+			name:        "global unset with a Profile at 1 removes only that Profile's logs",
+			global:      nil,
+			profiles:    map[string]Profile{"coder": {LogRetention: &one}, "chat": {}},
+			wantKept:    []string{chatLog, serveLog, legacyLog},
+			wantRemoved: []string{coderLog},
+		},
+		{
+			name:        "shared slug: the longest retention wins",
+			global:      &seven,
+			profiles:    map[string]Profile{"coder": {LogRetention: &one}, "coder ": {LogRetention: &thirty}, "coder_": {}},
+			wantKept:    []string{"llamacpp-8080-coder_-"},
+			wantRemoved: []string{coderLog},
+		},
+		{
+			name:        "shared slug: a keep wins over every retention",
+			global:      &seven,
+			profiles:    map[string]Profile{"coder ": {LogRetention: &one}, "coder_": {LogRetention: &zero}},
+			wantKept:    []string{"llamacpp-8080-coder_-"},
+			wantRemoved: []string{coderLog},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := func(prefix string) string {
+				return filepath.Join(dir, prefix+tenDaysAgo+logFileSuffix)
+			}
+			for _, prefix := range append(append([]string{}, tt.wantKept...), tt.wantRemoved...) {
+				if err := os.WriteFile(path(prefix), []byte("log"), 0o600); err != nil {
+					t.Fatalf("writing %s: %v", prefix, err)
+				}
+			}
+
+			autoCleanupLogs(&Config{LogDir: dir, LogRetention: tt.global, Profiles: tt.profiles})
+
+			for _, prefix := range tt.wantKept {
+				if _, err := os.Stat(path(prefix)); err != nil {
+					t.Errorf("%s log should have been kept", prefix)
+				}
+			}
+			for _, prefix := range tt.wantRemoved {
+				if _, err := os.Stat(path(prefix)); !os.IsNotExist(err) {
+					t.Errorf("%s log should have been removed", prefix)
+				}
+			}
+		})
+	}
+}
+
+// TestAutoCleanupLogs_ProfileRetentionPreservesActiveLogFile guards the TDD
+// §9.1 invariant on the per-Profile path: an expired log of a Profile with a
+// positive override is still kept while its server runs.
+func TestAutoCleanupLogs_ProfileRetentionPreservesActiveLogFile(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	host, port := hostPort(t, srv.URL)
+	dir := t.TempDir()
+	tenDaysAgo := time.Now().Add(-10 * 24 * time.Hour).Format(logTimestampFormat)
+	activeFile := filepath.Join(dir, fmt.Sprintf("llamacpp-%d-coder-%s.log", port, tenDaysAgo))
+	staleFile := filepath.Join(dir, fmt.Sprintf("llamacpp-%d-coder-%s.log", port+1, tenDaysAgo))
+	os.WriteFile(activeFile, []byte("active"), 0o600)
+	os.WriteFile(staleFile, []byte("stale"), 0o600)
+
+	backend := "llamacpp"
+	one := 1
+	cfg := &Config{
+		Servers:  map[string]ServerConfig{"llamacpp": {Enabled: true}},
+		LogDir:   dir,
+		Defaults: ProfileParams{Server: &backend, Host: &host, Port: &port},
+		Profiles: map[string]Profile{"coder": {Model: "coder.gguf", LogRetention: &one}},
+	}
+
+	autoCleanupLogs(cfg)
+
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Error("stale log of the Profile should have been removed")
+	}
+	if _, err := os.Stat(activeFile); err != nil {
+		t.Error("active log of the running server must be preserved")
 	}
 }

@@ -96,6 +96,7 @@ auto_unload: true
 
 # Automatically delete log files older than N days on server start.
 # Logs of running servers are never deleted. 0 or unset disables cleanup.
+# A profile may set its own log_retention for its logs (see profiles below).
 log_retention: 7
 
 # ──────────────────────────────────────────────────────────────
@@ -283,6 +284,8 @@ defaults:
 #                 Favourites sort before all other profiles.
 #   extra_args    Additional CLI flags appended verbatim (llamacpp and
 #                 splash only)
+#   log_retention Days to keep this profile's logs, overriding the global
+#                 log_retention; 0 keeps them. Unset uses the global value.
 #   <param>       Any parameter from the defaults block
 
 profiles:
@@ -295,6 +298,7 @@ profiles:
     model: your-model-file.gguf
     context_size: 8192
     # is_favourite: true
+    # log_retention: 30   # keep this profile's logs longer than the global value
 
   # ── LM Studio examples ────────────────────────────────────
   # Model is an LM Studio model key (publisher/repo or full path

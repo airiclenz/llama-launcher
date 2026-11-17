@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1274,6 +1275,14 @@ func TestValidate_ChecksFireOnBothSurfaces(t *testing.T) {
 			report: "log_retention must be 0 or positive",
 		},
 		{
+			name: "negative Profile log_retention",
+			spoil: func(c *Config) {
+				c.Profiles["test"] = Profile{Model: "test.gguf", LogRetention: &negative, ProfileParams: ProfileParams{Server: &llamacpp}}
+			},
+			load:   `profile "test": log_retention must be 0 or positive`,
+			report: `profile "test": log_retention must be 0 or positive`,
+		},
+		{
 			name:   "no profiles defined",
 			spoil:  func(c *Config) { c.Profiles = map[string]Profile{} },
 			load:   "no profiles defined",
@@ -1314,6 +1323,34 @@ func TestValidate_ChecksFireOnBothSurfaces(t *testing.T) {
 			}
 			if strings.HasPrefix(line, "config: ") {
 				t.Errorf("validateAll line = %q, want no \"config: \" prefix", line)
+			}
+		})
+	}
+}
+
+// A Profile's log_retention of 0 (keep its logs) or a positive day count
+// loads without error.
+func TestValidate_ProfileLogRetentionAccepted(t *testing.T) {
+	t.Parallel()
+
+	llamacpp := "llamacpp"
+	for _, days := range []int{0, 30} {
+		t.Run(fmt.Sprintf("log_retention %d", days), func(t *testing.T) {
+			t.Parallel()
+			retention := days
+			cfg := &Config{
+				Servers: map[string]ServerConfig{"llamacpp": {Enabled: true}},
+				Profiles: map[string]Profile{"test": {
+					Model:         "test.gguf",
+					LogRetention:  &retention,
+					ProfileParams: ProfileParams{Server: &llamacpp},
+				}},
+			}
+
+			err := cfg.validate()
+
+			if err != nil {
+				t.Errorf("validate() = %v, want nil", err)
 			}
 		})
 	}

@@ -100,6 +100,8 @@ Parameters merge in three tiers: **profile > defaults > built-in fallbacks**. "N
 
 Other top-level options control launcher behaviour (`auto_stop_server`, `auto_unload`, `log_retention`, and the startup wait `startup_stall_timeout` / `startup_max_wait`) and the TUI (`display_centered`, `auto_close`, `sort_alphabetically`, `refresh_duration`, and the memory readout below).
 
+`log_retention: N` deletes logs older than N days whenever a server starts (`0` or unset keeps them). A profile may set its own `log_retention` to keep its logs longer or shorter than the global value — `0` keeps them; a profile without one uses the global value. `llama-launcher logs clean` ignores both and uses its own `--days`.
+
 ### Backends
 
 | Backend | Default address | Model reference |
