@@ -362,58 +362,80 @@ func showPopup(title string, lines []string) {
 		return
 	}
 
-	drawPopupAndWait(os.Stdout, title, lines, waitForAnyKey)
+	// Raw mode holds for the whole popup, so the mouse-off escape its deferred
+	// clear writes reaches the terminal before cooked mode returns. When raw
+	// mode cannot be entered there is nothing to wait on and the popup is
+	// skipped.
+	_ = withRawStdin(func() {
+		drawPopupAndWait(os.Stdout, title, lines, waitForAnyKey)
+	})
 }
 
-// waitForAnyKey switches stdin to raw mode, blocks until any key is pressed,
-// and restores the previous terminal state; see waitForInput. It returns
-// without waiting when raw mode cannot be entered.
+// waitForAnyKey blocks until awaitDismiss sees a dismissing event on stdin,
+// which must already be in raw mode. It never fails.
 func waitForAnyKey() error {
-	_, err := waitForInput()
-	return err
+	awaitDismiss(readInput)
+	return nil
 }
 
-// waitForInput switches stdin to raw mode, blocks until an input event other
-// than keyMouseIgnored arrives, restores the previous terminal state and
-// returns that event. It fails without waiting when raw mode cannot be
-// entered.
-func waitForInput() (inputEvent, error) {
+// awaitDismiss reads input events with read until one closes an any-key
+// popup: every key, a click anywhere and a wheel notch close it; a mouse
+// report the decoder ignores — a button release above all, which follows
+// every click — never does.
+func awaitDismiss(read func() inputEvent) {
 	for {
-		ev, err := readInputRaw()
-		if err != nil || ev.key != keyMouseIgnored {
-			return ev, err
+		if read().key != keyMouseIgnored {
+			return
 		}
 	}
 }
 
-// drawPopupAndWait renders the popup frame to w, hides the cursor, and calls
-// wait for the dismissing keypress. On every return path — including a wait
-// failure such as raw mode being unavailable — it clears the popup and
-// restores the cursor, so the process never exits with the cursor hidden.
+// withRawStdin runs fn with stdin in raw mode and restores the previous
+// terminal state once fn returns, so the escapes fn writes on its way out —
+// mouse reporting off — reach the terminal while raw mode still holds and a
+// late mouse report is never echoed as text. It fails without running fn
+// when raw mode cannot be entered. Nested raw sections inside fn are safe:
+// each restores to the raw state it found.
+func withRawStdin(fn func()) error {
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return err
+	}
+	defer term.Restore(fd, oldState)
+	fn()
+	return nil
+}
+
+// drawPopupAndWait renders the popup frame to w, hides the cursor, turns on
+// mouse reporting and calls wait for the dismissing input. On every return
+// path — including a wait failure — it clears the popup, turns mouse
+// reporting off and then restores the cursor, so the process never exits with
+// the cursor hidden or the mouse reported.
 func drawPopupAndWait(w io.Writer, title string, lines []string, wait func() error) {
-	defer fmt.Fprint(w, escClear+escCursorShow)
+	defer fmt.Fprint(w, escClear+escMouseOff+escCursorShow)
 
 	drawPopup(w, title, lines, "press any key to close")
+	fmt.Fprint(w, escMouseOn)
 
 	if err := wait(); err != nil {
-		return // raw mode unavailable: close the popup without waiting
+		return // the wait failed: close the popup without waiting
 	}
 }
 
 // confirmPopup shows a popup asking to confirm a model switch and reports
-// whether enter was pressed. Outside a terminal it confirms nothing.
+// whether it was confirmed. It holds stdin in raw mode for the whole popup so
+// mouse reporting is off again before the terminal is restored. Outside a
+// terminal, or when raw mode cannot be entered, it confirms nothing.
 func confirmPopup(title string, lines []string) bool {
 	if !isTerminal() {
 		return false
 	}
-	return drawConfirmPopup(os.Stdout, title, lines, readKeyRaw)
-}
-
-// readKeyRaw reads one key with stdin in raw mode; see readInputRaw. For
-// callers that need no mouse coordinates.
-func readKeyRaw() (keyCode, error) {
-	ev, err := readInputRaw()
-	return ev.key, err
+	confirmed := false
+	err := withRawStdin(func() {
+		confirmed = drawConfirmPopup(os.Stdout, title, lines, readInputRaw)
+	})
+	return err == nil && confirmed
 }
 
 // readInputRaw reads one input event with stdin in raw mode, restoring the
@@ -430,33 +452,52 @@ func readInputRaw() (inputEvent, error) {
 }
 
 // drawConfirmPopup renders a popup with an "enter switch · q cancel" footer
-// to w and reads keys with wait until one decides: enter confirms; q, esc,
+// to w, turns on mouse reporting and reads input events with wait until one
+// decides: enter, or a left click inside the popup box, confirms; q, esc,
 // ctrl-c, an unreadable key and a wait failure (raw mode unavailable) all
-// cancel; navigation and digit keys and mouse events are ignored. Like
-// drawPopupAndWait it clears the popup and restores the cursor on every
-// return path.
-func drawConfirmPopup(w io.Writer, title string, lines []string, wait func() (keyCode, error)) bool {
-	defer fmt.Fprint(w, escClear+escCursorShow)
+// cancel; navigation and digit keys, a click outside the box, the wheel and
+// ignored mouse reports change nothing. Like drawPopupAndWait it clears the
+// popup, turns mouse reporting off and restores the cursor on every return
+// path.
+func drawConfirmPopup(w io.Writer, title string, lines []string, wait func() (inputEvent, error)) bool {
+	defer fmt.Fprint(w, escClear+escMouseOff+escCursorShow)
 
-	drawPopup(w, title, lines, "enter switch · q cancel")
+	box := drawPopup(w, title, lines, "enter switch · q cancel")
+	fmt.Fprint(w, escMouseOn)
 
 	for {
-		key, err := wait()
+		ev, err := wait()
 		if err != nil {
 			return false
 		}
-		switch key {
+		switch ev.key {
 		case keyEnter:
 			return true
+		case keyClick:
+			if box.contains(ev.x, ev.y) {
+				return true
+			}
 		case keyQ, keyEscape, keyCtrlC, keyNone:
 			return false
 		}
 	}
 }
 
+// screenRect is a box on the terminal: its top-left cell as a 1-based row and
+// column, and its size in cells.
+type screenRect struct {
+	row, col, width, height int
+}
+
+// contains reports whether the 1-based cell at column x, row y lies inside r.
+func (r screenRect) contains(x, y int) bool {
+	return x >= r.col && x < r.col+r.width && y >= r.row && y < r.row+r.height
+}
+
 // drawPopup renders the popup frame — lines, a blank row and the dimmed
-// footer — centred on the last menu (or the terminal) and hides the cursor.
-func drawPopup(w io.Writer, title string, lines []string, footer string) {
+// footer — centred on the last menu (or the terminal), hides the cursor and
+// returns the box it drew, border included.
+func drawPopup(w io.Writer, title string, lines []string, footer string) screenRect {
 	body := append([]string{}, lines...)
 	body = append(body, "", fmt.Sprintf("%s%s%s", cDim, footer, cReset))
 
@@ -489,4 +530,6 @@ func drawPopup(w io.Writer, title string, lines []string, footer string) {
 		fmt.Fprintf(&buf, "\033[%d;%dH%s", startRow+i, startCol, line)
 	}
 	fmt.Fprint(w, buf.String())
+
+	return screenRect{row: startRow, col: startCol, width: popupWidth, height: len(popupLines)}
 }

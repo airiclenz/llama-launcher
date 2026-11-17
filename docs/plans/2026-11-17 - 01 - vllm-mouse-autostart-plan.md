@@ -176,7 +176,15 @@ NOTES (2026-11-17): a selectMenu that ignores a mouse event still re-runs header
 - `go test ./internal/launcher/ -run 'MenuItemAt|SelectMenu|RenderMenuRows'`
 **Commit:** `feat(menu): select menu rows with the mouse`
 
-## 8. Mouse in popups, and docs
+## 8. Mouse in popups, and docs — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): showPopup and confirmPopup each wrap their whole popup (draw, wait, deferred clear) in one call to a new withRawStdin(fn) helper, so escMouseOn and escMouseOff are both written inside raw mode and Off lands before cooked mode returns, as the Goal requires; showPopup's wait is waitForAnyKey, which now only runs awaitDismiss(readInput) on the already-raw stdin, and readInputRaw is unchanged and nests inside withRawStdin. When raw mode cannot be entered the popup is no longer drawn-and-cleared but skipped, with the same visible result (confirmPopup still cancels)
+NOTES (2026-11-17): readKeyRaw and waitForInput became unused (confirmPopup now passes readInputRaw; waitForAnyKey calls awaitDismiss(readInput)) and were deleted as dead code
+NOTES (2026-11-17): drawPopupAndWait's comments no longer name raw mode as the cause of a wait failure, since showPopup now enters raw mode before it is called
+NOTES (2026-11-17): drawPopup returns a new screenRect{row, col, width, height} with a contains(x, y) hit-test; lastMenuRect keeps its anonymous struct type untouched. The rect assertion lives in a sibling test, TestDrawPopupReturnsDrawnRect, which parses the cursor positions drawPopup writes
+NOTES (2026-11-17): menu.go needed no change — enterStillLoadingRawMode never writes escMouseOn
+NOTES (2026-11-17): TDD §5.2's ui.go row now also describes item 7's selectMenu mouse handling (menuRawRestore, menuItemAt, moveSelection), which item 7 left to this item; the ui_input.go row's readKeyRaw reference became readInputRaw; the ui.go row names waitForAnyKey/awaitDismiss/readInput as drawPopupAndWait's wait and says showPopup and confirmPopup each wrap the whole popup in one withRawStdin call (showPopup skips, confirmPopup cancels, without raw mode)
+NOTES (2026-11-17): in the confirm popup a wheel notch is ignored (neither confirms nor cancels), as other non-deciding keys are
 
 **What:** Depends on item 7.
 **Goal:** In the confirm popup a left click inside the box confirms as Enter does and a click outside is ignored; in an any-key popup a click or wheel dismisses it and a release never does; mouse reporting is on only while these popups hold raw mode and off before it is restored. TDD §3.1 and README's Interactive mode describe mouse use.

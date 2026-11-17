@@ -3,6 +3,9 @@ package launcher
 import (
 	"bytes"
 	"errors"
+	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -98,6 +101,9 @@ func TestDrawPopupAndWaitRestoresCursor(t *testing.T) {
 		if !strings.Contains(atWait, escCursorHide) {
 			t.Errorf("popup drawn without hiding the cursor: %q", atWait)
 		}
+		if !strings.Contains(atWait, escMouseOn) {
+			t.Errorf("mouse reporting not on during the key wait: %q", atWait)
+		}
 		if strings.Contains(atWait, escCursorShow) {
 			t.Errorf("cursor restored before the key wait: %q", atWait)
 		}
@@ -108,6 +114,7 @@ func TestDrawPopupAndWaitRestoresCursor(t *testing.T) {
 		if !strings.Contains(tail, escClear) {
 			t.Errorf("popup not cleared after the key wait: %q", tail)
 		}
+		assertMouseOffBeforeCursorShow(t, tail)
 	})
 
 	t.Run("restores cursor and clears popup when raw mode fails", func(t *testing.T) {
@@ -124,28 +131,85 @@ func TestDrawPopupAndWaitRestoresCursor(t *testing.T) {
 		if !strings.Contains(out.String(), escClear) {
 			t.Errorf("popup not cleared after wait failure: %q", out.String())
 		}
+		assertMouseOffBeforeCursorShow(t, out.String())
 	})
 }
 
-// TestSwitchModel_ConfirmPopup pins the switch confirmation keys: enter
-// confirms; q, esc, an unreadable key and a raw-mode failure cancel;
-// navigation keys and ignored mouse reports are ignored. Every path clears the popup and restores the
-// cursor.
+// assertMouseOffBeforeCursorShow fails t unless output turns mouse reporting
+// off before it shows the cursor again.
+func assertMouseOffBeforeCursorShow(t *testing.T, output string) {
+	t.Helper()
+
+	off := strings.LastIndex(output, escMouseOff)
+	show := strings.LastIndex(output, escCursorShow)
+	if off < 0 || off > show {
+		t.Errorf("mouse reporting not turned off before the cursor is shown: %q", output)
+	}
+}
+
+// TestDrawPopupReturnsDrawnRect pins the box drawPopup reports against what
+// it wrote: the first cursor position is the box's top-left cell, one line is
+// drawn per row of the box, and every line is the box's width.
+func TestDrawPopupReturnsDrawnRect(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	box := drawPopup(&out, "Title", []string{"line one", "a somewhat longer line two"}, "footer")
+
+	positions := regexp.MustCompile(`\x1b\[(\d+);(\d+)H([^\x1b]*(?:\x1b\[[0-9;]*m[^\x1b]*)*)`).FindAllStringSubmatch(out.String(), -1)
+	if len(positions) != box.height {
+		t.Fatalf("drew %d lines, box height %d", len(positions), box.height)
+	}
+	for i, position := range positions {
+		row, rowErr := strconv.Atoi(position[1])
+		col, colErr := strconv.Atoi(position[2])
+		if rowErr != nil || colErr != nil {
+			t.Fatalf("line %d: unreadable cursor position %q", i, position[0])
+		}
+		if row != box.row+i || col != box.col {
+			t.Errorf("line %d drawn at %d;%d, want %d;%d", i, row, col, box.row+i, box.col)
+		}
+		if width := visibleWidth(position[3]); width != box.width {
+			t.Errorf("line %d is %d cells wide, box width %d", i, width, box.width)
+		}
+	}
+}
+
+// TestSwitchModel_ConfirmPopup pins the switch confirmation input: enter and
+// a left click inside the popup box confirm; q, esc, an unreadable key and a
+// raw-mode failure cancel; navigation, the wheel, a click outside the box and
+// ignored mouse reports change nothing. Every path clears the popup, turns
+// mouse reporting off and restores the cursor.
 func TestSwitchModel_ConfirmPopup(t *testing.T) {
 	t.Parallel()
 
+	box := drawPopup(io.Discard, "Big", []string{"row"}, "enter switch · q cancel")
+	click := func(x, y int) inputEvent { return inputEvent{key: keyClick, x: x, y: y} }
+	key := func(code keyCode) inputEvent { return inputEvent{key: code} }
+	right := box.col + box.width - 1
+	bottom := box.row + box.height - 1
+
 	tests := []struct {
-		name string
-		keys []keyCode
-		err  error
-		want bool
+		name   string
+		events []inputEvent
+		err    error
+		want   bool
 	}{
-		{name: "enter confirms", keys: []keyCode{keyEnter}, want: true},
-		{name: "q cancels", keys: []keyCode{keyQ}},
-		{name: "esc cancels", keys: []keyCode{keyEscape}},
-		{name: "unreadable key cancels", keys: []keyCode{keyNone}},
-		{name: "navigation is ignored", keys: []keyCode{keyUp, keyDown, keyEnter}, want: true},
-		{name: "ignored mouse report does not cancel", keys: []keyCode{keyMouseIgnored, keyEnter}, want: true},
+		{name: "enter confirms", events: []inputEvent{key(keyEnter)}, want: true},
+		{name: "q cancels", events: []inputEvent{key(keyQ)}},
+		{name: "esc cancels", events: []inputEvent{key(keyEscape)}},
+		{name: "unreadable key cancels", events: []inputEvent{key(keyNone)}},
+		{name: "navigation is ignored", events: []inputEvent{key(keyUp), key(keyDown), key(keyEnter)}, want: true},
+		{name: "ignored mouse report does not cancel", events: []inputEvent{key(keyMouseIgnored), key(keyEnter)}, want: true},
+		{name: "click on the top-left corner confirms", events: []inputEvent{click(box.col, box.row)}, want: true},
+		{name: "click on the bottom-right corner confirms", events: []inputEvent{click(right, bottom)}, want: true},
+		{name: "click left of the box is ignored", events: []inputEvent{click(box.col-1, box.row), key(keyQ)}},
+		{name: "click right of the box is ignored", events: []inputEvent{click(right+1, box.row), key(keyQ)}},
+		{name: "click above the box is ignored", events: []inputEvent{click(box.col, box.row-1), key(keyQ)}},
+		{name: "click below the box is ignored", events: []inputEvent{click(box.col, bottom+1), key(keyQ)}},
+		{name: "click outside then enter confirms", events: []inputEvent{click(right+1, bottom+1), key(keyEnter)}, want: true},
+		{name: "wheel is ignored", events: []inputEvent{key(keyWheelUp), key(keyWheelDown), key(keyQ)}},
 		{name: "raw mode failure cancels", err: errors.New("raw mode unavailable")},
 	}
 
@@ -156,25 +220,78 @@ func TestSwitchModel_ConfirmPopup(t *testing.T) {
 			var out bytes.Buffer
 			var atWait string
 			next := 0
-			got := drawConfirmPopup(&out, "Big", []string{"row"}, func() (keyCode, error) {
-				atWait = out.String()
-				if tt.err != nil {
-					return keyNone, tt.err
+			got := drawConfirmPopup(&out, "Big", []string{"row"}, func() (inputEvent, error) {
+				if atWait == "" {
+					atWait = out.String()
 				}
-				key := tt.keys[next]
+				if tt.err != nil {
+					return key(keyNone), tt.err
+				}
+				if next >= len(tt.events) {
+					t.Fatalf("popup still open after every scripted event")
+				}
+				event := tt.events[next]
 				next++
-				return key, nil
+				return event, nil
 			})
 
 			if got != tt.want {
 				t.Errorf("drawConfirmPopup = %v, want %v", got, tt.want)
 			}
+			if next != len(tt.events) {
+				t.Errorf("popup decided after %d of %d events", next, len(tt.events))
+			}
 			if !strings.Contains(atWait, "enter switch · q cancel") {
 				t.Errorf("popup drawn without the confirm footer: %q", atWait)
+			}
+			if !strings.Contains(atWait, escMouseOn) {
+				t.Errorf("mouse reporting not on while waiting: %q", atWait)
 			}
 			tail := strings.TrimPrefix(out.String(), atWait)
 			if !strings.Contains(tail, escCursorShow) || !strings.Contains(tail, escClear) {
 				t.Errorf("popup not cleared or cursor not restored: %q", tail)
+			}
+			assertMouseOffBeforeCursorShow(t, tail)
+		})
+	}
+}
+
+// TestAwaitDismiss pins what closes an any-key popup: a key, a click or a
+// wheel notch closes it at once; ignored mouse reports — a button release
+// above all — are read past without closing it.
+func TestAwaitDismiss(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		events   []keyCode
+		wantRead int
+	}{
+		{name: "key closes", events: []keyCode{keyQ}, wantRead: 1},
+		{name: "enter closes", events: []keyCode{keyEnter}, wantRead: 1},
+		{name: "click closes", events: []keyCode{keyClick}, wantRead: 1},
+		{name: "wheel up closes", events: []keyCode{keyWheelUp}, wantRead: 1},
+		{name: "wheel down closes", events: []keyCode{keyWheelDown}, wantRead: 1},
+		{name: "release does not close", events: []keyCode{keyMouseIgnored, keyMouseIgnored, keyClick}, wantRead: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			read := 0
+
+			awaitDismiss(func() inputEvent {
+				if read >= len(tt.events) {
+					t.Fatalf("still waiting after every scripted event")
+				}
+				event := inputEvent{key: tt.events[read], x: 1, y: 1}
+				read++
+				return event
+			})
+
+			if read != tt.wantRead {
+				t.Errorf("closed after %d events, want %d", read, tt.wantRead)
 			}
 		})
 	}

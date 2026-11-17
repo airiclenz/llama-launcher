@@ -256,7 +256,9 @@ Run without arguments to get the TUI menu. It adapts to three states:
 
 **Edit config** opens the config file with `open` on macOS (the default app for `.yaml` files). On other platforms it runs `$VISUAL`, or `$EDITOR` if `$VISUAL` is unset, in the terminal (a value with flags such as `code -w` works) and waits for the editor to exit. If neither is set, the menu leaves the item out.
 
-**Switch model** asks before loading: after you pick a profile it lists only the parameters that change (`old → new`, `—` where one side does not set it), and enter switches while `q` cancels. Without a terminal it prints the same list and asks `Switch? [y/N]`.
+**Switch model** asks before loading: after you pick a profile it lists only the parameters that change (`old → new`, `—` where one side does not set it), and enter (or a click inside the popup) switches while `q` cancels. Without a terminal it prints the same list and asks `Switch? [y/N]`.
+
+The menu takes the mouse as well as the keyboard: click a row to pick it, or scroll the wheel to move the selection. A click or wheel scroll closes an information popup, as any key does. The still-loading popup and the numbered fallback are keyboard-only.
 
 When more than one instance is running, the relevant actions (stop, unload, show log) present an instance picker disambiguated by `host:port`.
 
