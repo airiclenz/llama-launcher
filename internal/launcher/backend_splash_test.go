@@ -624,6 +624,15 @@ func TestSplashResolveModel(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("invalid ref names splash in the error", func(t *testing.T) {
+		_, err := (&Splash{}).ResolveModel(&Config{}, "../..")
+
+		want := `invalid splash model "../..": want a Hugging Face id owner/repo`
+		if err == nil || err.Error() != want {
+			t.Errorf("ResolveModel(../..) error = %v, want %q", err, want)
+		}
+	})
 }
 
 func TestSplashParamSpecs(t *testing.T) {

@@ -156,8 +156,8 @@ func expectOK(resp *http.Response, statusErr func(statusCode int, body []byte) e
 
 // openAIModelList reads the OpenAI-style /v1/models endpoint at addr and
 // returns one entry per model with a non-empty id, skipping the rest.
-// llama-server, LM Studio and Splash expose the same response shape
-// ({"data":[{"id":...}]}), so all three adapters delegate here.
+// llama-server, LM Studio, Splash and vLLM expose the same response shape
+// ({"data":[{"id":...}]}), so all four adapters delegate here.
 func openAIModelList(addr, apiKey string) ([]RunningModelInfo, error) {
 	resp, err := authedGet(healthCheckTimeout, "http://"+addr+"/v1/models", apiKey)
 	if err != nil {

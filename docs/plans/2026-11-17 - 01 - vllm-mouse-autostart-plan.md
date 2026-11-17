@@ -40,7 +40,11 @@
 - Mouse in the still-loading popup and the numbered fallback; mouse drag/motion; scrolling long lists.
 - launchd `KeepAlive` / supervision; Linux systemd units.
 
-## 1. vLLM backend
+## 1. vLLM backend — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): consequential edit — internal/launcher/backend_http.go: made necessary by backend_vllm.go's ListRunningModels delegating to openAIModelList (its comment said "all three adapters").
+NOTES (2026-11-17): the shared validateHFRepoID / isHFRepoIDPart / hfMaxRepoLen stay in backend_splash.go (renamed from validateSplashRepoID / isSplashRepoIDPart / splashMaxRepoLen) rather than a new file, since the item's Files list names no new file for them.
+NOTES (2026-11-17): vLLM's HealthCheck, like ListRunningModels, dials a wildcard addr over loopback (probeAddr), as Splash does; the plan did not specify this.
 
 **What:**
 **Goal:** `GetLLMServer("vllm")` returns a `ManagedLLMServer` with display name `vLLM`, `DefaultAddr` `127.0.0.1:8000`, binary `vllm`, argv `serve <model> --host <h> --port <p> [--max-model-len N] [--max-num-seqs N] <extra_args…>`, env carrying `VLLM_API_KEY` when a key is set, `ParamSpecs` = `[Context size, Parallel]`, a `ModelLister`, an implementation of `binaryInstallHinter`, and a `HealthCheck` that passes only for a server answering `GET /health` 200 and `GET /version` 200 with a JSON non-empty `version` string, and not carrying a `Server: Splash` header.

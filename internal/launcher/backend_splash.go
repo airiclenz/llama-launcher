@@ -27,10 +27,6 @@ func init() {
 // apart from another OpenAI-compatible server on the same port.
 const splashServerHeader = "Splash"
 
-// splashMaxRepoLen caps the repo part of an owner/repo model ref, mirroring
-// Splash's own REPO_ID rule (install/models.py validate_repo_id).
-const splashMaxRepoLen = 96
-
 func (b *Splash) Name() string        { return "splash" }
 func (b *Splash) DisplayName() string { return "Splash" }
 func (b *Splash) DefaultAddr() string { return "127.0.0.1:8000" }
@@ -212,7 +208,7 @@ func (b *Splash) ResolveModel(_ *Config, modelRef string) (string, error) {
 	if modelRef == "" {
 		return "", nil
 	}
-	if err := validateSplashRepoID(modelRef); err != nil {
+	if err := validateHFRepoID(b.Name(), modelRef); err != nil {
 		return "", err
 	}
 	hub, err := splashHubDir()
@@ -301,19 +297,25 @@ func splashSnapshotHasMarker(snapshot string) bool {
 	return false
 }
 
-// validateSplashRepoID mirrors Splash's REPO_ID rule (install/models.py
-// validate_repo_id): exactly one `/`, both parts built from [A-Za-z0-9._-]
-// with first and last characters from [A-Za-z0-9_], a repo of at most 96
-// characters, and no `--`, `..` or trailing `.git`. Refusing here keeps refs
-// like `../..` from escaping the model path and gives a clear error instead
-// of Splash dying on argparse at start.
-func validateSplashRepoID(ref string) error {
-	invalid := fmt.Errorf("invalid splash model %q: want a Hugging Face id owner/repo", ref)
+// hfMaxRepoLen caps the repo part of an owner/repo model ref, mirroring the
+// Hugging Face hub's repo-id rule (huggingface_hub validate_repo_id), which
+// Splash's own REPO_ID rule (install/models.py validate_repo_id) copies.
+const hfMaxRepoLen = 96
+
+// validateHFRepoID checks ref against the Hugging Face repo-id grammar the
+// managed servers that take one (Splash, vLLM) accept: exactly one `/`, both
+// parts built from [A-Za-z0-9._-] with first and last characters from
+// [A-Za-z0-9_], a repo of at most 96 characters, and no `--`, `..` or
+// trailing `.git`. Refusing here keeps refs like `../..` from escaping the
+// model path and gives a clear error instead of the server dying on argparse
+// at start. The error names serverName: "invalid <server> model ...".
+func validateHFRepoID(serverName, ref string) error {
+	invalid := fmt.Errorf("invalid %s model %q: want a Hugging Face id owner/repo", serverName, ref)
 	owner, repo, ok := strings.Cut(ref, "/")
 	if !ok || strings.Contains(repo, "/") {
 		return invalid
 	}
-	if !isSplashRepoIDPart(owner) || !isSplashRepoIDPart(repo) || len(repo) > splashMaxRepoLen {
+	if !isHFRepoIDPart(owner) || !isHFRepoIDPart(repo) || len(repo) > hfMaxRepoLen {
 		return invalid
 	}
 	if strings.Contains(ref, "--") || strings.Contains(ref, "..") || strings.HasSuffix(ref, ".git") {
@@ -322,9 +324,9 @@ func validateSplashRepoID(ref string) error {
 	return nil
 }
 
-// isSplashRepoIDPart reports whether part is a non-empty run of
-// [A-Za-z0-9._-] whose first and last characters are [A-Za-z0-9_].
-func isSplashRepoIDPart(part string) bool {
+// isHFRepoIDPart reports whether part is a non-empty run of [A-Za-z0-9._-]
+// whose first and last characters are [A-Za-z0-9_].
+func isHFRepoIDPart(part string) bool {
 	if part == "" {
 		return false
 	}
