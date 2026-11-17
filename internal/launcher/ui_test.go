@@ -129,7 +129,7 @@ func TestDrawPopupAndWaitRestoresCursor(t *testing.T) {
 
 // TestSwitchModel_ConfirmPopup pins the switch confirmation keys: enter
 // confirms; q, esc, an unreadable key and a raw-mode failure cancel;
-// navigation keys are ignored. Every path clears the popup and restores the
+// navigation keys and ignored mouse reports are ignored. Every path clears the popup and restores the
 // cursor.
 func TestSwitchModel_ConfirmPopup(t *testing.T) {
 	t.Parallel()
@@ -145,6 +145,7 @@ func TestSwitchModel_ConfirmPopup(t *testing.T) {
 		{name: "esc cancels", keys: []keyCode{keyEscape}},
 		{name: "unreadable key cancels", keys: []keyCode{keyNone}},
 		{name: "navigation is ignored", keys: []keyCode{keyUp, keyDown, keyEnter}, want: true},
+		{name: "ignored mouse report does not cancel", keys: []keyCode{keyMouseIgnored, keyEnter}, want: true},
 		{name: "raw mode failure cancels", err: errors.New("raw mode unavailable")},
 	}
 
@@ -176,5 +177,122 @@ func TestSwitchModel_ConfirmPopup(t *testing.T) {
 				t.Errorf("popup not cleared or cursor not restored: %q", tail)
 			}
 		})
+	}
+}
+
+// TestDecodeInput pins the raw-mode input decoder: every key the menu reads,
+// the SGR mouse reports it acts on or ignores, other escape sequences
+// consumed whole as keyNone, a sequence split across reads reported
+// incomplete, and only the first of several buffered events decoded.
+func TestDecodeInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		input        string
+		wantEvent    inputEvent
+		wantConsumed int
+		wantComplete bool
+	}{
+		{name: "carriage return", input: "\r", wantEvent: inputEvent{key: keyEnter}, wantConsumed: 1, wantComplete: true},
+		{name: "line feed", input: "\n", wantEvent: inputEvent{key: keyEnter}, wantConsumed: 1, wantComplete: true},
+		{name: "ctrl-c", input: "\x03", wantEvent: inputEvent{key: keyCtrlC}, wantConsumed: 1, wantComplete: true},
+		{name: "q", input: "q", wantEvent: inputEvent{key: keyQ}, wantConsumed: 1, wantComplete: true},
+		{name: "capital Q", input: "Q", wantEvent: inputEvent{key: keyQ}, wantConsumed: 1, wantComplete: true},
+		{name: "digit 1", input: "1", wantEvent: inputEvent{key: keyCode('1')}, wantConsumed: 1, wantComplete: true},
+		{name: "digit 9", input: "9", wantEvent: inputEvent{key: keyCode('9')}, wantConsumed: 1, wantComplete: true},
+		{name: "digit 0 is no key", input: "0", wantEvent: inputEvent{key: keyNone}, wantConsumed: 1, wantComplete: true},
+		{name: "other letter is no key", input: "x", wantEvent: inputEvent{key: keyNone}, wantConsumed: 1, wantComplete: true},
+		{name: "arrow up", input: "\x1b[A", wantEvent: inputEvent{key: keyUp}, wantConsumed: 3, wantComplete: true},
+		{name: "arrow down", input: "\x1b[B", wantEvent: inputEvent{key: keyDown}, wantConsumed: 3, wantComplete: true},
+		{name: "lone esc", input: "\x1b", wantEvent: inputEvent{key: keyEscape}, wantConsumed: 1, wantComplete: true},
+		{name: "left click", input: "\x1b[<0;5;7M", wantEvent: inputEvent{key: keyClick, x: 5, y: 7}, wantConsumed: 9, wantComplete: true},
+		{name: "click with multi-digit coordinates", input: "\x1b[<0;123;45M", wantEvent: inputEvent{key: keyClick, x: 123, y: 45}, wantConsumed: 12, wantComplete: true},
+		{name: "wheel up", input: "\x1b[<64;10;3M", wantEvent: inputEvent{key: keyWheelUp}, wantConsumed: 11, wantComplete: true},
+		{name: "wheel down", input: "\x1b[<65;10;3M", wantEvent: inputEvent{key: keyWheelDown}, wantConsumed: 11, wantComplete: true},
+		{name: "left release", input: "\x1b[<0;5;7m", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 9, wantComplete: true},
+		{name: "motion", input: "\x1b[<35;5;7M", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 10, wantComplete: true},
+		{name: "right click", input: "\x1b[<2;5;7M", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 9, wantComplete: true},
+		{name: "malformed mouse report", input: "\x1b[<0;5M", wantEvent: inputEvent{key: keyMouseIgnored}, wantConsumed: 7, wantComplete: true},
+		{name: "split mouse report", input: "\x1b[<0;12", wantComplete: false},
+		{name: "split csi introducer", input: "\x1b[", wantComplete: false},
+		{name: "split ss3", input: "\x1bO", wantComplete: false},
+		{name: "empty buffer", input: "", wantComplete: false},
+		{name: "two events decode the first", input: "\x1b[<64;1;1M\x1b[<0;2;3M", wantEvent: inputEvent{key: keyWheelUp}, wantConsumed: 10, wantComplete: true},
+		{name: "key then mouse decodes the key", input: "q\x1b[<0;2;3M", wantEvent: inputEvent{key: keyQ}, wantConsumed: 1, wantComplete: true},
+		{name: "page up", input: "\x1b[5~", wantEvent: inputEvent{key: keyNone}, wantConsumed: 4, wantComplete: true},
+		{name: "delete", input: "\x1b[3~", wantEvent: inputEvent{key: keyNone}, wantConsumed: 4, wantComplete: true},
+		{name: "f5", input: "\x1b[15~", wantEvent: inputEvent{key: keyNone}, wantConsumed: 5, wantComplete: true},
+		{name: "arrow right", input: "\x1b[C", wantEvent: inputEvent{key: keyNone}, wantConsumed: 3, wantComplete: true},
+		{name: "ss3 arrow up", input: "\x1bOA", wantEvent: inputEvent{key: keyNone}, wantConsumed: 3, wantComplete: true},
+		{name: "esc then other byte", input: "\x1bx", wantEvent: inputEvent{key: keyNone}, wantConsumed: 2, wantComplete: true},
+		{name: "truncated csi leaves enter", input: "\x1b[\r", wantEvent: inputEvent{key: keyNone}, wantConsumed: 2, wantComplete: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ev, consumed, complete := decodeInput([]byte(tt.input))
+
+			if complete != tt.wantComplete {
+				t.Fatalf("decodeInput(%q) complete = %v, want %v", tt.input, complete, tt.wantComplete)
+			}
+			if !tt.wantComplete {
+				return
+			}
+			if ev != tt.wantEvent || consumed != tt.wantConsumed {
+				t.Errorf(
+					"decodeInput(%q) = (%+v, %d), want (%+v, %d)",
+					tt.input, ev, consumed, tt.wantEvent, tt.wantConsumed,
+				)
+			}
+		})
+	}
+}
+
+// TestDecodeInput_SplitSequenceReassembles feeds a mouse report split across
+// two reads: the first part is incomplete, and once the rest arrives the
+// joined bytes decode to the click.
+func TestDecodeInput_SplitSequenceReassembles(t *testing.T) {
+	t.Parallel()
+	first, rest := []byte("\x1b[<0;1"), []byte("2;34M")
+
+	_, _, firstComplete := decodeInput(first)
+	ev, consumed, complete := decodeInput(append(first, rest...))
+
+	if firstComplete {
+		t.Fatalf("decodeInput(%q) complete before the rest arrived", first)
+	}
+	want := inputEvent{key: keyClick, x: 12, y: 34}
+	if !complete || ev != want || consumed != len(first)+len(rest) {
+		t.Errorf("joined decode = (%+v, %d, %v), want (%+v, %d, true)", ev, consumed, complete, want, len(first)+len(rest))
+	}
+}
+
+// TestDecodeInput_SeveralEventsOneAtATime walks a buffer holding three events
+// and checks each comes out in order and the buffer is used up exactly.
+func TestDecodeInput_SeveralEventsOneAtATime(t *testing.T) {
+	t.Parallel()
+	buf := []byte("\x1b[<65;1;1M\x1b[B\r")
+	want := []keyCode{keyWheelDown, keyDown, keyEnter}
+
+	var got []keyCode
+	for len(buf) > 0 {
+		ev, consumed, complete := decodeInput(buf)
+		if !complete {
+			t.Fatalf("decodeInput(%q) incomplete mid-buffer", buf)
+		}
+		got = append(got, ev.key)
+		buf = buf[consumed:]
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("decoded %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event %d = %v, want %v", i, got[i], want[i])
+		}
 	}
 }

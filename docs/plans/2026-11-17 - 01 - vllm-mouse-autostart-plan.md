@@ -136,7 +136,12 @@ NOTES (2026-11-17): retry — README's Windows row in Supported platforms now re
 **Closes:** vllm-server
 **Commit:** `docs(vllm): document vLLM as a supported LLM Server`
 
-## 6. Decode SGR mouse input
+## 6. Decode SGR mouse input — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): consequential edit — llama-launcher.TDD.md: made necessary by the new file internal/launcher/ui_input.go, added as a row to the §internal/launcher file table beside ui.go
+NOTES (2026-11-17): menu.go needed no change — stillLoadingWatch.readKey keeps its keyCode signature and readKeyTimeout stays a keyCode wrapper; no CHANGELOG entry because nothing user-visible changes until mouse reporting is switched on (escMouseOn is defined but not yet emitted)
+NOTES (2026-11-17): read API for items 7 and 8 — readInput() / readInputTimeout(d) / readInputRaw() (inputEvent, error) / waitForInput() (inputEvent, error, skips keyMouseIgnored); keyCode wrappers readKey, readKeyTimeout, readKeyRaw, waitForAnyKey
+NOTES (2026-11-17): side effect of decoding one event at a time — several bytes arriving in one read (typed fast or pasted) now each decode as their own key, where the old 4-byte read turned any multi-byte read into keyNone; a truncated CSI is ended early at a control byte so it never swallows a following Enter or Ctrl+C, and a CSI is capped at 32 bytes
 
 **What:**
 **Goal:** A pure decoder turns stdin bytes into input events: every existing key (arrows, Enter, Esc, Ctrl+C, q, digits) decodes as before; `ESC[<0;x;yM` is a left-click press with 1-based x,y; `ESC[<64;…M` / `ESC[<65;…M` are wheel up/down; any other SGR mouse report (release `m`, motion, other buttons) decodes to an ignored-mouse event; a sequence split across reads is reassembled, and several events in one read come out one at a time; a lone ESC ending the bytes read is Esc.

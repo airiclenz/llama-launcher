@@ -15,6 +15,11 @@ const (
 	escCursorHide = "\033[?25l"
 	escCursorShow = "\033[?25h"
 
+	// escMouseOn turns on click and wheel reporting (1000) in SGR encoding
+	// (1006); escMouseOff turns both off again, in reverse order.
+	escMouseOn  = "\033[?1000h\033[?1006h"
+	escMouseOff = "\033[?1006l\033[?1000l"
+
 	cReset         = "\033[0m"
 	cDim           = "\033[2m"
 	cGreen         = "\033[32m"
@@ -33,6 +38,14 @@ const (
 	keyEscape keyCode = -4
 	keyCtrlC  keyCode = -5
 	keyQ      keyCode = -6
+
+	// The mouse events decodeInput reports: a left-button press (with its
+	// position on the inputEvent), the two wheel directions, and every other
+	// mouse report — release, motion, other buttons — which callers ignore.
+	keyClick        keyCode = -7
+	keyWheelUp      keyCode = -8
+	keyWheelDown    keyCode = -9
+	keyMouseIgnored keyCode = -10
 )
 
 type menuItem struct {
@@ -45,50 +58,17 @@ var lastMenuRect struct {
 	row, col, width, height int
 }
 
+// readKey returns the key of the next input event, blocking until one is
+// complete; see readInput. For callers that need no mouse coordinates.
 func readKey() keyCode {
-	buf := make([]byte, 4)
-	n, err := os.Stdin.Read(buf)
-	if err != nil || n == 0 {
-		return keyNone
-	}
-
-	if n == 1 {
-		switch buf[0] {
-		case 13, 10:
-			return keyEnter
-		case 27:
-			return keyEscape
-		case 3:
-			return keyCtrlC
-		case 'q', 'Q':
-			return keyQ
-		}
-		if buf[0] >= '1' && buf[0] <= '9' {
-			return keyCode(buf[0])
-		}
-		return keyNone
-	}
-
-	if n >= 3 && buf[0] == 27 && buf[1] == '[' {
-		switch buf[2] {
-		case 'A':
-			return keyUp
-		case 'B':
-			return keyDown
-		}
-	}
-
-	return keyNone
+	return readInput().key
 }
 
-// readKeyTimeout returns the key pressed within timeout, or keyNone when the
-// wait elapses first. The poll itself is per-OS (ui_poll_darwin.go and its
-// siblings) — it is the one place the menu touches a platform primitive.
+// readKeyTimeout returns the key of the input event completed within timeout,
+// or keyNone when the wait elapses first; see readInputTimeout. For callers
+// that need no mouse coordinates.
 func readKeyTimeout(timeout time.Duration) keyCode {
-	if !pollStdin(timeout) {
-		return keyNone
-	}
-	return readKey()
+	return readInputTimeout(timeout).key
 }
 
 // idxMenuStale is returned by selectMenu when headerFn reports that the
@@ -325,17 +305,24 @@ func showPopup(title string, lines []string) {
 }
 
 // waitForAnyKey switches stdin to raw mode, blocks until any key is pressed,
-// and restores the previous terminal state. It returns without waiting when
-// raw mode cannot be entered.
+// and restores the previous terminal state; see waitForInput. It returns
+// without waiting when raw mode cannot be entered.
 func waitForAnyKey() error {
-	fd := int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(fd)
-	if err != nil {
-		return err
+	_, err := waitForInput()
+	return err
+}
+
+// waitForInput switches stdin to raw mode, blocks until an input event other
+// than keyMouseIgnored arrives, restores the previous terminal state and
+// returns that event. It fails without waiting when raw mode cannot be
+// entered.
+func waitForInput() (inputEvent, error) {
+	for {
+		ev, err := readInputRaw()
+		if err != nil || ev.key != keyMouseIgnored {
+			return ev, err
+		}
 	}
-	defer term.Restore(fd, oldState)
-	readKey()
-	return nil
 }
 
 // drawPopupAndWait renders the popup frame to w, hides the cursor, and calls
@@ -361,23 +348,32 @@ func confirmPopup(title string, lines []string) bool {
 	return drawConfirmPopup(os.Stdout, title, lines, readKeyRaw)
 }
 
-// readKeyRaw reads one key with stdin in raw mode, restoring the previous
-// terminal state afterwards. It fails when raw mode cannot be entered.
+// readKeyRaw reads one key with stdin in raw mode; see readInputRaw. For
+// callers that need no mouse coordinates.
 func readKeyRaw() (keyCode, error) {
+	ev, err := readInputRaw()
+	return ev.key, err
+}
+
+// readInputRaw reads one input event with stdin in raw mode, restoring the
+// previous terminal state afterwards. It fails, returning keyNone, when raw
+// mode cannot be entered.
+func readInputRaw() (inputEvent, error) {
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
-		return keyNone, err
+		return inputEvent{key: keyNone}, err
 	}
 	defer term.Restore(fd, oldState)
-	return readKey(), nil
+	return readInput(), nil
 }
 
 // drawConfirmPopup renders a popup with an "enter switch · q cancel" footer
 // to w and reads keys with wait until one decides: enter confirms; q, esc,
 // ctrl-c, an unreadable key and a wait failure (raw mode unavailable) all
-// cancel; navigation and digit keys are ignored. Like drawPopupAndWait it
-// clears the popup and restores the cursor on every return path.
+// cancel; navigation and digit keys and mouse events are ignored. Like
+// drawPopupAndWait it clears the popup and restores the cursor on every
+// return path.
 func drawConfirmPopup(w io.Writer, title string, lines []string, wait func() (keyCode, error)) bool {
 	defer fmt.Fprint(w, escClear+escCursorShow)
 
