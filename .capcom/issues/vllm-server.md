@@ -1,10 +1,12 @@
 ---
 title: vLLM is not a supported LLM Server
-status: open
+status: done
 type: feature
 priority: 3
 plan: 2026-11-17 - 01 - vllm-mouse-autostart-plan
 created: 2026-10-13T11:47:04Z
+closed: 2026-11-17T09:22:50Z
+reason: Resolved by plan "2026-11-17 - 01 - vllm-mouse-autostart-plan" (archived at cbeed77), items 1-5
 ---
 
 vLLM (and other servers) are not supported LLM Servers. Each would be a new `backend_<name>.go` implementing the `LLMServer` interface (TDD §5.3).

@@ -1,11 +1,13 @@
 ---
 title: The interactive menu ignores the mouse
-status: open
+status: done
 type: feature
 priority: 3
 labels: [menu]
 plan: 2026-11-17 - 01 - vllm-mouse-autostart-plan
 created: 2026-11-06T18:09:37Z
+closed: 2026-11-17T09:22:50Z
+reason: Resolved by plan "2026-11-17 - 01 - vllm-mouse-autostart-plan" (archived at cbeed77), items 6-8
 ---
 
 The interactive menu (TDD §3.1) is keyboard-only: `selectMenu`, the pickers and the popups in `internal/launcher/ui.go` read keys through `readKey` and never enable terminal mouse reporting, so a click or a wheel notch does nothing. apogee (`internal/tui/panes.go`, `reportpane.go`) and capcom (`internal/ui/mouse.go`, `listcursor.go`) both take the mouse: a left click selects a row, a wheel notch moves the cursor or scrolls.
