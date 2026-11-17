@@ -1,11 +1,13 @@
 ---
 title: Ollama Profiles cannot set a context size
-status: open
+status: done
 type: feature
 priority: 3
 labels: [config]
 plan: 2026-11-17 - 00 - p3-features-sweep-plan
 created: 2026-10-13T11:47:04Z
+closed: 2026-11-17T07:43:03Z
+reason: resolved by plan "2026-11-17 - 00 - p3-features-sweep-plan" (archived in 2eb4448), item 1
 ---
 
 Ollama Profiles cannot set a context size: Ollama's load request carries only the model name and a keep-alive, so its `ParamSpecs` is empty and the context column renders blank for Ollama rows (TDD §3).
