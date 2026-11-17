@@ -118,7 +118,7 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	}
 
 	args := mb.BuildServerArgs(cfg, profile)
-	logFile, err := createLogPath(cfg, profile.Backend)
+	logFile, err := createLogPath(cfg, profile.Backend, *profile.Port, profile.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -1361,7 +1361,10 @@ func stillStartingUpErr(cfg *Config, b LLMServer, addr string) error {
 		fmt.Fprintf(&sb, " (PID %d)", pid)
 	}
 	sb.WriteString(" — refusing to start a second one")
-	if logFile := findManagedLogFile(cfg.LogDir, b.Name()); logFile != "" {
+	// addr is always a joined host:port here; an unparsable one would leave
+	// port 0, which finds only a legacy log.
+	_, port, _ := splitHostPort(addr)
+	if logFile := findManagedLogFile(cfg.LogDir, b.Name(), port); logFile != "" {
 		fmt.Fprintf(&sb, "\nLog: %s", logFile)
 	}
 	fmt.Fprintf(&sb, "\nWatch it with `llama-launcher logs %s` and retry once it is healthy, stop it with `llama-launcher stop %s`, or pass `--restart` to replace it", b.Name(), b.Name())
@@ -1682,19 +1685,22 @@ func copyRedactedLines(dst io.Writer, src io.Reader, keys []string) error {
 // name is already taken; each retry waits a millisecond for a new stamp.
 const logCreateAttempts = 50
 
-// createLogPath creates a new log file for a server start named name and
-// returns it open for writing; its Name() is the log's path. The name embeds
-// the start time at millisecond precision (logTimestampFormat) and the file is
+// createLogPath creates a new log file for a start of backend's instance on
+// port, for the Profile named profileName ("" when the start has none, as for
+// `ollama serve`), and returns it open for writing; its Name() is the log's
+// path. The name is a logName: backend, port, the Profile's logProfileSlug and
+// the start time at millisecond precision (logTimestampFormat). The file is
 // created exclusively, so two starts never share — or truncate — one log: a
 // name that already exists is retried with a fresh stamp.
-func createLogPath(cfg *Config, name string) (*os.File, error) {
+func createLogPath(cfg *Config, backend string, port int, profileName string) (*os.File, error) {
 	autoCleanupLogs(cfg)
 	if err := os.MkdirAll(cfg.LogDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating log directory: %w", err)
 	}
+	name := logName{backend: backend, port: port, profile: logProfileSlug(profileName)}
 	for range logCreateAttempts {
-		ts := time.Now().Format(logTimestampFormat)
-		path := filepath.Join(cfg.LogDir, fmt.Sprintf("%s-%s.log", name, ts))
+		name.started = time.Now()
+		path := filepath.Join(cfg.LogDir, name.fileName())
 		logFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 		if err == nil {
 			return logFile, nil
@@ -1704,7 +1710,7 @@ func createLogPath(cfg *Config, name string) (*os.File, error) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	return nil, fmt.Errorf("creating log file: no unused %s log name in %s after %d attempts", name, cfg.LogDir, logCreateAttempts)
+	return nil, fmt.Errorf("creating log file: no unused %s log name in %s after %d attempts", backend, cfg.LogDir, logCreateAttempts)
 }
 
 // readLastLines returns the last n lines of the log at path, masked by

@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // logTimestampFormat is the start stamp createLogPath writes into a log
 // name: millisecond precision, so same-second starts get distinct names that
-// still sort lexicographically in start order.
+// read back in start order by parseLogName.
 const logTimestampFormat = "20060102-150405.000"
 
 // legacyLogTimestampFormat is the second-precision stamp of logs written
@@ -36,7 +37,7 @@ func cleanupLogs(cfg *Config, logDir string, maxAge time.Duration, deleteAll boo
 	var result CleanupResult
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), logFileSuffix) {
 			continue
 		}
 
@@ -46,11 +47,11 @@ func cleanupLogs(cfg *Config, logDir string, maxAge time.Duration, deleteAll boo
 		}
 
 		if !deleteAll {
-			ts, err := parseLogTimestamp(e.Name())
-			if err != nil {
+			name, ok := parseLogName(e.Name())
+			if !ok {
 				continue
 			}
-			if now.Sub(ts) < maxAge {
+			if now.Sub(name.started) < maxAge {
 				continue
 			}
 		}
@@ -71,25 +72,104 @@ func cleanupLogs(cfg *Config, logDir string, maxAge time.Duration, deleteAll boo
 	return result, nil
 }
 
-func parseLogTimestamp(filename string) (time.Time, error) {
-	if !strings.HasSuffix(filename, ".log") {
-		return time.Time{}, fmt.Errorf("cannot parse timestamp from %q: not a .log file", filename)
+// logName is the name of a launcher-managed log file, split into the parts
+// the launcher reads back: the backend that wrote it, the port of the
+// instance it belongs to, the Profile it was started for and its start time.
+// Three shapes exist on disk:
+//
+//	{backend}-{port}-{profile}-{stamp}.log  a start for a Profile
+//	{backend}-{port}-{stamp}.log            a start with no Profile (ollama serve)
+//	{backend}-{stamp}.log                   legacy, written before the port was named
+//
+// The stamp is logTimestampFormat, or legacyLogTimestampFormat on older logs.
+// Backend names never contain '-', and the Profile part is a logProfileSlug,
+// so a name splits back into its parts unambiguously.
+type logName struct {
+	// backend is the LLM Server's name (llamacpp, ollama, ...).
+	backend string
+	// port is the instance's port; 0 on a legacy name, which records none.
+	port int
+	// profile is the filename-safe Profile name; "" when the log has none.
+	profile string
+	// started is the start time the stamp records.
+	started time.Time
+}
+
+// logFileSuffix is the extension every launcher-managed log name ends with.
+const logFileSuffix = ".log"
+
+// fileName formats n as a log file name. A positive port is written after the
+// backend and the Profile after the port; a name without a port is the legacy
+// shape, so a Profile is only written alongside a port.
+func (n logName) fileName() string {
+	parts := []string{n.backend}
+	if n.port > 0 {
+		parts = append(parts, strconv.Itoa(n.port))
+		if n.profile != "" {
+			parts = append(parts, n.profile)
+		}
 	}
-	name := strings.TrimSuffix(filename, ".log")
-	parts := strings.Split(name, "-")
-	if len(parts) < 3 {
-		return time.Time{}, fmt.Errorf("cannot parse timestamp from %q", filename)
+	parts = append(parts, n.started.Format(logTimestampFormat))
+	return strings.Join(parts, "-") + logFileSuffix
+}
+
+// parseLogName reads a log file name in any of logName's three shapes. It
+// reports false for a name that is not a launcher-managed log: no .log
+// suffix, no backend, a non-numeric port or an unparsable stamp.
+func parseLogName(filename string) (logName, bool) {
+	stem, isLog := strings.CutSuffix(filename, logFileSuffix)
+	if !isLog {
+		return logName{}, false
 	}
-	stamp := parts[len(parts)-2] + "-" + parts[len(parts)-1]
-	t, err := time.Parse(logTimestampFormat, stamp)
-	if err == nil {
-		return t, nil
+	parts := strings.Split(stem, "-")
+	if len(parts) < 3 || parts[0] == "" {
+		return logName{}, false
 	}
-	t, legacyErr := time.Parse(legacyLogTimestampFormat, stamp)
-	if legacyErr != nil {
-		return time.Time{}, fmt.Errorf("cannot parse timestamp from %q: %w", filename, err)
+	started, ok := parseLogStamp(parts[len(parts)-2] + "-" + parts[len(parts)-1])
+	if !ok {
+		return logName{}, false
 	}
-	return t, nil
+	name := logName{backend: parts[0], started: started}
+	owner := parts[1 : len(parts)-2]
+	if len(owner) == 0 {
+		return name, true
+	}
+	port, err := strconv.Atoi(owner[0])
+	if err != nil || port <= 0 {
+		return logName{}, false
+	}
+	name.port = port
+	// A Profile slug may itself contain '-', so its parts are rejoined.
+	name.profile = strings.Join(owner[1:], "-")
+	return name, true
+}
+
+// parseLogStamp parses a log name's start stamp at millisecond precision, or
+// at the second precision of logs written before milliseconds were added.
+func parseLogStamp(stamp string) (time.Time, bool) {
+	if t, err := time.Parse(logTimestampFormat, stamp); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(legacyLogTimestampFormat, stamp); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+// logProfileSlug makes a Profile name safe for a log file name: every rune
+// outside [A-Za-z0-9._-] becomes '_', so no path separator, space or shell
+// metacharacter reaches the file system.
+func logProfileSlug(profileName string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '_'
+		}
+	}, profileName)
 }
 
 func formatBytes(b int64) string {

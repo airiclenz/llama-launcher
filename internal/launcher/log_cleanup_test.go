@@ -9,74 +9,200 @@ import (
 	"time"
 )
 
-func TestParseLogTimestamp(t *testing.T) {
+func TestParseLogName(t *testing.T) {
 	t.Parallel()
 
+	stamp := time.Date(2026, 5, 21, 15, 4, 5, 0, time.UTC)
+	millis := time.Date(2026, 5, 21, 15, 4, 5, 123_000_000, time.UTC)
 	tests := []struct {
 		name     string
 		filename string
-		wantErr  bool
-		wantTime time.Time
+		want     logName
+		wantOK   bool
 	}{
 		{
-			name:     "llamacpp log",
+			name:     "legacy second stamp",
 			filename: "llamacpp-20260521-150405.log",
-			wantTime: time.Date(2026, 5, 21, 15, 4, 5, 0, time.UTC),
+			want:     logName{backend: "llamacpp", started: stamp},
+			wantOK:   true,
 		},
 		{
-			name:     "ollama log",
-			filename: "ollama-20260101-000000.log",
-			wantTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		},
-		{
-			name:     "millisecond stamp",
+			name:     "legacy millisecond stamp",
 			filename: "llamacpp-20260521-150405.123.log",
-			wantTime: time.Date(2026, 5, 21, 15, 4, 5, 123_000_000, time.UTC),
+			want:     logName{backend: "llamacpp", started: millis},
+			wantOK:   true,
 		},
 		{
-			name:     "malformed millisecond stamp",
-			filename: "llamacpp-20260521-150405.12x.log",
-			wantErr:  true,
+			name:     "port, millisecond stamp",
+			filename: "ollama-11434-20260521-150405.123.log",
+			want:     logName{backend: "ollama", port: 11434, started: millis},
+			wantOK:   true,
 		},
 		{
-			name:     "no extension",
-			filename: "llamacpp-20260521-150405",
-			wantErr:  true,
+			name:     "port, second stamp",
+			filename: "ollama-11434-20260521-150405.log",
+			want:     logName{backend: "ollama", port: 11434, started: stamp},
+			wantOK:   true,
 		},
 		{
-			name:     "too few parts",
-			filename: "llamacpp.log",
-			wantErr:  true,
+			name:     "port and Profile, millisecond stamp",
+			filename: "llamacpp-8080-qwen3-20260521-150405.123.log",
+			want:     logName{backend: "llamacpp", port: 8080, profile: "qwen3", started: millis},
+			wantOK:   true,
 		},
 		{
-			name:     "invalid timestamp",
-			filename: "llamacpp-notadate-nottime.log",
-			wantErr:  true,
+			name:     "port and Profile, second stamp",
+			filename: "splash-8000-coder-20260521-150405.log",
+			want:     logName{backend: "splash", port: 8000, profile: "coder", started: stamp},
+			wantOK:   true,
 		},
 		{
-			name:     "no log suffix",
-			filename: "llamacpp-20260521-150405.txt",
-			wantErr:  true,
+			name:     "Profile with dashes",
+			filename: "llamacpp-8080-qwen3-coder-30b-20260521-150405.123.log",
+			want:     logName{backend: "llamacpp", port: 8080, profile: "qwen3-coder-30b", started: millis},
+			wantOK:   true,
+		},
+		{name: "non-numeric port", filename: "llamacpp-main-20260521-150405.123.log"},
+		{name: "zero port", filename: "llamacpp-0-20260521-150405.123.log"},
+		{name: "malformed millisecond stamp", filename: "llamacpp-20260521-150405.12x.log"},
+		{name: "no extension", filename: "llamacpp-20260521-150405"},
+		{name: "too few parts", filename: "llamacpp.log"},
+		{name: "no backend", filename: "-20260521-150405.log"},
+		{name: "invalid timestamp", filename: "llamacpp-notadate-nottime.log"},
+		{name: "not a log file", filename: "llamacpp-20260521-150405.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := parseLogName(tt.filename)
+
+			if ok != tt.wantOK {
+				t.Fatalf("parseLogName(%q) ok = %v, want %v", tt.filename, ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Errorf("parseLogName(%q) = %+v, want %+v", tt.filename, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLogName_FileNameRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	started := time.Date(2026, 5, 21, 15, 4, 5, 42_000_000, time.UTC)
+	tests := []struct {
+		name string
+		log  logName
+		want string
+	}{
+		{
+			name: "port and Profile",
+			log:  logName{backend: "llamacpp", port: 8080, profile: "qwen3-coder", started: started},
+			want: "llamacpp-8080-qwen3-coder-20260521-150405.042.log",
+		},
+		{
+			name: "port only",
+			log:  logName{backend: "ollama", port: 11434, started: started},
+			want: "ollama-11434-20260521-150405.042.log",
+		},
+		{
+			name: "no port is the legacy shape",
+			log:  logName{backend: "ollama", profile: "ignored", started: started},
+			want: "ollama-20260521-150405.042.log",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := parseLogTimestamp(tt.filename)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error, got %v", got)
-				}
-				return
+
+			got := tt.log.fileName()
+			parsed, ok := parseLogName(got)
+
+			if got != tt.want {
+				t.Errorf("fileName() = %q, want %q", got, tt.want)
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !got.Equal(tt.wantTime) {
-				t.Errorf("got %v, want %v", got, tt.wantTime)
+			if !ok || parsed.port != tt.log.port || !parsed.started.Equal(started) {
+				t.Errorf("parseLogName(%q) = %+v, %v; want port %d, start %v", got, parsed, ok, tt.log.port, started)
 			}
 		})
+	}
+}
+
+func TestLogProfileSlug(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		profileName string
+		want        string
+	}{
+		{"qwen3", "qwen3"},
+		{"Qwen3-Coder_30B.q4", "Qwen3-Coder_30B.q4"},
+		{"my profile", "my_profile"},
+		{"../etc/passwd", ".._etc_passwd"},
+		{"a:b*c?", "a_b_c_"},
+		{"café", "caf_"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.profileName, func(t *testing.T) {
+			t.Parallel()
+
+			if got := logProfileSlug(tt.profileName); got != tt.want {
+				t.Errorf("logProfileSlug(%q) = %q, want %q", tt.profileName, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCleanupLogs_AgesEveryShape pins that cleanup ages Profile-named,
+// port-named and legacy logs alike: old ones go, fresh ones stay.
+func TestCleanupLogs_AgesEveryShape(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	fresh := time.Now()
+	shapes := []logName{
+		{backend: "llamacpp", port: 8080, profile: "qwen3-coder"},
+		{backend: "ollama", port: 11434},
+		{backend: "llamacpp"},
+	}
+	var oldPaths, freshPaths []string
+	for _, shape := range shapes {
+		for _, started := range []time.Time{old, fresh} {
+			shape.started = started
+			path := filepath.Join(dir, shape.fileName())
+			if err := os.WriteFile(path, []byte("log"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if started.Equal(old) {
+				oldPaths = append(oldPaths, path)
+			} else {
+				freshPaths = append(freshPaths, path)
+			}
+		}
+	}
+
+	result, err := cleanupLogs(nil, dir, 7*24*time.Hour, false)
+
+	if err != nil {
+		t.Fatalf("cleanupLogs: %v", err)
+	}
+	if result.Removed != len(oldPaths) {
+		t.Errorf("Removed = %d, want %d", result.Removed, len(oldPaths))
+	}
+	for _, path := range oldPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("old log %q was kept", path)
+		}
+	}
+	for _, path := range freshPaths {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("fresh log %q was removed: %v", path, err)
+		}
 	}
 }
 

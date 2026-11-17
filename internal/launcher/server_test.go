@@ -3498,17 +3498,18 @@ func TestStopInstance_LoadingSplash(t *testing.T) {
 
 // TestCreateLogPath_SameSecondStartsGetDistinctFiles pins that back-to-back
 // starts of one backend — well inside a single second — each get their own
-// freshly created log file carrying a millisecond stamp.
+// freshly created log file, named for the instance's port and Profile and
+// carrying a millisecond stamp.
 func TestCreateLogPath_SameSecondStartsGetDistinctFiles(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{LogDir: t.TempDir()}
 
-	first, err := createLogPath(cfg, "llamacpp")
+	first, err := createLogPath(cfg, "llamacpp", 8080, "qwen3 coder")
 	if err != nil {
 		t.Fatalf("first createLogPath: %v", err)
 	}
 	defer first.Close()
-	second, err := createLogPath(cfg, "llamacpp")
+	second, err := createLogPath(cfg, "llamacpp", 8080, "qwen3 coder")
 	if err != nil {
 		t.Fatalf("second createLogPath: %v", err)
 	}
@@ -3517,17 +3518,24 @@ func TestCreateLogPath_SameSecondStartsGetDistinctFiles(t *testing.T) {
 	if first.Name() == second.Name() {
 		t.Fatalf("both starts got %q, want distinct log files", first.Name())
 	}
+	var starts []time.Time
 	for _, f := range []*os.File{first, second} {
 		if _, err := os.Stat(f.Name()); err != nil {
 			t.Errorf("log file %q does not exist: %v", f.Name(), err)
 		}
-		stamp := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f.Name()), "llamacpp-"), ".log")
-		if _, err := time.Parse(logTimestampFormat, stamp); err != nil {
-			t.Errorf("log name %q does not carry a millisecond stamp: %v", f.Name(), err)
+		base := filepath.Base(f.Name())
+		name, ok := parseLogName(base)
+		if !ok {
+			t.Fatalf("log name %q does not parse", base)
 		}
+		want := logName{backend: "llamacpp", port: 8080, profile: "qwen3_coder", started: name.started}
+		if name != want || want.fileName() != base {
+			t.Errorf("log name %q = %+v, want %+v with a millisecond stamp", base, name, want)
+		}
+		starts = append(starts, name.started)
 	}
-	if second.Name() < first.Name() {
-		t.Errorf("later log %q sorts before earlier %q", second.Name(), first.Name())
+	if starts[1].Before(starts[0]) {
+		t.Errorf("later log %q records a start before earlier %q", second.Name(), first.Name())
 	}
 }
 
@@ -3544,15 +3552,15 @@ func TestCreateLogPath_CollisionRetriesWithoutTruncating(t *testing.T) {
 	base := time.Now()
 	taken := make(map[string]bool, occupied)
 	for i := range occupied {
-		stamp := base.Add(time.Duration(i) * time.Millisecond).Format(logTimestampFormat)
-		path := filepath.Join(cfg.LogDir, "ollama-"+stamp+".log")
+		name := logName{backend: "ollama", port: 11434, started: base.Add(time.Duration(i) * time.Millisecond)}
+		path := filepath.Join(cfg.LogDir, name.fileName())
 		if err := os.WriteFile(path, []byte("live server output"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		taken[path] = true
 	}
 
-	logFile, err := createLogPath(cfg, "ollama")
+	logFile, err := createLogPath(cfg, "ollama", 11434, "")
 	if err != nil {
 		t.Fatalf("createLogPath: %v", err)
 	}

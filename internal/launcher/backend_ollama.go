@@ -120,7 +120,10 @@ func (b *Ollama) TryStart(cfg *Config, addr string) error {
 		return fmt.Errorf("ollama binary not found in PATH")
 	}
 
-	logFile, err := createLogPath(cfg, "ollama")
+	// `ollama serve` runs for no Profile. An unparsable addr leaves port 0,
+	// which writes the legacy, port-less name rather than refusing the start.
+	_, port, _ := splitHostPort(addr)
+	logFile, err := createLogPath(cfg, b.Name(), port, "")
 	if err != nil {
 		return fmt.Errorf("creating log path: %w", err)
 	}

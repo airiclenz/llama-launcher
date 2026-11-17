@@ -521,26 +521,62 @@ func TestInstancesSignature(t *testing.T) {
 func TestFindManagedLogFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	// Legacy second-precision and millisecond names side by side; the latest
-	// start — a millisecond name within the same second as another — wins.
+	// Legacy second-precision and millisecond names side by side with
+	// port-named ones on two ports. A legacy name with a later stamp sorts
+	// after every port-named one, so only the parsed start time picks right.
 	older := dir + "/llamacpp-20240101-000000.log"
 	sameSecond := dir + "/llamacpp-20260101-000000.050.log"
-	newer := dir + "/llamacpp-20260101-000000.750.log"
-	other := dir + "/ollama-20260101-000000.log"
-	for _, p := range []string{older, sameSecond, newer, other} {
+	legacyNewest := dir + "/llamacpp-20260101-000000.750.log"
+	port8080Old := dir + "/llamacpp-8080-qwen3-20250101-000000.000.log"
+	port8080New := dir + "/llamacpp-8080-qwen3-coder-20250601-000000.000.log"
+	port8081 := dir + "/llamacpp-8081-gemma-20250701-000000.000.log"
+	ollamaLegacy := dir + "/ollama-20260101-000000.log"
+	ollamaServe := dir + "/ollama-11434-20250101-000000.000.log"
+	for _, p := range []string{older, sameSecond, legacyNewest, port8080Old, port8080New, port8081, ollamaLegacy, ollamaServe} {
 		if err := writeEmpty(p); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	if got := findManagedLogFile(dir, "llamacpp"); got != newer {
-		t.Errorf("findManagedLogFile = %q, want %q", got, newer)
+	tests := []struct {
+		name    string
+		backend string
+		port    int
+		want    string
+	}{
+		{name: "port's newest log", backend: "llamacpp", port: 8080, want: port8080New},
+		{name: "other port's log", backend: "llamacpp", port: 8081, want: port8081},
+		{name: "no port match falls back to newest legacy", backend: "llamacpp", port: 9000, want: legacyNewest},
+		{name: "port-less ollama serve log", backend: "ollama", port: 11434, want: ollamaServe},
+		{name: "ollama legacy fallback", backend: "ollama", port: 11435, want: ollamaLegacy},
+		{name: "no log for backend", backend: "lmstudio", port: 1234, want: ""},
 	}
-	if got := findManagedLogFile(dir, "ollama"); got != other {
-		t.Errorf("findManagedLogFile (ollama) = %q, want %q", got, other)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := findManagedLogFile(dir, tt.backend, tt.port)
+
+			if got != tt.want {
+				t.Errorf("findManagedLogFile(%s, %d) = %q, want %q", tt.backend, tt.port, got, tt.want)
+			}
+		})
 	}
-	if got := findManagedLogFile(dir, "lmstudio"); got != "" {
-		t.Errorf("findManagedLogFile (lmstudio) = %q, want empty", got)
+}
+
+// TestFindManagedLogFile_NoLegacyFallbackPastOtherPorts pins that a port with
+// no log of its own finds nothing when the only logs belong to other ports.
+func TestFindManagedLogFile_NoLegacyFallbackPastOtherPorts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := writeEmpty(dir + "/llamacpp-8081-gemma-20250701-000000.000.log"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := findManagedLogFile(dir, "llamacpp", 8080)
+
+	if got != "" {
+		t.Errorf("findManagedLogFile = %q, want empty", got)
 	}
 }
 

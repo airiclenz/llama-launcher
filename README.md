@@ -418,7 +418,7 @@ The architectural decisions are written down as [decision records](.capcom/knowl
 | Path | Purpose |
 |------|---------|
 | `~/.config/llama-launcher/config.yaml` | Configuration |
-| `~/.config/llama-launcher/logs/` | Server log files for instances the launcher started |
+| `~/.config/llama-launcher/logs/` | Server log files for instances the launcher started, named `<backend>-<port>-<profile>-<timestamp>.log` (`<backend>-<port>-<timestamp>.log` for `ollama serve`) so each instance's log is told apart |
 
 ## License
 

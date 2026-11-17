@@ -482,29 +482,59 @@ func fillRuntimeDetails(cfg *Config, inst *RunningInstance) {
 		inst.StartedAt = processStartTime(inst.PID)
 	}
 	if inst.LogFile == "" {
-		inst.LogFile = findManagedLogFile(cfg.LogDir, inst.Backend)
+		inst.LogFile = findManagedLogFile(cfg.LogDir, inst.Backend, inst.Port)
 	}
 }
 
-// findManagedLogFile returns the most recent launcher-managed log file for
-// the given backend, or "" if none exist. Log paths are deterministic by
-// naming convention (createLogPath), so we can locate them without a state
+// findManagedLogFile returns the log of backend's instance on port: the most
+// recently started launcher-managed log whose name carries that port, or —
+// when none does — the most recent legacy log, whose name records no port. It
+// returns "" if neither exists. Log paths are deterministic by naming
+// convention (createLogPath, logName), so we can locate them without a state
 // file. Externally-started servers log wherever the user started them and
 // are therefore not discoverable here.
-func findManagedLogFile(logDir, backend string) string {
+func findManagedLogFile(logDir, backend string, port int) string {
 	if logDir == "" || backend == "" {
 		return ""
 	}
-	pattern := filepath.Join(logDir, backend+"-*.log")
-	matches, err := filepath.Glob(pattern)
-	if err != nil || len(matches) == 0 {
+	matches, err := filepath.Glob(filepath.Join(logDir, backend+"-*"+logFileSuffix))
+	if err != nil {
 		return ""
 	}
-	// Log file names embed the start timestamp (YYYYMMDD-HHMMSS.mmm, or
-	// YYYYMMDD-HHMMSS for older logs), so after sorting the last entry is the
-	// most recent.
-	sort.Strings(matches)
-	return matches[len(matches)-1]
+	// Legacy and port-named logs do not sort together by name, so the newest
+	// is picked by the start time each name records.
+	var portLog, legacyLog newestLog
+	for _, path := range matches {
+		name, ok := parseLogName(filepath.Base(path))
+		if !ok || name.backend != backend {
+			continue
+		}
+		switch {
+		case name.port == 0:
+			legacyLog.offer(path, name.started)
+		case name.port == port:
+			portLog.offer(path, name.started)
+		}
+	}
+	if portLog.path != "" {
+		return portLog.path
+	}
+	return legacyLog.path
+}
+
+// newestLog keeps the most recently started of the log files offered to it.
+type newestLog struct {
+	// path is the newest log offered so far; "" until one is offered.
+	path string
+	// started is path's recorded start time.
+	started time.Time
+}
+
+// offer keeps path when it started after the newest log kept so far.
+func (l *newestLog) offer(path string, started time.Time) {
+	if l.path == "" || started.After(l.started) {
+		l.path, l.started = path, started
+	}
 }
 
 // joinHostPort builds the host:port address the launcher dials and keys

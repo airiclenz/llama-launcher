@@ -54,7 +54,11 @@ internal/launcher/menu.go — profileContextCells; internal/launcher/cli.go — 
 **Closes:** ollama-context-size
 **Commit:** `feat(ollama): send a Profile's context_size as num_ctx on load`
 
-## 2. Log names carry the instance port and the Profile
+## 2. Log names carry the instance port and the Profile — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): `parseLogTimestamp` is replaced at its callers by `parseLogName` (plus a private `parseLogStamp`); `TestParseLogTimestamp` became `TestParseLogName`, alongside new `TestLogName_FileNameRoundTrips`, `TestLogProfileSlug`, `TestCleanupLogs_AgesEveryShape` and `TestFindManagedLogFile_NoLegacyFallbackPastOtherPorts`.
+NOTES (2026-11-17): cleanup now ages only names `parseLogName` accepts; a non-launcher `.log` whose second `-` part is not a positive port (e.g. `foo-bar-<stamp>.log`) was aged before and is now left alone.
+NOTES (2026-11-17): log times are still written in local time and parsed as UTC (pre-existing, unchanged), so `log_retention` ages are off by the local UTC offset.
 
 **What:**
 **Goal:** New logs are named `{backend}-{port}-{profile}-{timestamp}.log` for managed starts and `{backend}-{port}-{timestamp}.log` for `ollama serve`; one parser reads all three shapes (these two plus legacy `{backend}-{timestamp}.log`, ms and second stamps); an instance's log is the newest file for its backend whose port matches, or a legacy file when none matches; cleanup ages every shape.
