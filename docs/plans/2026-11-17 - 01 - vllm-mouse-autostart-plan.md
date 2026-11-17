@@ -98,7 +98,7 @@ NOTES (2026-11-17): the consequences Note's title and its "Only Splash addresses
 - `capcom check`
 **Commit:** `feat(vllm): find a loading vLLM by its process`
 
-## 4. vLLM in the default config and the MCP adapter
+## 4. vLLM in the default config and the MCP adapter — ✅ DONE (2026-11-17)
 
 **What:** Depends on item 1.
 **Goal:** The generated default config documents vLLM (server block `vllm: false`, default port, API-key note, parameter applicability column, `server` field enum, an example Profile), and the MCP adapter accepts `vllm` as a backend name in validation and tool descriptions.

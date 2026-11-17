@@ -8,7 +8,7 @@ import (
 func TestGetLLMServer_Known(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"llamacpp", "lmstudio", "ollama"} {
+	for _, name := range []string{"llamacpp", "lmstudio", "ollama", "vllm"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			b, err := GetLLMServer(name)

@@ -1,6 +1,6 @@
 # llama-launcher configuration
 #
-# Four server types are supported:
+# Five server types are supported:
 #
 #   llamacpp   — llama.cpp's llama-server binary. The launcher forks the
 #                process, tracks PID, and restarts to switch models.
@@ -16,6 +16,11 @@
 #                and restarts to switch models. The "splash" command must
 #                be on PATH; for a source checkout use a wrapper script
 #                that execs <checkout>/splash (a plain symlink breaks it).
+#
+#   vllm       — vLLM's OpenAI-compatible server. Like llamacpp, the
+#                launcher forks "vllm serve <model>", tracks PID, and
+#                restarts to switch models. The "vllm" command must be
+#                on PATH (e.g. from the virtualenv vLLM is installed in).
 
 # ──────────────────────────────────────────────────────────────
 # Servers
@@ -24,7 +29,7 @@
 # Enable the servers available on your system.
 # Binaries are auto-detected from PATH; default ports are
 # per-backend (llamacpp: 8080, ollama: 11434, lmstudio: 1234,
-# splash: 8000).
+# splash: 8000, vllm: 8000).
 #
 # Each entry is either a plain bool or a mapping with an optional API key:
 #
@@ -62,12 +67,16 @@
 #   splash     — exported as SPLASH_API_KEY into the launched server's
 #                environment (never on the command line); Splash then
 #                rejects client requests without "Authorization: Bearer <key>".
+#   vllm       — exported as VLLM_API_KEY into the launched server's
+#                environment (never on the command line); vLLM then
+#                rejects client requests without "Authorization: Bearer <key>".
 
 servers:
   llamacpp: true
   ollama: false
   lmstudio: false
   splash: false
+  vllm: false
 
 # ──────────────────────────────────────────────────────────────
 # Paths
@@ -206,26 +215,26 @@ sort_alphabetically: true
 #
 # Not all parameters apply to all servers:
 #
-#   Parameter       llamacpp   ollama   lmstudio   splash
-#   ─────────────   ────────   ──────   ────────   ──────
-#   gpu_layers      yes        -        -          -       (LM Studio manages GPU offload itself)
-#   threads         yes        -        -          -
-#   threads_batch   yes        -        -          -
-#   batch_size      yes        -        yes        -       (lmstudio: mapped to eval_batch_size)
-#   context_size    yes        yes      yes        yes     (splash: mapped to --max-context; ollama: sent as num_ctx, profile value only)
-#   host / port     yes        yes      yes        yes
-#   flash_attn      yes        -        yes        -       (lmstudio: mapped to flash_attention)
-#   cont_batching   yes        -        -          -
-#   parallel        yes        -        yes        -
-#   mlock           yes        -        -          -
-#   no_mmap         yes        -        -          -
-#   embedding       yes        -        -          -
-#   jinja           yes        -        -          -       (enables Jinja chat template)
-#   temperature     yes        -        -          -
-#   repeat_penalty  yes        -        -          -
-#   top_k           yes        -        -          -
-#   top_p           yes        -        -          -
-#   min_p           yes        -        -          -
+#   Parameter       llamacpp   ollama   lmstudio   splash   vllm
+#   ─────────────   ────────   ──────   ────────   ──────   ────
+#   gpu_layers      yes        -        -          -        -      (LM Studio manages GPU offload itself)
+#   threads         yes        -        -          -        -
+#   threads_batch   yes        -        -          -        -
+#   batch_size      yes        -        yes        -        -      (lmstudio: mapped to eval_batch_size)
+#   context_size    yes        yes      yes        yes      yes    (splash: mapped to --max-context; vllm: mapped to --max-model-len; ollama: sent as num_ctx, profile value only)
+#   host / port     yes        yes      yes        yes      yes
+#   flash_attn      yes        -        yes        -        -      (lmstudio: mapped to flash_attention)
+#   cont_batching   yes        -        -          -        -
+#   parallel        yes        -        yes        -        yes    (vllm: mapped to --max-num-seqs)
+#   mlock           yes        -        -          -        -
+#   no_mmap         yes        -        -          -        -
+#   embedding       yes        -        -          -        -
+#   jinja           yes        -        -          -        -      (enables Jinja chat template)
+#   temperature     yes        -        -          -        -
+#   repeat_penalty  yes        -        -          -        -
+#   top_k           yes        -        -          -        -
+#   top_p           yes        -        -          -        -
+#   min_p           yes        -        -          -        -
 #
 # Ollama honours only a context_size the profile sets itself: the
 # defaults value below is not inherited. Ollama reloads a model whose
@@ -235,6 +244,10 @@ sort_alphabetically: true
 # Splash honours only context_size (plus host / port). Sampling params
 # (temperature, repeat_penalty, top_k, top_p, min_p) are ignored for
 # Splash; pass other Splash flags through a profile's extra_args.
+#
+# vLLM honours only context_size and parallel (plus host / port).
+# Sampling params are ignored for vLLM; pass other vLLM flags through a
+# profile's extra_args.
 
 defaults:
   gpu_layers: 99
@@ -278,12 +291,13 @@ defaults:
 #                 pop-up.
 #   model         Model reference (file path for llamacpp, name for ollama,
 #                 publisher/repo/file for lmstudio, Hugging Face
-#                 owner/repo id for splash)
-#   server        Server to use (llamacpp, ollama, lmstudio, splash)
+#                 owner/repo id for splash, Hugging Face owner/repo id
+#                 or absolute local path for vllm)
+#   server        Server to use (llamacpp, ollama, lmstudio, splash, vllm)
 #   is_favourite  Pin this profile to the top of the menu (default: false).
 #                 Favourites sort before all other profiles.
-#   extra_args    Additional CLI flags appended verbatim (llamacpp and
-#                 splash only)
+#   extra_args    Additional CLI flags appended verbatim (llamacpp,
+#                 splash and vllm only)
 #   log_retention Days to keep this profile's logs, overriding the global
 #                 log_retention; 0 keeps them. Unset uses the global value.
 #   <param>       Any parameter from the defaults block
@@ -353,3 +367,19 @@ profiles:
   #   model: mlx-community/Qwen3.8-27B-4bit
   #   context_size: 32768
   #   extra_args: ["--default-reasoning-effort", "high"]
+
+  # ── vLLM example ───────────────────────────────────────────
+  # Model is a Hugging Face owner/repo id or an absolute local path,
+  # handed to "vllm serve" as-is. vLLM downloads a model on its first
+  # start, so that start can take a while; it is bounded by
+  # startup_max_wait. The launcher does not check for an installed copy.
+  # Uncomment vllm in the servers section above (set it to true).
+  # Other vLLM flags (dtype, gpu memory utilization, quantization) go in
+  # extra_args.
+  #
+  # vllm-qwen:
+  #   description: "Qwen2.5 7B Instruct via vLLM"
+  #   server: vllm
+  #   model: Qwen/Qwen2.5-7B-Instruct
+  #   context_size: 32768
+  #   extra_args: ["--gpu-memory-utilization", "0.9"]

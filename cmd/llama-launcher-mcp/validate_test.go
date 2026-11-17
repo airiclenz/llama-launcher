@@ -23,6 +23,7 @@ func TestValidateTarget(t *testing.T) {
 		{"backend lmstudio", "lmstudio", true},
 		{"backend ollama", "ollama", true},
 		{"backend splash", "splash", true},
+		{"backend vllm", "vllm", true},
 		{"ipv4 host:port", "127.0.0.1:8080", true},
 		{"hostname:port", "localhost:1234", true},
 		{"dotted hostname:port", "my-host.local:11434", true},
@@ -35,7 +36,7 @@ func TestValidateTarget(t *testing.T) {
 		{"shell metacharacters", "; rm", false},
 		{"space-separated injection", "clean --all", false},
 		{"command substitution", "$(reboot)", false},
-		{"unknown backend name", "vllm", false},
+		{"unknown backend name", "tgi", false},
 		{"flag-shaped host:port", "--config:80", false},
 		{"empty host", ":8080", false},
 		{"port zero", "localhost:0", false},
@@ -58,11 +59,11 @@ func TestValidateTarget(t *testing.T) {
 
 func TestValidateTargetUnknownNameListsBackends(t *testing.T) {
 	t.Parallel()
-	err := validateTarget("vllm")
+	err := validateTarget("tgi")
 	if err == nil {
-		t.Fatal("validateTarget(\"vllm\") = nil, want error")
+		t.Fatal("validateTarget(\"tgi\") = nil, want error")
 	}
-	for _, name := range []string{"llamacpp", "lmstudio", "ollama", "splash"} {
+	for _, name := range []string{"llamacpp", "lmstudio", "ollama", "splash", "vllm"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("validateTarget error %q does not list backend %q", err, name)
 		}
@@ -184,7 +185,7 @@ func TestEndToEndMutatingToolsRejectInjection(t *testing.T) {
 		{"stop_server", map[string]any{"target": "--all"}},
 		{"stop_server", map[string]any{"target": "; rm"}},
 		{"stop_server", map[string]any{"target": "$(reboot)"}},
-		{"stop_server", map[string]any{"target": "vllm"}},
+		{"stop_server", map[string]any{"target": "tgi"}},
 		{"stop_server", map[string]any{"target": "clean --all"}},
 		{"unload_model", map[string]any{"profile": "-f"}},
 		{"unload_model", map[string]any{"profile": "--all"}},
