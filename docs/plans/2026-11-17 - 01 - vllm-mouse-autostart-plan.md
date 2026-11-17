@@ -58,7 +58,11 @@ NOTES (2026-11-17): vLLM's HealthCheck, like ListRunningModels, dials a wildcard
 - `go test ./internal/launcher/ -run 'VLLM|Splash'`
 **Commit:** `feat(vllm): add vLLM as a managed LLM Server`
 
-## 2. Other LLM Servers never claim a vLLM address
+## 2. Other LLM Servers never claim a vLLM address — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): only LM Studio's health check needed a guard; llamacpp (empty `/health` body), Ollama (`/` is 404) and Splash (no `Server: Splash` header) already reject the vLLM fake, which the shared-port discovery test confirms by asserting exactly one `vllm` instance with all five LLM Servers enabled at the address.
+NOTES (2026-11-17): the TDD's §7 discrimination table (lmstudio row) and §12.1 test descriptions (`TestLMStudioHealthCheck`, `TestDiscoverRunningInstances_*`) do not yet mention the vLLM exclusion; item 5 owns both ("§7 detection (vLLM's `/version` discriminator and LM Studio's exclusion), §12.1 test list"), so they are left to it.
+NOTES (2026-11-17): the `/version` shape check is written inline in `(*LMStudio).HealthCheck`, matching its existing llamacpp and Ollama exclusions, rather than shared with `(*VLLM).checkVersion` in backend_vllm.go, which the item's Files list does not name.
 
 **What:** Depends on item 1.
 **Goal:** `identifyBackend` and config-driven discovery name a vLLM server `vllm` — never `lmstudio`, `llamacpp`, `ollama` or `splash` — and still name each of those correctly with vLLM registered.

@@ -72,6 +72,23 @@ func (b *LMStudio) HealthCheck(addr string) error {
 		}
 	}
 
+	// Exclude vLLM: /version returns {"version":"..."}, and vLLM's /health
+	// answers 200 with an empty body, which slips past the llamacpp check
+	// above. LM Studio returns {"error":"..."} for /version.
+	r, err = authedGet(healthCheckTimeout, base+"/version", b.apiKey())
+	if err == nil {
+		versionBody, _ := io.ReadAll(boundedBody(r.Body))
+		r.Body.Close()
+		if r.StatusCode == http.StatusOK {
+			var version struct {
+				Version string `json:"version"`
+			}
+			if json.Unmarshal(versionBody, &version) == nil && version.Version != "" {
+				return fmt.Errorf("not LM Studio: /version body matches vLLM (version=%q)", version.Version)
+			}
+		}
+	}
+
 	return nil
 }
 

@@ -129,6 +129,23 @@ func TestLMStudioHealthCheck(t *testing.T) {
 			t.Errorf("error = %q, want it to mention Ollama", err)
 		}
 	})
+
+	t.Run("vLLM-shaped server is not LM Studio", func(t *testing.T) {
+		t.Parallel()
+		// vLLM answers /v1/models 200 and /health 200 with an empty body,
+		// which passes the llamacpp and Ollama exclusions; only its /version
+		// body tells it apart.
+		addr := vllmTestServer(t, vllmShaped)
+
+		err := b.HealthCheck(addr)
+
+		if err == nil {
+			t.Fatal("expected error when vLLM is detected")
+		}
+		if !strings.Contains(err.Error(), "vLLM") {
+			t.Errorf("error = %q, want it to mention vLLM", err)
+		}
+	})
 }
 
 func TestLMStudioLoadModel(t *testing.T) {

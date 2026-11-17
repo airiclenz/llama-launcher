@@ -2047,6 +2047,19 @@ func TestIdentifyBackend(t *testing.T) {
 		}
 	})
 
+	t.Run("vLLM is identified as vllm, not lmstudio", func(t *testing.T) {
+		t.Parallel()
+		// lmstudio sorts before vllm and vLLM answers /v1/models 200, so
+		// LM Studio's health check must reject it for vllm to be reached.
+		addr := vllmTestServer(t, vllmShaped)
+
+		backend, err := identifyBackend(addr)
+
+		if err != nil || backend != "vllm" {
+			t.Errorf("identifyBackend = %q, %v; want vllm", backend, err)
+		}
+	})
+
 	t.Run("a Starting server outranks a 401 from another backend's path", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

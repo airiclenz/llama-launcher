@@ -237,6 +237,43 @@ func TestDiscoverRunningInstances_WildcardSplash(t *testing.T) {
 	}
 }
 
+// TestDiscoverRunningInstances_SharedPortVLLM covers the shared-port setup
+// with vLLM answering: every LLM Server is enabled at the one configured
+// address, so each probes it, and only vllm may claim it — LM Studio's
+// health check passes /v1/models too, and would otherwise add a second row.
+func TestDiscoverRunningInstances_SharedPortVLLM(t *testing.T) {
+	t.Parallel()
+	host, port, ok := splitHostPort(vllmTestServer(t, vllmShaped))
+	if !ok {
+		t.Fatal("splitting the fake vLLM server's address")
+	}
+	cfg := &Config{
+		Servers: map[string]ServerConfig{
+			"llamacpp": {Enabled: true},
+			"lmstudio": {Enabled: true},
+			"ollama":   {Enabled: true},
+			"splash":   {Enabled: true},
+			"vllm":     {Enabled: true},
+		},
+		LogDir:   t.TempDir(),
+		Profiles: map[string]Profile{},
+	}
+	cfg.Defaults = ProfileParams{
+		Server: strPtrLocal("vllm"),
+		Host:   &host,
+		Port:   &port,
+	}
+
+	instances := DiscoverRunningInstances(cfg)
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 instance, got %d: %+v", len(instances), instances)
+	}
+	if instances[0].Backend != "vllm" {
+		t.Errorf("Backend = %q, want vllm", instances[0].Backend)
+	}
+}
+
 // TestDiscoverRunningInstances_SanitizesModelName covers the hostile-server
 // case: the model name is reported by whatever answers on the configured
 // port and is printed raw by every display site, so ANSI/OSC escapes (here
