@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.10.0
+
 ### Changed
 
 - **Ollama Profiles now send their context size.** A Profile's own `context_size` reaches Ollama on load as `options.num_ctx` (no `options` key when it is unset), and Ollama's `ParamSpecs` now lists the context size, so the Profile-list context column and "Show model config" show it for Ollama rows. This deliberately supersedes the 1.4.6 entry that removed Ollama's context_size display: the value is now actually sent. Only a context_size the Ollama Profile sets itself counts — `defaults.context_size` is not inherited for Ollama — so a defaults-only Ollama Profile sends no `num_ctx`, shows a blank cell, and its `ResolvedProfile.ContextSize` (and the `context_size` field of `list --json`) is now nil/absent where it used to carry the defaults value. Ollama reloads a Model whose request options differ, so the size holds only while clients send the same `num_ctx` (or the Ollama server runs with `OLLAMA_CONTEXT_LENGTH`). The rule lives in one place: Ollama implements a package-private `defaultContextSizeIgnorer` capability that `mergeParams` checks, so `ResolveProfile`, the context column and `list --json` follow it without any backend-name check.
