@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,6 +82,72 @@ func (b *VLLM) checkVersion(base string) error {
 		return fmt.Errorf("not vllm: /version response missing version field")
 	}
 	return nil
+}
+
+// LoadingPID returns the PID of a vLLM server that is loading its Model for
+// addr but does not serve it yet, or 0 when there is none. vLLM builds its
+// engine before it starts listening, so a loading vLLM refuses connections
+// and only its process shows it: a session leader whose command line is a
+// vLLM serve bound for addr (ADR-0015). Callers go through loadingPID, which
+// ignores the answer once anything listens at addr. On a platform without a
+// process table (windows) it returns 0.
+func (b *VLLM) LoadingPID(addr string) int {
+	procs, err := processTable()
+	if err != nil {
+		return 0
+	}
+	return vllmLoadingPID(procs, addr, b.DefaultAddr())
+}
+
+// vllmLoadingPID picks the first session leader in procs whose command line
+// is a vLLM server bound for addr: its last --port equals addr's port, or
+// defaultAddr's port when the flag is absent, and its last --host equals
+// addr's host. An absent --host is vLLM's own default of every interface, so
+// it matches any host.
+func vllmLoadingPID(procs []processEntry, addr, defaultAddr string) int {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	_, defaultPort, err := net.SplitHostPort(defaultAddr)
+	if err != nil {
+		return 0
+	}
+	for _, p := range procs {
+		if p.PID <= 0 || p.PID != p.PGID || !isVLLMServeCommand(p.Args) {
+			continue
+		}
+		if lastFlagValue(p.Args, "--port", defaultPort) != port {
+			continue
+		}
+		if procHost := lastFlagValue(p.Args, "--host", ""); procHost != "" && procHost != host {
+			continue
+		}
+		return p.PID
+	}
+	return 0
+}
+
+// vllmAPIServerModule is the Python module vLLM's OpenAI-compatible server
+// runs as when it is started with `python -m` instead of `vllm serve`.
+const vllmAPIServerModule = "vllm.entrypoints.openai.api_server"
+
+// isVLLMServeCommand reports whether args is the command line of a vLLM
+// server: `vllm serve …`, where the word before `serve` has basename `vllm`
+// (a pip or uv install is a shebang script, so the kernel shows
+// `…/bin/python3 …/bin/vllm serve …`), or `python -m
+// vllm.entrypoints.openai.api_server …`. Another server's `<name> serve`,
+// such as `splash serve`, does not match.
+func isVLLMServeCommand(args []string) bool {
+	for i, arg := range args {
+		if arg == "serve" && i > 0 && filepath.Base(args[i-1]) == "vllm" {
+			return true
+		}
+		if arg == "-m" && i+1 < len(args) && args[i+1] == vllmAPIServerModule {
+			return true
+		}
+	}
+	return false
 }
 
 // ParamSpecs lists the profile parameters vLLM receives as launch flags:

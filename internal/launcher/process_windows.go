@@ -48,8 +48,8 @@ func requireProcessStop() error {
 }
 
 // listProcesses refuses to read the process table: nothing the launcher could
-// find there is a process it could signal on windows, so a loading Splash
-// stays invisible here (ADR-0015).
+// find there is a process it could signal on windows, so a loading Splash or
+// vLLM stays invisible here (ADR-0015).
 func listProcesses() ([]processEntry, error) {
 	return nil, fmt.Errorf("listing processes: %w", ErrUnsupported)
 }

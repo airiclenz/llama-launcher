@@ -50,8 +50,9 @@ func requireProcessStop() error {
 // and command line, read from ps. A session leader's command line is its true
 // argv, read from the kernel (procArgv), so an argument containing spaces
 // stays whole; every other row keeps ps's whitespace-split command, as does a
-// leader whose argv cannot be read. It backs the search for a loading Splash,
-// which holds no address yet and so cannot be found through lsof (ADR-0015).
+// leader whose argv cannot be read. It backs the search for a loading Splash
+// or vLLM, which does not listen on its address yet and so cannot be found
+// through lsof (ADR-0015).
 func listProcesses() ([]processEntry, error) {
 	out, err := exec.Command("ps", "-A", "-ww", "-o", "pid=,pgid=,command=").Output()
 	if err != nil {

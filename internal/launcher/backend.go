@@ -244,7 +244,7 @@ type StartupProber interface {
 }
 
 // LoadingProcessFinder is implemented by LLM Servers whose process loads its
-// model before it binds its address (Splash), so no HTTP probe or lsof
+// model before it serves its address (Splash, vLLM), so no HTTP probe or lsof
 // lookup can see it while it loads. LoadingPID returns the PID of a server
 // process that is loading for addr — attributed by its command line, see
 // ADR-0015 — or 0 when there is none. Callers go through loadingPID, which

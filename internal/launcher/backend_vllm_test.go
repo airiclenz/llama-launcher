@@ -283,3 +283,95 @@ func TestVLLMParamSpecs(t *testing.T) {
 		t.Errorf("ParamSpecs labels = %q, want %q", labels, want)
 	}
 }
+
+func TestVLLMLoadingPID(t *testing.T) {
+	t.Parallel()
+
+	const defaultAddr = "127.0.0.1:8000"
+	tests := []struct {
+		name string
+		args string
+		pgid int
+		addr string
+		want int
+	}{
+		{name: "vllm serve on its port", args: "vllm serve m --port 8001", addr: "127.0.0.1:8001", want: 4242},
+		{name: "shebang argv of a pip or uv install", args: "/opt/venv/bin/python3 /opt/venv/bin/vllm serve m --host 127.0.0.1 --port 8001", addr: "127.0.0.1:8001", want: 4242},
+		{name: "--port=value form", args: "vllm serve m --port=8001", addr: "127.0.0.1:8001", want: 4242},
+		{name: "last --port wins", args: "vllm serve m --port 8000 --port 8001", addr: "127.0.0.1:8001", want: 4242},
+		{name: "absent --port is vLLM's default port", args: "/usr/local/bin/vllm serve m", addr: "127.0.0.1:8000", want: 4242},
+		{name: "python -m api_server form", args: "python3 -m vllm.entrypoints.openai.api_server --model m --port 8001", addr: "127.0.0.1:8001", want: 4242},
+		{name: "absent --host matches any host", args: "vllm serve m --port 8001", addr: "192.168.1.5:8001", want: 4242},
+		{name: "non-leader is not matched", args: "vllm serve m --port 8001", pgid: 1, addr: "127.0.0.1:8001", want: 0},
+		{name: "process on another host is not matched", args: "vllm serve m --host 10.0.0.5 --port 8001", addr: "127.0.0.1:8001", want: 0},
+		{name: "process on another port is not matched", args: "vllm serve m --port 8002", addr: "127.0.0.1:8001", want: 0},
+		{name: "splash serve is not matched", args: "/bin/sh /Users/u/.local/bin/splash serve --model o/r --port 8001", addr: "127.0.0.1:8001", want: 0},
+		{name: "unparseable addr", args: "vllm serve m --port 8001", addr: "no-port", want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pgid := tt.pgid
+			if pgid == 0 {
+				pgid = 4242
+			}
+			procs := []processEntry{{PID: 4242, PGID: pgid, Args: strings.Fields(tt.args)}}
+
+			got := vllmLoadingPID(procs, tt.addr, defaultAddr)
+
+			if got != tt.want {
+				t.Errorf("vllmLoadingPID(%q, %q) = %d, want %d", tt.args, tt.addr, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("Splash never matches a vllm serve process", func(t *testing.T) {
+		t.Parallel()
+		procs := []processEntry{{PID: 4242, PGID: 4242, Args: strings.Fields("vllm serve m --model m --host 127.0.0.1 --port 8001")}}
+
+		if got := splashLoadingPID(procs, "127.0.0.1:8001", defaultAddr); got != 0 {
+			t.Errorf("splashLoadingPID = %d, want 0 for a vllm serve process", got)
+		}
+	})
+
+	t.Run("matches the args BuildServerArgs builds", func(t *testing.T) {
+		t.Parallel()
+		host, port := "127.0.0.1", 8001
+		profile := ResolvedProfile{
+			ModelPath:     "owner/repo",
+			ProfileParams: ProfileParams{Host: &host, Port: &port},
+		}
+		args := append([]string{"/opt/venv/bin/vllm"}, (&VLLM{}).BuildServerArgs(&Config{}, &profile)...)
+		procs := []processEntry{{PID: 4242, PGID: 4242, Args: args}}
+
+		if got := vllmLoadingPID(procs, "127.0.0.1:8001", defaultAddr); got != 4242 {
+			t.Errorf("vllmLoadingPID(%q) = %d, want 4242", args, got)
+		}
+	})
+}
+
+// TestVLLMLoadingPIDListenerGate covers loadingPID's gate for vLLM: a loading
+// vLLM process counts as Starting only while nothing listens at its address.
+// Not parallel: it rewrites the processTable and addrHasListener seams.
+func TestVLLMLoadingPIDListenerGate(t *testing.T) {
+	const addr = "127.0.0.1:18732"
+	prevTable, prevListener := processTable, addrHasListener
+	t.Cleanup(func() { processTable, addrHasListener = prevTable, prevListener })
+	processTable = func() ([]processEntry, error) {
+		return []processEntry{{PID: 4242, PGID: 4242, Args: strings.Fields("vllm serve m --port 18732")}}, nil
+	}
+	vllm, err := GetLLMServer("vllm")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrHasListener = func(string) bool { return false }
+	if got := loadingPID(vllm, addr); got != 4242 {
+		t.Errorf("loadingPID(vllm) with nothing listening = %d, want 4242", got)
+	}
+
+	addrHasListener = func(string) bool { return true }
+	if got := loadingPID(vllm, addr); got != 0 {
+		t.Errorf("loadingPID(vllm) with a listener at the address = %d, want 0", got)
+	}
+}

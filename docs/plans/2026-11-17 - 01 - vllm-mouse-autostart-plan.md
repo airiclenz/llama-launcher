@@ -75,7 +75,13 @@ NOTES (2026-11-17): the `/version` shape check is written inline in `(*LMStudio)
 - `go test ./internal/launcher/ -run 'LMStudio|IdentifyBackend|Discover|VLLM'`
 **Commit:** `fix(lmstudio): do not mistake a vLLM server for LM Studio`
 
-## 3. A loading vLLM is visible and stoppable
+## 3. A loading vLLM is visible and stoppable — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): vLLM does not answer HTTP 503 while loading; it builds its engine before it listens, so a loading vLLM refuses connections. `StartupProber` was therefore not implemented, as the approach's "if" allowed; `LoadingProcessFinder` alone covers the window.
+NOTES (2026-11-17): consequential edit — internal/launcher/server.go: made necessary by vLLM implementing LoadingProcessFinder (the start-path comment named the process-table lookup as for a loading Splash only)
+NOTES (2026-11-17): consequential edit — internal/launcher/process_unix.go: made necessary by vLLM implementing LoadingProcessFinder (listProcesses' comment said it backs the search for a loading Splash only)
+NOTES (2026-11-17): consequential edit — internal/launcher/process_windows.go: made necessary by vLLM implementing LoadingProcessFinder (listProcesses' comment said only a loading Splash stays invisible on windows)
+NOTES (2026-11-17): the consequences Note's title and its "Only Splash addresses pay this cost" sentence were also amended, because vLLM addresses now pay the same ps cost.
 
 **What:** Depends on item 1. Extends ADR-0015's process-table match from Splash to vLLM: a `vllm serve` process whose API does not answer yet is a Starting instance (ADR-0010).
 **Goal:** `(*VLLM).LoadingPID(addr)` returns the PID of a `vllm serve` process whose `--port` (default `8000`) matches the address's port while no HTTP server answers there, and 0 otherwise; Splash's `LoadingPID` still never matches a `vllm serve` process and vLLM's never matches `splash serve`.

@@ -91,10 +91,10 @@ func startManagedServer(cfg *Config, profile *ResolvedProfile, mb ManagedLLMServ
 	// A server spawned by an earlier start may still be coming up at the
 	// target address (llama-server answers /health with 503 while it loads
 	// its model, and a large model can outlive the health-wait window; a
-	// loading Splash has not bound the address yet and is found through the
-	// process table instead, ADR-0015). Spawning a second server there would
-	// only collide with the first, so the start is refused instead — the
-	// loading server is deliberately left alone.
+	// loading Splash or vLLM does not listen on the address yet and is found
+	// through the process table instead, ADR-0015). Spawning a second
+	// server there would only collide with the first, so the start is
+	// refused instead — the loading server is deliberately left alone.
 	addr := joinHostPort(*profile.Host, *profile.Port)
 	if startingUp(mb, addr) {
 		return nil, stillStartingUpErr(cfg, mb, addr)

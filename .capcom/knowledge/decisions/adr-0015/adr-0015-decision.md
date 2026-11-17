@@ -16,5 +16,10 @@ Splash binds its address only once its Model has loaded. While it loads, a conne
   - the stop path's "stopped" check.
 
   The stop signals the matched PID and its process group through the same `terminatePID` escalation as every other stop.
-- **Splash only.** The lookup sits behind a `LoadingProcessFinder` interface that only Splash implements. llamacpp, Ollama and LM Studio never read the process table.
-- **Unix only.** The process table is read with `ps -A -ww -o pid=,pgid=,command=`. ps joins each command line's arguments with spaces, so it supplies only the PID and PGID; a session leader's command line is its true argv, read from the kernel (`kern.procargs2` on darwin, `/proc/<pid>/cmdline` on linux). On Windows the read refuses with `ErrUnsupported`, so a loading Splash stays invisible there, where the launcher could not signal it anyway (ADR-0012).
+- **Splash and vLLM.** *(Amended 2026-11-17: this bullet read "Splash only" until vLLM joined.)* The lookup sits behind a `LoadingProcessFinder` interface that Splash and vLLM implement. vLLM builds its engine before it listens, so a loading vLLM refuses connections just as a loading Splash does. A process is a loading vLLM for `host:port` when it leads its own process group (PGID == PID), its command line is a vLLM server launch, and its address matches:
+  - the launch is `vllm serve …`, where the word before `serve` has basename `vllm` (a pip or uv install is a shebang script, so the kernel shows `…/bin/python3 …/bin/vllm serve …`), or `python -m vllm.entrypoints.openai.api_server …`. `splash serve` never matches it, and vLLM's launch never matches Splash's.
+  - the last `--port` equals the port; when it is absent, vLLM's default `8000` supplies it.
+  - the last `--host` equals the host when present. An absent `--host` is vLLM's own default of every interface, so it matches any host.
+
+  The "only while nothing listens" gate and the uses above apply unchanged. llamacpp, Ollama and LM Studio never read the process table.
+- **Unix only.** The process table is read with `ps -A -ww -o pid=,pgid=,command=`. ps joins each command line's arguments with spaces, so it supplies only the PID and PGID; a session leader's command line is its true argv, read from the kernel (`kern.procargs2` on darwin, `/proc/<pid>/cmdline` on linux). On Windows the read refuses with `ErrUnsupported`, so a loading Splash or vLLM stays invisible there, where the launcher could not signal it anyway (ADR-0012).
