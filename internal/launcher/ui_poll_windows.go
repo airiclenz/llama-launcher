@@ -3,8 +3,9 @@
 // The interactive menu on windows, which has no select(2) over a console
 // handle and so has never run the menu — before ADR-0012 that showed up as a
 // build failure. Here it is a refused verb instead: the menu declines with a
-// sentence wrapping ErrUnsupported while every CLI subcommand, and everything
-// the library drives over HTTP, keeps working.
+// sentence wrapping ErrUnsupported while the CLI subcommands that need neither
+// unix process control nor launchd, and everything the library drives over
+// HTTP, keep working.
 
 package launcher
 

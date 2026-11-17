@@ -222,7 +222,12 @@ NOTES (2026-11-17): completion offers `install print remove` as the plan says, t
 - `go test ./internal/launcher/ -run 'Autostart|LaunchAgent|Complet'`
 **Commit:** `feat(cli): add autostart print for a launchd plist`
 
-## 10. `autostart install` / `remove`, and docs
+## 10. `autostart install` / `remove`, and docs — ✅ DONE (2026-11-17)
+
+NOTES (2026-11-17): the LaunchAgents directory is not a swappable package-level variable: `launchAgentPath` derives it from `os.UserHomeDir()`, and every install/remove test isolates it with `t.Setenv("HOME", t.TempDir())` (via the shared `isolateAutostart` helper in cli_test.go, which also swaps `runLaunchctl`). `runLaunchctl` lives in the untagged autostart.go so the shared helper compiles on every OS.
+NOTES (2026-11-17): `autostart remove` does not resolve the Profile (the label is built from the typed name's slug), so an agent outlives a Profile deleted from the config; with no plist installed it prints "No launch agent is installed for <profile>" and exits 0. A launchctl or disk failure exits 3, a usage error or unresolvable Profile on install exits 2.
+NOTES (2026-11-17): consequential edit — llama-launcher.TDD.md: §5.2 gains rows for autostart.go and autostart_darwin.go / autostart_other.go (item 9 left the TDD to this item); a new §3.4 names the plist fields.
+NOTES (2026-11-17): launcher/doc.go and README "Supported platforms" still say linux does "everything": both describe the library facade, which does not expose `autostart`, so they were left unchanged.
 
 **What:** Depends on item 9.
 **Goal:** On macOS `autostart install <profile>` writes the plist to `~/Library/LaunchAgents/<label>.plist` (replacing and booting out an existing one first), runs `launchctl bootstrap gui/<uid> <path>` — which, with `RunAtLoad`, runs `load <profile>` at once, so install activates the Profile now — and prints the path, that the Profile is being loaded now, and that it starts at login; `autostart remove <profile>` runs `launchctl bootout gui/<uid>/<label>` (a not-loaded agent is not an error), deletes the file, and says the running server is left alone (`stop` stops it). On other OSes both exit 3 with an error wrapping `ErrUnsupported`. README documents print/install/remove; TDD gains the command.

@@ -284,6 +284,9 @@ llama-launcher status [--json]              # Show all running instances (--json
 llama-launcher list [--json]                # List available profiles (--json for structured output)
 llama-launcher logs [target] [-f]           # Tail an instance's log
 llama-launcher logs clean [--days N|--all]  # Remove old log files
+llama-launcher autostart print <profile>    # Print a launchd plist that loads a profile at login
+llama-launcher autostart install <profile>  # Load a profile now and at every login (macOS)
+llama-launcher autostart remove <profile>   # Stop loading a profile at login (macOS)
 llama-launcher config validate              # Check config file for errors
 llama-launcher config init [--force]        # Generate example config (--force overwrites)
 llama-launcher config reset                 # Reset config to the example (overwrites)
@@ -293,7 +296,7 @@ llama-launcher completions bash|zsh|fish    # Print a shell completion script
 
 #### Shell completions
 
-`completions` prints a script that completes subcommands, flags, profile names (after `load`, `unload` and `start --profile`) and enabled backend names (after `stop`, `reload` and `logs`). The names are read from your config on every tab press, so new profiles complete without regenerating the script; with no config, only subcommands and flags complete. A tab press never runs an `api_key_cmd`.
+`completions` prints a script that completes subcommands, flags, profile names (after `load`, `unload`, `start --profile` and `autostart print|install|remove`) and enabled backend names (after `stop`, `reload` and `logs`). The names are read from your config on every tab press, so new profiles complete without regenerating the script; with no config, only subcommands and flags complete. A tab press never runs an `api_key_cmd`.
 
 ```bash
 # bash (~/.bashrc) — eval rather than source <(…), which the bash 3.2 that ships with macOS ignores
@@ -309,6 +312,20 @@ llama-launcher completions fish > ~/.config/fish/completions/llama-launcher.fish
 A server that is still loading its model (llama.cpp answers its health endpoint with 503 for the whole load) is a first-class instance: `status` and the interactive menu show it as `starting…`, and `stop` / `unload` can target it. A plain `load` refuses to displace a still-loading server so a mistyped command cannot throw away a long model load; pass `--restart` to stop and replace it ([ADR-0010](.capcom/knowledge/decisions/adr-0010.md)). Splash binds its port only once the model has loaded, so the launcher finds a loading Splash server by its process instead (a Splash launch for that host and port with nothing listening yet) and treats it the same way ([ADR-0015](.capcom/knowledge/decisions/adr-0015.md)). Windows is the exception: the launcher cannot read the process table there, so a loading Splash stays hidden until it is ready. When a load started from the interactive menu outlasts the startup wait, the menu does not report an error: it keeps watching in a `Still loading` popup that ticks the elapsed time, prints the usual confirmation once the server is ready, and reports an error only if the server stops running. Press Esc to return to the menu and leave the server loading. `llama-launcher load` (and `start --profile`) does the same without a popup: it prints a `Still loading <profile>… m:ss` line every 10 seconds and exits 0 once the server is ready, or exits 3 if the server stops running or is still not healthy after `startup_max_wait` (default 10 minutes) from the start of the load. Ctrl+C ends the command and leaves the server loading.
 
 A server that rejects the configured `api_key` (it answers every backend probing its address with 401 or 403) does not vanish either: `stop` still stops it by signalling whatever listens there, and reports `Stopped server at <host:port>` because no backend could identify it. `load` and `unload` against it fail with the "check api_key" error, and `auto_stop_server` leaves it alone. Only an explicit `stop` touches it. `status`, the menu and every server listing show it as `auth failed at <host:port> — check api_key in the servers section`, and `status --json` reports it as an entry with `"backend": ""`, `"running": false` and `"auth_failed": true` (every other entry carries `"auth_failed": false`).
+
+### Start at login (macOS)
+
+`autostart install <profile>` makes launchd load a profile every time you log in:
+
+```bash
+llama-launcher autostart install chat
+# => Installed launch agent: /Users/you/Library/LaunchAgents/com.github.airiclenz.llama-launcher.chat.plist
+# => Loading chat now, and at every login (output: /Users/you/.config/llama-launcher/logs/autostart-chat.log).
+```
+
+The agent runs `llama-launcher --config <your config> load <profile>` once and exits; the server it starts keeps running, and nothing restarts it if it stops. Installing loads the profile **right away**, exactly as `load` would — replacing whatever holds its address, and stopping other servers when `auto_stop_server` is set. Installing again replaces the agent. The agent records your config path, the launcher's path and the `PATH`, `HF_HOME`, `HF_HUB_CACHE` and `XDG_CACHE_HOME` of the shell you ran it in, so run it again after moving any of them. The job's own output goes to `autostart-<profile>.log` in `log_dir`.
+
+`autostart remove <profile>` unloads the agent from launchd and deletes the plist; a server it started keeps running (`llama-launcher stop` stops it). `autostart print <profile>` writes the plist to stdout without installing anything, on any OS — to inspect it or install it by hand. `install` and `remove` need launchd and exit with an error elsewhere.
 
 ### When the port is already taken
 

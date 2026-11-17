@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -215,25 +216,104 @@ func writePlistString(b *strings.Builder, indent, key, value string) {
 	)
 }
 
-// cmdAutostart is the autostart command. `autostart print <profile>` writes
-// the launchd agent that loads the Profile at login to stdout and exits 0; a
-// usage error, or a Profile that does not resolve, exits 2. It runs on every
-// OS: printing a plist touches neither launchd nor the disk.
+// cmdAutostart is the autostart command, dispatching on its subcommand:
+//
+//   - `print <profile>` writes the launchd agent that loads the Profile at
+//     login to stdout. It runs on every OS: it touches neither launchd nor
+//     the disk.
+//   - `install <profile>` installs that agent, which loads the Profile at once
+//     and again at every login (installLaunchAgent).
+//   - `remove <profile>` uninstalls it and leaves any server it started
+//     running (removeLaunchAgent). It needs no Profile in the config, so an
+//     agent outlives the Profile it was written for and can still go.
+//
+// A usage error, or a Profile print or install cannot resolve, exits 2; a
+// launchd or disk failure exits 3, and so does install or remove on a
+// platform without launchd, with an error wrapping ErrUnsupported.
 func cmdAutostart(cfg *Config, configPath string, args []string) int {
-	if len(args) != 2 || args[0] != "print" {
+	if len(args) != 2 {
 		printAutostartUsage()
 		return 2
 	}
+	subcommand, profileName := args[0], args[1]
 
-	spec, err := buildLaunchAgentSpec(cfg, configPath, args[1], os.Getenv)
+	switch subcommand {
+	case "print":
+		spec, err := buildLaunchAgentSpec(cfg, configPath, profileName, os.Getenv)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 2
+		}
+		fmt.Print(renderLaunchAgentPlist(spec))
+		return 0
+	case "install":
+		return cmdAutostartInstall(cfg, configPath, profileName)
+	case "remove":
+		return cmdAutostartRemove(profileName)
+	default:
+		printAutostartUsage()
+		return 2
+	}
+}
+
+// cmdAutostartInstall installs the launchd agent for profileName and says
+// where it went, that the Profile is loading now, and that it loads at login.
+func cmdAutostartInstall(cfg *Config, configPath string, profileName string) int {
+	spec, err := buildLaunchAgentSpec(cfg, configPath, profileName, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 2
 	}
-	fmt.Print(renderLaunchAgentPlist(spec))
+
+	path, err := installLaunchAgent(spec)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 3
+	}
+	fmt.Printf("Installed launch agent: %s\n", path)
+	fmt.Printf("Loading %s now, and at every login (output: %s).\n", profileName, spec.LogPath)
+	return 0
+}
+
+// cmdAutostartRemove uninstalls the launchd agent for profileName and says
+// that a server it started keeps running.
+func cmdAutostartRemove(profileName string) int {
+	path, wasInstalled, err := removeLaunchAgent(launchAgentLabelPrefix + logProfileSlug(profileName))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 3
+	}
+	if !wasInstalled {
+		fmt.Printf("No launch agent is installed for %s (%s).\n", profileName, path)
+		return 0
+	}
+	fmt.Printf("Removed launch agent: %s\n", path)
+	fmt.Printf("%s no longer loads at login. A server it started keeps running; `llama-launcher stop` stops it.\n", profileName)
 	return 0
 }
 
 func printAutostartUsage() {
-	fmt.Fprintln(os.Stderr, "Usage: llama-launcher autostart print <profile>")
+	fmt.Fprintln(os.Stderr, "Usage: llama-launcher autostart print|install|remove <profile>")
+}
+
+// launchctlRunner runs launchctl with args and returns its combined output
+// and exit code; err is set only when launchctl could not be run at all.
+type launchctlRunner func(args ...string) (output string, exitCode int, err error)
+
+// runLaunchctl is the launchctl the darwin install and remove drive. It is
+// declared on every OS so a test anywhere can swap in a fake and be sure no
+// real launchd is touched.
+var runLaunchctl launchctlRunner = execLaunchctl
+
+// execLaunchctl runs the real launchctl.
+func execLaunchctl(args ...string) (string, int, error) {
+	output, err := exec.Command("launchctl", args...).CombinedOutput()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return string(output), exitErr.ExitCode(), nil
+	}
+	if err != nil {
+		return string(output), -1, fmt.Errorf("running launchctl: %w", err)
+	}
+	return string(output), 0, nil
 }

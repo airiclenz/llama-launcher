@@ -9,7 +9,7 @@ description: Inspect and control the local LLM server(s) via `llama-launcher` �
 
 ## Safety rules (do these first)
 
-1. **Always start with a passive inspection** — `llama-launcher status --json` and `llama-launcher list --json`. Do not call `load`, `unload`, `start`, or `stop` until you've shown the user what's currently running and have explicit confirmation to change it.
+1. **Always start with a passive inspection** — `llama-launcher status --json` and `llama-launcher list --json`. Do not call `load`, `unload`, `start`, `stop` or `autostart install` (which loads the profile at once, not only at login) until you've shown the user what's currently running and have explicit confirmation to change it.
 2. **Check for in-flight work before mutating.** Switching, unloading, or stopping a model interrupts any request or job currently using it. If a high `uptime_seconds` coincides with the user actively working, assume the model may be in use and confirm before changing it.
 3. **`load <profile>` is idempotent** — it's a no-op if the requested profile is already active. Only reach for `--restart` if the user explicitly asks to force a restart, or if the server is in a bad state confirmed via logs.
 4. **`unload` and `stop` end the session** — any in-flight requests will fail. Confirm before calling.
@@ -26,6 +26,7 @@ Passive (safe to run any time):
 | `llama-launcher logs clean --days N` / `--all` | Prune old logs. |
 | `llama-launcher config validate` | Check the config file for errors. |
 | `llama-launcher version` | Print version. |
+| `llama-launcher autostart print <profile>` | Print the launchd plist that would load the profile at login; installs nothing. |
 
 Mutating (confirm with user first):
 
@@ -37,6 +38,8 @@ Mutating (confirm with user first):
 | `llama-launcher unload [profile]` | Stop the server / unload the model. |
 | `llama-launcher start [--profile p]` | Start a server, optionally with a profile. |
 | `llama-launcher stop [target]` | Stop a server by `host:port` or backend name. |
+| `llama-launcher autostart install <profile>` | macOS: load the profile now and at every login (a launchd agent). Replaces what holds its address, like `load`. |
+| `llama-launcher autostart remove <profile>` | macOS: stop loading the profile at login; the running server is left alone. |
 
 ## Using llama-launcher remotely over MCP
 

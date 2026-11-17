@@ -1647,3 +1647,60 @@ func TestCmdAutostart_Print(t *testing.T) {
 		})
 	}
 }
+
+// isolateAutostart points HOME at a fresh temp directory and swaps
+// runLaunchctl for respond, recording every call, so an autostart test can
+// touch neither the real ~/Library/LaunchAgents nor launchd. It returns the
+// temp HOME and the recorded calls. Callers must not use t.Parallel(): HOME
+// and runLaunchctl are process-global.
+func isolateAutostart(t *testing.T, respond launchctlRunner) (string, *[][]string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var calls [][]string
+	original := runLaunchctl
+	runLaunchctl = func(args ...string) (string, int, error) {
+		calls = append(calls, args)
+		return respond(args...)
+	}
+	t.Cleanup(func() { runLaunchctl = original })
+	return home, &calls
+}
+
+// launchctlSucceeds is a launchctl that exits 0 with no output.
+func launchctlSucceeds(_ ...string) (string, int, error) {
+	return "", 0, nil
+}
+
+// TestCmdAutostart_InstallRemoveUsage: a usage error or an unknown Profile
+// exits 2 on every OS before launchd or the LaunchAgents directory is touched.
+func TestCmdAutostart_InstallRemoveUsage(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"install without a Profile", []string{"autostart", "install"}},
+		{"remove without a Profile", []string{"autostart", "remove"}},
+		{"install with an extra argument", []string{"autostart", "install", "chat", "extra"}},
+		{"install of an unknown Profile", []string{"autostart", "install", "missing"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home, calls := isolateAutostart(t, launchctlSucceeds)
+			cfgPath := writeRunConfig(t)
+
+			_, code := runCLI(t, cfgPath, c.args...)
+
+			if code != 2 {
+				t.Errorf("Run(%v) = exit %d, want 2", c.args, code)
+			}
+			if len(*calls) != 0 {
+				t.Errorf("Run(%v) ran launchctl %v, want no call", c.args, *calls)
+			}
+			if _, err := os.Stat(filepath.Join(home, "Library")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("Run(%v) created %s/Library (stat err %v), want nothing written", c.args, home, err)
+			}
+		})
+	}
+}

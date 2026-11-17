@@ -1050,6 +1050,8 @@ Commands:
   logs [target] [-f]           Tail an instance's log
   logs clean [--days N|--all]  Remove old log files
   autostart print <profile>    Print a launchd plist that loads a profile at login
+  autostart install <profile>  Load a profile now and at every login (macOS launchd)
+  autostart remove <profile>   Stop loading a profile at login (its server keeps running)
   config validate       Check config file for errors
   config init [--force]   Generate example config (overwrite if --force)
   config reset           Reset config to example (overwrite)
